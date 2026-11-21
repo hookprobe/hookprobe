@@ -15,5 +15,6 @@ The code lives in the heqk workspace (`../kernel/arch-aarch64/src/`). This folde
 | QEMU virtio (net, blk) | `virtio*.rs` | the QEMU target |
 
 **Firmware:** [`firmware/brcm-firmware-rpt/`](firmware/brcm-firmware-rpt/) holds the CYW43455 blobs.
-[`firmware/rpi-dtb/`](firmware/rpi-dtb/) holds the CM5 devicetree (`bcm2712-rpi-cm5-cm5io.dtb`, GPL-2.0, from raspberrypi/linux) that `os/build/make-cm5-heqk-disk.sh` puts on the boot partition.
+[`firmware/rpi-dtb/`](firmware/rpi-dtb/) holds the CM5 devicetree (`bcm2712-rpi-cm5-cm5io.dtb`, GPL-2.0, from raspberrypi/linux) that `os/build/make-cm5-heqk-disk.sh` puts on the boot partition, with the 16 source files that rebuild it byte for byte.
+[`firmware/LICENSES/`](firmware/LICENSES/) holds the GPL-2.0, MIT and BSD-2-Clause texts those files cite.
 `../kernel/cm5-boot/stage-wifi-firmware.sh` copies them into `../kernel/firmware/brcm/` before a build.

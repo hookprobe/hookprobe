@@ -1,29 +1,26 @@
 import { createSignal } from 'solid-js';
 /**
- * api — the shared, low-level `hookprobe-api` read-API client (ADR 0001: Rust/Axum).
+ * api — the shared, low-level client for the device's read API (heqk serves it: routes in
+ * `os/kernel/kernel/src/http.rs`, JSON written by `os/kernel/kernel/src/mcstate.rs`'s `render_*`).
  *
- * One `fetchJson`/`API_BASE`/response-type home for every store module that talks to the real
- * evidence-graph read-API (`crates/hookprobe-api`), instead of each workspace's live-data module
- * re-declaring its own copy (the shapes below are transcribed 1:1 from `crates/hookprobe-api/src/
- * lib.rs` + `crates/hookprobe-evidence/src/lib.rs`'s query methods — keep them in sync if those
- * change). `store/live.ts` (Layer-0) predates this file and still carries its own copies of the
+ * One `fetchJson`/`API_BASE`/response-type home for every store module that talks to the device,
+ * instead of each workspace's live-data module re-declaring its own copy (the shapes below match
+ * heqk's `render_*` output — keep them in sync if those change). `store/live.ts` (Layer-0) predates this file and still carries its own copies of the
  * `qsecbit`/`incidents` shapes it uses; new workspace live-data modules (`detectLive.ts`,
  * `investigateLive.ts`, `obsLive.ts`) should import from here instead of re-declaring.
  *
  * Read-only by construction on the client side too: nothing in this module ever issues a
- * non-GET request — `hookprobe-api` itself has no write routes (see its module doc comment).
+ * non-GET request (writes live in their own modules: `actions.ts`, `packUpload.ts`, `plannerApi.ts`).
  */
 
 // ── transport ────────────────────────────────────────────────────────────────
 
 /**
- * Base URL for the read-API. Same-origin (`''`) in production once the UI's static assets are
- * served from the same origin as `hookprobe-api` (or a reverse proxy fronts both) — override at
- * build time with `PUBLIC_API_BASE` (see `os/mission-control/.env.example`). Defaults to the API's own documented
- * default listen address for local dev, where the Astro dev server (`:4321`) and the API (`:8420`)
- * are different origins; the API's permissive CORS layer exists precisely for this case.
+ * Base URL for the device API. Same-origin (`''`) by default: heqk serves the UI and the API from
+ * one origin. Override at build time with `PUBLIC_API_BASE` (see `os/mission-control/.env.example`),
+ * e.g. to point a local Astro dev server (`:4321`) at a heqk running in QEMU or on a bench board.
  */
-export const API_BASE = (import.meta.env.PUBLIC_API_BASE as string | undefined) ?? 'http://127.0.0.1:8420';
+export const API_BASE = (import.meta.env.PUBLIC_API_BASE as string | undefined) ?? '';
 
 /** Set when the device answers 401: the session ended, which is not the same as "no device". */
 export const [signedOut, setSignedOut] = createSignal(false);
@@ -43,7 +40,7 @@ export function openStream(): EventSource {
   return new EventSource(`${API_BASE}/api/stream`);
 }
 
-// ── response shapes (mirror crates/hookprobe-api + hookprobe-evidence exactly) ──────────────────
+// ── response shapes (mirror heqk's mcstate.rs render_* output exactly) ─────────────────────────
 
 /** `EvidenceGraph::recent_detections` / `detections_by_categories` row shape. */
 export interface DetectionRow {
@@ -281,7 +278,7 @@ export interface ReportDetail {
 /**
  * `GET /api/evidence/graph?node=<id>` response shape. The backend still reuses
  * `EvidenceGraph::attack_path` verbatim under the hood for this generic, any-node endpoint, but as
- * of the 2026-07-08 key-rename fix the HTTP handler (`crates/hookprobe-api`) now also carries the
+ * of the 2026-07-08 key-rename fix the HTTP handler (heqk `mcstate.rs` `render_graph`) also carries the
  * queried node id under the canonical `node` field for EVERY node type (device, flow, process, …,
  * not just incidents). `incident` is still present too — same value as `node`, unchanged — kept
  * ONLY as a deprecated back-compat alias; new code should read `node`, not `incident`.
@@ -316,7 +313,7 @@ export interface EvidenceStatsResponse {
   /** Per-`edge_type` counts (e.g. `spawned_by`, `incident_includes_detection`). */
   edges_by_type: Record<string, number>;
   db_size_bytes: number;
-  /** `null` until `hookprobe-evidence --prune` has run at least once against this DB — never fabricated. */
+  /** `null` when nothing has been pruned (heqk keeps RAM rings, oldest overwritten: always null) — never fabricated. */
   last_prune: EvidenceStatsLastPrune | null;
 }
 

@@ -6,7 +6,7 @@
  * Process Tree + Executive Report + the Evidence Graph explorer, all drilled from the real
  * evidence graph.
  *
- * WIRED to the real `hookprobe-api` read-API (ADR 0001) via `store/investigateLive.ts`:
+ * WIRED to the device's real read API (heqk `http.rs`) via `store/investigateLive.ts`:
  *   - Queue:          `GET /api/incidents` (+ `/api/stream` deltas).
  *   - Detail:         `GET /api/incidents/:id` — the why/confidence/evidence/model/related_events envelope.
  *   - Timeline:       `GET /api/incidents/:id/timeline` — the ts-ordered incident-story narrative.
