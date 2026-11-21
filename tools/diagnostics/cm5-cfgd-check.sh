@@ -15,6 +15,7 @@ ok=0; n=0
 chk() { n=$((n + 1)); if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else echo "BAD $2"; fi; }
 pi() { ssh -o BatchMode=yes -o ConnectTimeout=8 "$PI" "$@"; }
 T=$(mktemp -d); trap 'rm -rf "$T"; pi "shred -u /tmp/hqcf.key /tmp/hq-upload.py 2>/dev/null" >/dev/null 2>&1' EXIT
+. "$(dirname "$0")/lib-bench-baseline.sh"; bench_baseline_wrap "$KEY" "$LOG" "$MC"   # gap-fix E3: bench state before + after
 up() { for _ in $(seq 1 100); do curl -sk -o /dev/null -m 5 "$1/" && return 0; sleep 3; done; return 1; }
 since() { tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000'; }
 cfg() { python3 -I - "$1" "$KEY" <<'PY'

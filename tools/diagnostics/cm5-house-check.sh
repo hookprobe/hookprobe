@@ -16,6 +16,7 @@ psudo() { pi "sudo -S -p '' $*" < "$PS"; }
 T=$(mktemp -d); chmod 700 "$T"; umask 077
 cleanup() { psudo "nmcli con delete hq-house" >/dev/null 2>&1; shred -u "$T"/* 2>/dev/null; rm -rf "$T"; }
 trap cleanup EXIT
+. "$(dirname "$0")/lib-bench-baseline.sh"; bench_baseline_wrap "$KEY" "$LOG" "$MC"   # gap-fix E3: bench state before + after
 since() { tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000'; }
 waitlog() { for _ in $(seq 1 "$2"); do since | grep -aq "$1" && return 0; sleep 2; done; return 1; }
 api() { python3 -I - "$MC" "$KEY" "$1" "${2:-}" <<'PY'
