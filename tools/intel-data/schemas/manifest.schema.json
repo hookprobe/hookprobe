@@ -43,6 +43,18 @@
       }
     },
     "counts": { "type": "object", "additionalProperties": { "type": "integer" } },
+    "eval_fence": {
+      "description": "Neuro eval sets the build was checked against (tools/neuro-research/eval/blind*): files with SHA-256, canary and context counts. Matching examples are excluded and counted as excluded['eval_fence:<set>'].",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files", "canaries", "contexts"],
+      "properties": {
+        "files": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["set", "path", "sha256"],
+                   "properties": { "set": { "type": "string" }, "path": { "type": "string" }, "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" } } } },
+        "canaries": { "type": "integer", "minimum": 0 },
+        "contexts": { "type": "integer", "minimum": 0 }
+      }
+    },
     "usage_notes": {
       "description": "Per-collection notes for consumers, e.g. a collection that only restates lookup-table facts and should not be used to fine-tune a small model.",
       "type": "object",
