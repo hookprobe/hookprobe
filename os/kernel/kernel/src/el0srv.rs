@@ -1717,9 +1717,10 @@ pub mod keyer {
                 "armed: the next station authorize ioctl is reported never sent"
             }
             "auth-stats" => {
-                let (t, a) = unsafe { arch_aarch64::cyw43::AUTH_IOVAR };
-                arch_aarch64::_print(format_args!(" [WIFI-INJECT] authorize iovar fallbacks tried={} authorized={}\n", t, a));
-                if t > 0 && t == a { "authorize iovar fallback: every try authorized" } else if t == 0 { "authorize iovar fallback: never tried" } else { "authorize iovar fallback: a try FAILED" }
+                let (t, a, st) = unsafe { arch_aarch64::cyw43::AUTH_IOVAR };
+                let (rt, ra) = unsafe { arch_aarch64::cyw43::AUTH_RESEND };
+                arch_aarch64::_print(format_args!(" [WIFI-INJECT] authorize: ioctl re-sent={} authorized={} | iovar fallback tried={} authorized={} last status={}\n", rt, ra, t, a, st));
+                if rt > 0 && rt == ra && t == 0 { "authorize: the never-sent ioctl was re-sent and authorized (iovar not needed)" } else if rt == 0 { "authorize: no re-send happened" } else { "authorize: a re-send or the iovar FAILED" }
             }
             // H7: one bit of el0-wpa's saved state flipped, then a restart: its next call must refuse the state
             // (ST_STATE_BAD), the kernel full-wipes (never reuses it), every station re-keys, journaled kind probe / rung wipe

@@ -5259,7 +5259,19 @@ fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
     dbg_putc(b'P');
     // AUTHORIZE: with a HOST authenticator the firmware keeps the station's 802.1X port blocked until told. The
     // "authorize" iovar is tried only if the ioctl is refused (each dcmd can discard queued data frames).
-    let (ok, st) = bcdc_dcmd(WLC_SCB_AUTHORIZE, BCDC_SET, &d.sta, &mut []);
+    let (mut ok, mut st) = bcdc_dcmd(WLC_SCB_AUTHORIZE, BCDC_SET, &d.sta, &mut []);
+    // R7 (metal 2026-11-22): a request that never reached the firmware (no credit / the write failed) is SENT AGAIN —
+    // the authorize iovar fallback alone did not authorize the station on this firmware (the drop-authorize proof:
+    // iovar tried, not authorized, the join's authorization lost)
+    if !ok && unsafe { DCMD_NOT_SENT } {
+        (ok, st) = bcdc_dcmd(WLC_SCB_AUTHORIZE, BCDC_SET, &d.sta, &mut []);
+        unsafe {
+            AUTH_RESEND.0 += 1;
+            if ok {
+                AUTH_RESEND.1 += 1;
+            }
+        }
+    }
     auth.authorized = ok;
     // the iovar when the firmware REFUSED the ioctl (a BCDC error status) or never got it (R7: no credit / the write
     // failed); a reply that did not come in time (status 0, sent) is a late reply to a request the firmware applies —
@@ -5267,12 +5279,14 @@ fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
     if !ok && (st != 0 || unsafe { DCMD_NOT_SENT }) {
         let mut ab = [0u8; 32];
         let na = iovar_buf(b"authorize", &d.sta, &mut ab);
-        auth.authorized = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ab[..na], &mut []).0;
+        let (iok, ist) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ab[..na], &mut []);
+        auth.authorized = iok;
         unsafe {
             AUTH_IOVAR.0 += 1;
-            if auth.authorized {
+            if iok {
                 AUTH_IOVAR.1 += 1;
             }
+            AUTH_IOVAR.2 = ist;
         }
     }
     dbg_putc(b'A');
@@ -7226,8 +7240,10 @@ fn bcdc_iovar_get(name: &[u8], out: &mut [u8]) -> bool {
 /// R7 (code review 2026-11-18): the last `bcdc_dcmd` never reached the firmware (no TX credit, or the control write
 /// failed) — as opposed to a request the firmware got but answered late. Both return (false, 0).
 static mut DCMD_NOT_SENT: bool = false;
-/// R7: (authorize-iovar fallbacks tried, of them authorized) — the ioctl was refused or never sent.
-pub static mut AUTH_IOVAR: (u32, u32) = (0, 0);
+/// R7: (authorize-iovar fallbacks tried, of them authorized, the last one's BCDC status) — the ioctl was refused.
+pub static mut AUTH_IOVAR: (u32, u32, u32) = (0, 0, 0);
+/// R7: (authorize ioctls sent again because the first never reached the firmware, of them authorized).
+pub static mut AUTH_RESEND: (u32, u32) = (0, 0);
 /// BENCH (`wifi-inject`): the next WLC_SCB_AUTHORIZE ioctl is reported never sent (the R7 metal proof).
 #[cfg(feature = "wifi-inject")]
 pub static mut INJECT_DROP_AUTHORIZE: bool = false;
