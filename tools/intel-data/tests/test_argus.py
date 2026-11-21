@@ -60,3 +60,23 @@ class ArgusBinetflow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnlabelledFlowsInBuild(unittest.TestCase):
+    def test_background_flows_are_counted_not_loaded(self):
+        import shutil
+        from heqkdata import export, normalize
+        from heqkdata.store import Store
+        sb = Sandbox()
+        self.addCleanup(sb.close)
+        reg = registry.Registry(sb.reg)
+        st = Store(sb.data)
+        d = os.path.join(sb.dir, "1")
+        os.makedirs(d)
+        p = os.path.join(d, "capture-fixture.binetflow")
+        shutil.copyfile(PATH, p)
+        acq = st.register(reg, "f-cic", p, "research")
+        normalize.normalize(st, reg, acq, adapter_name="argus_binetflow")
+        _, man, _ = export.build(st, reg, "research", collections=["network_intelligence"],
+                                 out_root=os.path.join(sb.dir, "b"))
+        self.assertEqual(man["excluded"].get("unlabelled_flow:f-cic"), 2)  # the two Background flows

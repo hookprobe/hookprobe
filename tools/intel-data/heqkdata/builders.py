@@ -210,6 +210,71 @@ def build_vulnerability(records, cap_per_source=None, stats=None):
                            f"Is {b['cve_id']} known to be exploited, and what should be done?",
                            target(None, severity=None, evidence=[r["record_id"]], action="harden", answer=" ".join(parts)),
                            gt, b["cve_id"]))
+    out += build_cve_knowledge(records, cap_per_source=cap_per_source, stats=stats)
+    return out
+
+
+# Which record answers "what is CVE-X?" when several sources describe the same CVE: the CVE Program's own
+# record first (the CNA wrote it), then a GitHub-reviewed advisory, then anything else.
+CVE_SOURCE_RANK = {"cve-list-v5": 0, "github-advisory-db": 1}
+CVE_TRUTH = {"cve-list-v5": ("CVE Program record (written by the assigning CNA)", "high"),
+             "github-advisory-db": ("GitHub Advisory Database", "medium")}
+
+
+def _cve_rank(r):
+    reviewed = r["labels"]["original_label"] == "github_reviewed"
+    return (CVE_SOURCE_RANK.get(r["provenance"]["source_id"], 9), 0 if reviewed else 1, r["record_id"])
+
+
+def build_cve_knowledge(records, cap_per_source=None, stats=None):
+    """One 'what is this CVE and how severe is it?' example per CVE that has a description and at least a
+    CWE or a CVSS score. Only facts the record states: no exploitation claim (that is the KEV question),
+    no invented remediation. Severity is the CVSS v3/v4 qualitative band; v2 scores keep severity null
+    (v2 has no 'critical' band)."""
+    from . import cvss as _cvss
+    best = {}
+    for r in records:
+        if r["kind"] != "vulnerability" or r["provenance"]["source_id"] == "cisa-kev":
+            continue
+        b = r["body"]
+        if not b["description"] or not (b["cwe_ids"] or b["cvss"]):
+            continue
+        cur = best.get(b["cve_id"])
+        if cur is None or _cve_rank(r) < _cve_rank(cur):
+            best[b["cve_id"]] = r
+    chosen = list(best.values())
+    if cap_per_source is not None:
+        by_src = {}
+        for r in chosen:
+            by_src.setdefault(r["provenance"]["source_id"], []).append(r)
+        chosen = [x for sid in sorted(by_src) for x in _sample(by_src[sid], cap_per_source, "cve-knowledge")]
+    out = []
+    for r in sorted(chosen, key=lambda r: r["record_id"]):
+        b = r["body"]
+        sid = r["provenance"]["source_id"]
+        what = " ".join(x for x in (b["vendor"], b["product"]) if x)
+        desc = b["description"].strip()
+        if len(desc) > 6000:  # the answer field is capped at 8192; a few CNA descriptions run past it
+            desc = desc[:6000].rsplit(" ", 1)[0] + " [description truncated]"
+        parts = [f"{b['cve_id']}" + (f" ({what})" if what else "") + ": " + desc]
+        if b["cwe_ids"]:
+            parts.append("Weakness: " + ", ".join(b["cwe_ids"]) + ".")
+        sev = None
+        c = b["cvss"]
+        if c:
+            if c["version"] != "2.0":
+                sev = _cvss.severity(c["base_score"])
+            parts.append(f"CVSS v{c['version']} base score {c['base_score']:.1f}"
+                         + (f" ({sev})" if sev else "") + f", vector {c['vector']}.")
+        src, quality = CVE_TRUTH.get(sid, (sid, "medium"))
+        if sid == "github-advisory-db" and r["labels"]["original_label"] == "github_reviewed":
+            src, quality = "GitHub Advisory Database (GitHub-reviewed)", "high"
+        out.append(example("vulnerability_intelligence", "knowledge", [r],
+                           f"What is {b['cve_id']}, and how severe is it?",
+                           target(None, severity=sev, evidence=[r["record_id"]], answer=" ".join(parts)),
+                           truth("knowledge_base", True, src, quality), b["cve_id"]))
+    if stats is not None:
+        stats["cve_knowledge"] = {"cves": len(best), "examples": len(out)}
     return out
 
 

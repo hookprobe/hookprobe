@@ -1,0 +1,17 @@
+# HookProbe Globe Visualization Backend Dependencies
+# Install: pip install -r requirements.txt
+
+# WebSocket server
+websockets>=12.0
+
+# Async HTTP for HTP integration
+aiohttp>=3.9.0
+
+# IP geolocation (optional, uses free DB)
+geoip2>=4.8.0
+
+# JSON handling (stdlib, listed for clarity)
+# json - built-in
+
+# For demo mode random data
+# random - built-in

@@ -1,0 +1,886 @@
+<!-- Security Tab - Clean QSecBit Display with Block Log -->
+<style>
+/* QSecBit Hero Section - Clean Light Theme */
+.qsecbit-hero {
+    background: var(--white);
+    border-radius: var(--radius-lg);
+    padding: 2rem;
+    margin-bottom: var(--spacing-lg);
+    text-align: center;
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+}
+
+.qsecbit-hero-content {
+    position: relative;
+}
+
+.qsecbit-hero h2 {
+    color: var(--text);
+    font-size: 1.5rem;
+    margin-bottom: 0.25rem;
+    font-weight: 700;
+}
+
+.qsecbit-hero .subtitle {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin-bottom: 2rem;
+}
+
+/* Large Ring Display - Clean Style */
+.qsecbit-ring-large {
+    position: relative;
+    width: 200px;
+    height: 200px;
+    margin: 0 auto 2rem;
+}
+
+.qsecbit-ring-large svg {
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+}
+
+.ring-bg {
+    fill: none;
+    stroke: var(--light-grey);
+    stroke-width: 12;
+}
+
+.ring-fill {
+    fill: none;
+    stroke-width: 12;
+    stroke-linecap: round;
+    stroke-dasharray: 565;
+    stroke-dashoffset: 565;
+    transition: stroke-dashoffset 1s ease, stroke 0.5s ease;
+}
+
+.ring-fill.green { stroke: var(--green); }
+.ring-fill.amber { stroke: var(--amber); }
+.ring-fill.red { stroke: var(--watermelon); }
+
+.ring-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+}
+
+.ring-score {
+    font-size: 3rem;
+    font-weight: 700;
+    line-height: 1;
+    transition: color 0.5s ease;
+    font-family: var(--font-mono);
+}
+
+.ring-score.green { color: var(--green); }
+.ring-score.amber { color: var(--amber); }
+.ring-score.red { color: var(--watermelon); }
+
+.ring-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    margin-top: 0.5rem;
+    font-weight: 600;
+}
+
+/* Risk Status Banner - Clean Pill */
+.risk-banner {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1.5rem;
+    border-radius: 2rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin-bottom: 2rem;
+    transition: all 0.3s ease;
+}
+
+.risk-banner.green {
+    background: rgba(16, 185, 129, 0.1);
+    color: var(--green);
+}
+
+.risk-banner.amber {
+    background: rgba(245, 158, 11, 0.1);
+    color: var(--amber);
+}
+
+.risk-banner.red {
+    background: rgba(238, 66, 102, 0.1);
+    color: var(--watermelon);
+}
+
+.risk-banner i {
+    font-size: 1.1em;
+}
+
+/* Stats Row - Clean Cards */
+.qsecbit-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    max-width: 600px;
+    margin: 0 auto 2rem;
+}
+
+.qsecbit-stat {
+    text-align: center;
+    padding: 1rem;
+    background: var(--off-white);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+}
+
+.qsecbit-stat .value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text);
+    font-family: var(--font-mono);
+}
+
+.qsecbit-stat .value.danger { color: var(--watermelon); }
+.qsecbit-stat .value.success { color: var(--green); }
+
+.qsecbit-stat .label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0.25rem;
+    font-weight: 600;
+}
+
+/* Component Breakdown - Clean Panel */
+.component-breakdown {
+    background: var(--off-white);
+    border-radius: var(--radius-md);
+    padding: 1.5rem;
+    max-width: 700px;
+    margin: 0 auto;
+    border: 1px solid var(--border);
+}
+
+.component-title {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 1rem;
+    text-align: center;
+    font-weight: 600;
+}
+
+.component-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.75rem;
+}
+
+.component-item {
+    text-align: center;
+    padding: 0.75rem;
+    background: var(--white);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+}
+
+.component-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--pacific);
+    font-family: var(--font-mono);
+}
+
+.component-name {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0.25rem;
+}
+
+/* Block Log Section - Clean Card */
+.blocks-section {
+    background: var(--white);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    margin-bottom: var(--spacing-lg);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+}
+
+.blocks-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--off-white);
+}
+
+.blocks-header h3 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-weight: 600;
+}
+
+.blocks-header h3 i {
+    font-size: 1.1em;
+    color: var(--pacific);
+}
+
+.blocks-header .count {
+    background: var(--pacific);
+    color: var(--white);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.75rem;
+    border-radius: 1rem;
+}
+
+.block-list {
+    max-height: 350px;
+    overflow-y: auto;
+}
+
+.block-item {
+    display: flex;
+    align-items: flex-start;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    gap: 1rem;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.block-item:hover {
+    background: var(--off-white);
+}
+
+.block-severity {
+    width: 4px;
+    height: 50px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.block-severity.critical { background: #ef4444; }
+.block-severity.high { background: #f97316; }
+.block-severity.medium { background: #f59e0b; }
+.block-severity.low { background: #10b981; }
+
+.block-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.block-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: var(--spacing-xs);
+}
+
+.block-category {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.block-time {
+    font-size: 0.75rem;
+    color: var(--text-light);
+}
+
+.block-reason {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    margin-bottom: var(--spacing-xs);
+}
+
+.block-meta {
+    display: flex;
+    gap: var(--spacing-sm);
+    flex-wrap: wrap;
+}
+
+.block-tag {
+    font-size: 0.7rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 0.25rem;
+    background: var(--off-white);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    border: 1px solid var(--border);
+}
+
+.empty-state {
+    padding: 3rem 1.5rem;
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.empty-state svg {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 1rem;
+    opacity: 0.4;
+}
+
+/* Export Section - Clean Buttons */
+.export-section {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    padding: 1.5rem;
+    margin-bottom: var(--spacing-lg);
+    background: var(--white);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+}
+
+.btn-export {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.25rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-alt);
+    background: var(--white);
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-export:hover {
+    background: var(--off-white);
+    color: var(--pacific);
+    border-color: var(--pacific);
+}
+
+.btn-export i {
+    font-size: 1em;
+    color: var(--pacific);
+}
+
+/* Modal - Clean Style */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: none;
+    justify-content: center;
+    align-items: center;
+    z-index: 10001;
+    padding: 1.5rem;
+    backdrop-filter: blur(4px);
+}
+
+.modal-overlay.active {
+    display: flex;
+}
+
+.modal-content {
+    background: var(--white);
+    border-radius: var(--radius-lg);
+    max-width: 600px;
+    width: 100%;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: var(--shadow-lg);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--off-white);
+}
+
+.modal-header h3 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
+
+.modal-close:hover {
+    color: var(--text);
+}
+
+.modal-body {
+    padding: 1.5rem;
+}
+
+.detail-section {
+    margin-bottom: 1.5rem;
+}
+
+.detail-section h4 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0 0 0.75rem 0;
+    font-weight: 600;
+}
+
+.detail-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+}
+
+.detail-item {
+    background: var(--off-white);
+    padding: 1rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+}
+
+.detail-item.full {
+    grid-column: span 2;
+}
+
+.detail-item .label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-bottom: 0.25rem;
+    font-weight: 600;
+}
+
+.detail-item .value {
+    color: var(--text);
+    word-break: break-all;
+}
+
+.detail-item .value.mono {
+    font-family: var(--font-mono);
+}
+
+.severity-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 1rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.severity-badge.critical { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+.severity-badge.high { background: rgba(249, 115, 22, 0.1); color: #f97316; }
+.severity-badge.medium { background: rgba(245, 158, 11, 0.1); color: #f59e0b; }
+.severity-badge.low { background: rgba(16, 185, 129, 0.1); color: #10b981; }
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+    .qsecbit-hero {
+        padding: 1.5rem 1rem;
+    }
+
+    .qsecbit-ring-large {
+        width: 160px;
+        height: 160px;
+    }
+
+    .ring-score {
+        font-size: 2.5rem;
+    }
+
+    .qsecbit-stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .component-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+
+    .detail-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .detail-item.full {
+        grid-column: span 1;
+    }
+
+    .export-section {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+</style>
+
+<!-- Premium QSecBit Hero Display -->
+<div class="qsecbit-hero">
+    <div class="qsecbit-hero-content">
+        <h2>Protection Level</h2>
+        <p class="subtitle">Full = Secure · Empty = Under Attack</p>
+
+        <!-- Large Ring Display -->
+        <div class="qsecbit-ring-large">
+            <svg viewBox="0 0 200 200">
+                <circle class="ring-bg" cx="100" cy="100" r="90"/>
+                <circle class="ring-fill green" id="qsecbit-ring" cx="100" cy="100" r="90"/>
+            </svg>
+            <div class="ring-center">
+                <div class="ring-score green" id="qsecbit-score">100%</div>
+                <div class="ring-label">Protected</div>
+            </div>
+        </div>
+
+        <!-- Risk Status Banner with FontAwesome -->
+        <div class="risk-banner green" id="risk-banner">
+            <i class="fa-solid fa-shield-halved"></i>
+            <span id="risk-text">All Systems Nominal</span>
+        </div>
+
+        <!-- Stats Row -->
+        <div class="qsecbit-stats">
+            <div class="qsecbit-stat">
+                <div class="value danger" id="threats-detected">0</div>
+                <div class="label">Detected</div>
+            </div>
+            <div class="qsecbit-stat">
+                <div class="value success" id="threats-blocked">0</div>
+                <div class="label">Blocked</div>
+            </div>
+            <div class="qsecbit-stat">
+                <div class="value" id="xdp-drops">0</div>
+                <div class="label">XDP Drops</div>
+            </div>
+            <div class="qsecbit-stat">
+                <div class="value" id="active-rules">0</div>
+                <div class="label">Active Rules</div>
+            </div>
+        </div>
+
+        <!-- Component Breakdown -->
+        <div class="component-breakdown">
+            <div class="component-title">Score Components</div>
+            <div class="component-grid" id="component-grid">
+                <div class="component-item">
+                    <div class="component-value" id="comp-drift">0.000</div>
+                    <div class="component-name">Drift</div>
+                </div>
+                <div class="component-item">
+                    <div class="component-value" id="comp-attack">0.000</div>
+                    <div class="component-name">Attack</div>
+                </div>
+                <div class="component-item">
+                    <div class="component-value" id="comp-decay">0.000</div>
+                    <div class="component-name">Decay</div>
+                </div>
+                <div class="component-item">
+                    <div class="component-value" id="comp-quantum">0.000</div>
+                    <div class="component-name">Quantum</div>
+                </div>
+                <div class="component-item">
+                    <div class="component-value" id="comp-energy">0.000</div>
+                    <div class="component-name">Energy</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Block Log Section -->
+<div class="blocks-section">
+    <div class="blocks-header">
+        <h3>
+            <i class="fa-solid fa-ban" style="color: var(--pacific);"></i>
+            Recent Blocks
+            <span class="count" id="blocks-total">0</span>
+        </h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshBlocks()"><i class="fa-solid fa-rotate"></i> Refresh</button>
+    </div>
+    <div class="block-list" id="block-list">
+        <div class="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            <p>No blocked threats yet.<br>Your network is being monitored.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Export Section -->
+<div class="export-section">
+    <button class="btn-export" onclick="exportBlocks('csv')" title="Export as CSV">
+        <i class="fa-solid fa-file-csv"></i>
+        Export CSV
+    </button>
+    <button class="btn-export" onclick="exportBlocks('stix')" title="Export as STIX 2.1">
+        <i class="fa-solid fa-download"></i>
+        Export STIX 2.1
+    </button>
+    <button class="btn-export" onclick="exportBlocks('json')" title="Export as JSON">
+        <i class="fa-solid fa-file-code"></i>
+        Export JSON
+    </button>
+</div>
+
+<!-- Inspection Modal -->
+<div class="modal-overlay" id="inspection-modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>
+                <span id="modal-category">Threat Details</span>
+                <span class="severity-badge" id="modal-severity">HIGH</span>
+            </h3>
+            <button class="modal-close" onclick="closeInspectionModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="detail-section">
+                <h4>Connection Details</h4>
+                <div class="detail-grid">
+                    <div class="detail-item">
+                        <div class="label">Source IP</div>
+                        <div class="value mono" id="modal-source-ip">-</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="label">Destination Port</div>
+                        <div class="value mono" id="modal-dest-port">-</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="label">Protocol</div>
+                        <div class="value" id="modal-protocol">-</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="label">OSI Layer</div>
+                        <div class="value" id="modal-layer">-</div>
+                    </div>
+                    <div class="detail-item full">
+                        <div class="label">Timestamp</div>
+                        <div class="value" id="modal-timestamp">-</div>
+                    </div>
+                </div>
+            </div>
+            <div class="detail-section">
+                <h4>Detection Analysis</h4>
+                <div class="detail-item full" style="background: var(--bg-darker); border-left: 3px solid var(--hp-primary);">
+                    <div class="label">Detection Method</div>
+                    <div class="value" id="modal-method" style="font-weight: 600;">-</div>
+                    <div class="value" id="modal-reason" style="margin-top: 8px; color: var(--text-secondary);">-</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    const RING_CIRCUMFERENCE = 565; // 2 * PI * 90
+    let blocksData = [];
+
+    function getStatusClass(score) {
+        if (score >= 0.70) return 'red';
+        if (score >= 0.45) return 'amber';
+        return 'green';
+    }
+
+    function getProtection(score) {
+        return Math.round((1 - score) * 100);
+    }
+
+    function getRiskMessage(score) {
+        if (score >= 0.70) return 'Under Attack · Defending';
+        if (score >= 0.45) return 'Monitoring · Stay Alert';
+        return 'All Clear · Protected';
+    }
+
+    function formatTime(isoString) {
+        const date = new Date(isoString);
+        const now = new Date();
+        const diff = (now - date) / 1000;
+        if (diff < 60) return 'Just now';
+        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+        return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    }
+
+    async function fetchQSecBitData() {
+        try {
+            // Fetch QSecBit score (from qsecbit module at /api/qsecbit)
+            const scoreRes = await fetch('/api/qsecbit');
+            if (scoreRes.ok) {
+                const data = await scoreRes.json();
+                updateQSecBitDisplay(data);
+            }
+
+            // Fetch XDP stats
+            const xdpRes = await fetch('/api/xdp_stats');
+            if (xdpRes.ok) {
+                const xdp = await xdpRes.json();
+                document.getElementById('xdp-drops').textContent = formatNumber(xdp.drops || 0);
+                document.getElementById('active-rules').textContent = xdp.active_rules || 0;
+            }
+
+            // Fetch threats
+            const threatsRes = await fetch('/api/threats');
+            if (threatsRes.ok) {
+                const threats = await threatsRes.json();
+                document.getElementById('threats-detected').textContent = threats.stats?.total || 0;
+                document.getElementById('threats-blocked').textContent = threats.stats?.blocked || 0;
+            }
+        } catch (e) {
+            console.error('QSecBit fetch error:', e);
+        }
+    }
+
+    function updateQSecBitDisplay(data) {
+        const score = data.score || 0;
+        const statusClass = getStatusClass(score);
+        const protection = getProtection(score);
+
+        // Update ring - full when protected, empty when under attack
+        const ring = document.getElementById('qsecbit-ring');
+        const progress = 1 - score;
+        const offset = RING_CIRCUMFERENCE - (progress * RING_CIRCUMFERENCE);
+        ring.style.strokeDashoffset = offset;
+        ring.className = 'ring-fill ' + statusClass;
+
+        // Update score display - show protection percentage
+        const scoreEl = document.getElementById('qsecbit-score');
+        scoreEl.textContent = protection + '%';
+        scoreEl.className = 'ring-score ' + statusClass;
+
+        // Update status banner
+        const banner = document.getElementById('risk-banner');
+        const riskText = document.getElementById('risk-text');
+        banner.className = 'risk-banner ' + statusClass;
+        riskText.textContent = getRiskMessage(score);
+
+        // Update components
+        if (data.components) {
+            const c = data.components;
+            document.getElementById('comp-drift').textContent = (c.drift || 0).toFixed(3);
+            document.getElementById('comp-attack').textContent = (c.p_attack || 0).toFixed(3);
+            document.getElementById('comp-decay').textContent = (c.decay || 0).toFixed(3);
+            document.getElementById('comp-quantum').textContent = (c.q_drift || 0).toFixed(3);
+            document.getElementById('comp-energy').textContent = (c.energy_anomaly || 0).toFixed(3);
+        }
+    }
+
+    function formatNumber(num) {
+        if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+        if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+        return num.toString();
+    }
+
+    async function fetchBlocks() {
+        try {
+            const res = await fetch('/api/blocks');
+            if (res.ok) {
+                const data = await res.json();
+                blocksData = data.blocks || [];
+                document.getElementById('blocks-total').textContent = data.total || blocksData.length;
+                renderBlockList();
+            }
+        } catch (e) {
+            console.error('Blocks fetch error:', e);
+        }
+    }
+
+    function renderBlockList() {
+        const list = document.getElementById('block-list');
+        if (blocksData.length === 0) {
+            list.innerHTML = `
+                <div class="empty-state">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                    </svg>
+                    <p>No blocked threats yet.<br>Your network is being monitored.</p>
+                </div>
+            `;
+            return;
+        }
+
+        list.innerHTML = blocksData.map(block => `
+            <div class="block-item" onclick="showBlockDetail('${block.id}')">
+                <div class="block-severity ${block.severity.toLowerCase()}"></div>
+                <div class="block-content">
+                    <div class="block-header">
+                        <span class="block-category">${block.category}</span>
+                        <span class="block-time">${formatTime(block.timestamp)}</span>
+                    </div>
+                    <div class="block-reason">${block.reason}</div>
+                    <div class="block-meta">
+                        <span class="block-tag">${block.source_ip}</span>
+                        <span class="block-tag">${block.protocol}:${block.dest_port}</span>
+                        <span class="block-tag">${block.layer}</span>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    window.showBlockDetail = function(blockId) {
+        const block = blocksData.find(b => b.id === blockId);
+        if (!block) return;
+
+        document.getElementById('modal-category').textContent = block.category;
+        const severityEl = document.getElementById('modal-severity');
+        severityEl.textContent = block.severity;
+        severityEl.className = 'severity-badge ' + block.severity.toLowerCase();
+
+        document.getElementById('modal-source-ip').textContent = block.source_ip + ':' + block.source_port;
+        document.getElementById('modal-dest-port').textContent = block.dest_port;
+        document.getElementById('modal-protocol').textContent = block.protocol;
+        document.getElementById('modal-layer').textContent = block.layer;
+        document.getElementById('modal-timestamp').textContent = new Date(block.timestamp).toLocaleString();
+        document.getElementById('modal-method').textContent = block.detection_method;
+        document.getElementById('modal-reason').textContent = block.reason;
+
+        document.getElementById('inspection-modal').classList.add('active');
+    };
+
+    window.closeInspectionModal = function() {
+        document.getElementById('inspection-modal').classList.remove('active');
+    };
+
+    window.refreshBlocks = function() {
+        fetchBlocks();
+    };
+
+    window.exportBlocks = function(format) {
+        window.location.href = '/api/blocks/export?format=' + format;
+    };
+
+    // Close modal on overlay click
+    document.getElementById('inspection-modal').addEventListener('click', function(e) {
+        if (e.target === this) closeInspectionModal();
+    });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') closeInspectionModal();
+    });
+
+    // Initialize
+    fetchQSecBitData();
+    fetchBlocks();
+    setInterval(fetchQSecBitData, 5000);
+    setInterval(fetchBlocks, 30000);
+})();
+</script>

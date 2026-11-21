@@ -1,0 +1,1362 @@
+<!-- Dashboard Tab Content - Premium Design -->
+<style>
+/* Dashboard Premium Styles */
+.dashboard-hero {
+    background: var(--prussian);
+    border-radius: var(--radius-xl);
+    padding: var(--spacing-xl);
+    margin-bottom: var(--spacing-xl);
+    color: #fff;
+    position: relative;
+    overflow: hidden;
+}
+
+/* Network Traffic Visualization Canvas */
+.traffic-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0.8;
+    pointer-events: none;
+}
+
+/* Threat dart flash effect */
+@keyframes dartFlash {
+    0% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.8; transform: scale(1.2); }
+    100% { opacity: 0; transform: scale(0.5); }
+}
+
+.threat-dart {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    background: var(--watermelon);
+    border-radius: 50%;
+    box-shadow: 0 0 12px var(--watermelon), 0 0 24px var(--watermelon);
+    animation: dartFlash 0.8s ease-out forwards;
+    pointer-events: none;
+    z-index: 2;
+}
+
+/* Block arrow indicator */
+@keyframes arrowFlash {
+    0% { opacity: 0; transform: translateX(-20px); }
+    20% { opacity: 1; transform: translateX(0); }
+    80% { opacity: 1; transform: translateX(0); }
+    100% { opacity: 0; transform: translateX(20px); }
+}
+
+.block-arrow {
+    position: absolute;
+    pointer-events: none;
+    z-index: 3;
+    animation: arrowFlash 1.2s ease-out forwards;
+}
+
+.block-arrow svg {
+    width: 32px;
+    height: 32px;
+    filter: drop-shadow(0 0 8px var(--watermelon)) drop-shadow(0 0 16px var(--watermelon));
+}
+
+/* Interface label styles */
+.interface-label {
+    position: absolute;
+    bottom: 8px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.7);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    text-align: center;
+    pointer-events: none;
+}
+
+.hero-content {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    height: 100%;
+    min-height: 140px;
+    position: relative;
+    z-index: 1;
+}
+
+/* Status bar at top */
+.hero-status-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: var(--spacing-sm);
+}
+
+.hero-status-left {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    background: var(--hp-green);
+    border-radius: 50%;
+    box-shadow: 0 0 8px var(--hp-green);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.status-text {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.9);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.status-time {
+    font-size: 0.8rem;
+    color: rgba(255,255,255,0.5);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Stats at bottom */
+.hero-stats {
+    display: flex;
+    justify-content: flex-start;
+    gap: var(--spacing-xl);
+    padding-top: var(--spacing-sm);
+}
+
+.hero-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 60px;
+}
+
+.hero-stat-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+.hero-stat-label {
+    font-size: 0.7rem;
+    color: rgba(255,255,255,0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 2px;
+}
+
+.hero-stat.threat-stat .hero-stat-value {
+    color: var(--watermelon);
+}
+
+.hero-stat.threat-stat.has-threats {
+    animation: threatPulse 0.5s ease-out;
+}
+
+@keyframes threatPulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+    100% { transform: scale(1); }
+}
+
+/* Quick Stats Row */
+.quick-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-xl);
+}
+
+.quick-stat {
+    background: var(--bg-card);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
+    text-align: center;
+    box-shadow: var(--shadow-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    border-bottom: 3px solid transparent;
+}
+
+.quick-stat:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-xl);
+}
+
+.quick-stat.clickable:hover {
+    border-bottom-color: var(--hp-primary);
+}
+
+.quick-stat-icon {
+    width: 48px;
+    height: 48px;
+    margin: 0 auto var(--spacing-md);
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.quick-stat-icon.green { background: rgba(16, 185, 129, 0.15); color: var(--hp-green); }
+.quick-stat-icon.red { background: rgba(239, 68, 68, 0.15); color: var(--hp-red); }
+.quick-stat-icon.blue { background: rgba(59, 130, 246, 0.15); color: var(--hp-blue); }
+.quick-stat-icon.amber { background: rgba(245, 158, 11, 0.15); color: var(--hp-amber); }
+
+.quick-stat-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1;
+    margin-bottom: var(--spacing-xs);
+}
+
+.quick-stat-label {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* System Health Panel */
+.health-panel {
+    background: var(--bg-card);
+    border-radius: var(--radius-xl);
+    padding: var(--spacing-xl);
+    margin-bottom: var(--spacing-xl);
+    box-shadow: var(--shadow-md);
+}
+
+.health-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-lg);
+}
+
+.health-header h3 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.health-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--spacing-xl);
+}
+
+.health-item {
+    text-align: center;
+}
+
+.health-ring {
+    position: relative;
+    width: 100px;
+    height: 100px;
+    margin: 0 auto var(--spacing-md);
+}
+
+.health-ring svg {
+    transform: rotate(-90deg);
+    width: 100%;
+    height: 100%;
+}
+
+.health-ring-bg {
+    fill: none;
+    stroke: var(--border-color);
+    stroke-width: 8;
+}
+
+.health-ring-fill {
+    fill: none;
+    stroke-width: 8;
+    stroke-linecap: round;
+    stroke-dasharray: 251; /* 2*PI*40 */
+    stroke-dashoffset: 251;
+    transition: stroke-dashoffset 1s ease, stroke 0.5s ease;
+}
+
+.health-ring-fill.green { stroke: var(--hp-green); }
+.health-ring-fill.amber { stroke: var(--hp-amber); }
+.health-ring-fill.red { stroke: var(--hp-red); }
+
+.health-ring-value {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 1.25rem;
+    font-weight: 700;
+}
+
+.health-label {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.health-detail {
+    font-size: 0.75rem;
+    color: var(--text-light);
+    margin-top: var(--spacing-xs);
+}
+
+/* Navigation Tiles - Premium Grid */
+.nav-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: var(--spacing-lg);
+    margin-bottom: var(--spacing-xl);
+}
+
+.nav-tile {
+    background: var(--bg-card);
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+    box-shadow: var(--shadow-md);
+    cursor: pointer;
+    transition: all var(--transition-normal);
+    display: flex;
+    flex-direction: column;
+}
+
+.nav-tile:hover {
+    transform: translateY(-6px);
+    box-shadow: var(--shadow-xl);
+}
+
+.nav-tile-header {
+    padding: var(--spacing-xl) var(--spacing-lg) var(--spacing-lg);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+}
+
+.nav-tile-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: var(--radius-lg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.nav-tile-icon svg {
+    width: 28px;
+    height: 28px;
+    color: #fff;
+}
+
+.nav-tile-info h4 {
+    margin: 0 0 var(--spacing-xs);
+    font-size: 1.125rem;
+    color: var(--text-primary);
+}
+
+.nav-tile-info p {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.nav-tile-footer {
+    padding: var(--spacing-md) var(--spacing-lg);
+    background: var(--bg-light);
+    margin-top: auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.nav-tile-stat {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+}
+
+.nav-tile-stat strong {
+    color: var(--text-primary);
+}
+
+.nav-tile-arrow {
+    color: var(--hp-primary);
+    font-weight: 600;
+    font-size: 0.875rem;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+    .dashboard-hero {
+        padding: var(--spacing-lg);
+    }
+
+    .hero-content {
+        min-height: 120px;
+    }
+
+    .hero-stats {
+        gap: var(--spacing-lg);
+    }
+
+    .hero-stat-value {
+        font-size: 1rem;
+    }
+
+    .quick-stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .health-grid {
+        grid-template-columns: repeat(3, 1fr);
+        gap: var(--spacing-sm);
+    }
+
+    .health-ring {
+        width: 60px;
+        height: 60px;
+    }
+
+    .health-ring-value {
+        font-size: 0.875rem;
+    }
+
+    .health-label {
+        font-size: 0.7rem;
+    }
+
+    .nav-tiles {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 480px) {
+    .dashboard-hero {
+        padding: var(--spacing-lg);
+    }
+
+    .hero-left h2 {
+        font-size: 1.5rem;
+    }
+
+    .hero-time {
+        font-size: 2.33rem;
+        font-weight: 800;
+    }
+
+    .quick-stat-value {
+        font-size: 1.5rem;
+    }
+}
+</style>
+
+<!-- Hero Section with Network Traffic Visualization -->
+<div class="dashboard-hero" id="dashboard-hero">
+    <canvas class="traffic-canvas" id="traffic-canvas"></canvas>
+    <div class="hero-content">
+        <div class="hero-status-bar">
+            <div class="hero-status-left">
+                <span class="status-dot"></span>
+                <span class="status-text">Guardian Active</span>
+            </div>
+            <div class="hero-status-right">
+                <span class="status-time" id="status-time"></span>
+            </div>
+        </div>
+        <div class="hero-stats">
+            <div class="hero-stat">
+                <span class="hero-stat-value" id="hero-rx">0</span>
+                <span class="hero-stat-label">↓ RX</span>
+            </div>
+            <div class="hero-stat">
+                <span class="hero-stat-value" id="hero-tx">0</span>
+                <span class="hero-stat-label">↑ TX</span>
+            </div>
+            <div class="hero-stat threat-stat" id="hero-threat-stat">
+                <span class="hero-stat-value" id="hero-blocked">0</span>
+                <span class="hero-stat-label">Blocked</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Mini clock update
+(function updateStatusTime() {
+    function update() {
+        const el = document.getElementById('status-time');
+        if (el) {
+            const now = new Date();
+            el.textContent = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        }
+    }
+    update();
+    setInterval(update, 1000);
+})();
+
+// Network Traffic Visualization - Vertical Bars with RAG Status
+(function initTrafficViz() {
+    const canvas = document.getElementById('traffic-canvas');
+    const hero = document.getElementById('dashboard-hero');
+    if (!canvas || !hero) return;
+
+    const ctx = canvas.getContext('2d');
+    let width, height;
+    let particles = [];
+    let interfaceBars = [];
+    let lastThreatCount = 0;
+    let totalBlocks = 0;
+
+    // Traffic tracking for rate calculation
+    let lastUpdateTime = Date.now();
+    let trafficHistory = {};  // Keyed by interface name (eth0, wlan0, etc.)
+
+    // RAG color thresholds for blocks (per minute basis)
+    const RAG_THRESHOLDS = {
+        GREEN: 5,   // 0-5 blocks = green
+        AMBER: 20   // 6-20 blocks = amber, 21+ = red
+    };
+
+    // Colors
+    const colors = {
+        barBg: 'rgba(255, 255, 255, 0.05)',
+        barBorder: 'rgba(255, 255, 255, 0.2)',
+        // RAG colors for fill
+        greenFill: 'rgba(16, 185, 129, 0.7)',
+        greenBorder: 'rgba(16, 185, 129, 1)',
+        amberFill: 'rgba(245, 158, 11, 0.7)',
+        amberBorder: 'rgba(245, 158, 11, 1)',
+        redFill: 'rgba(239, 68, 68, 0.7)',
+        redBorder: 'rgba(239, 68, 68, 1)',
+        // Particle colors
+        rxParticle: 'rgba(59, 130, 246, 0.9)',     // Blue for RX
+        txParticle: 'rgba(16, 185, 129, 0.9)',     // Green for TX
+        threat: '#FF6B8A'
+    };
+
+    function getRAGColors(blockCount) {
+        if (blockCount <= RAG_THRESHOLDS.GREEN) {
+            return { fill: colors.greenFill, border: colors.greenBorder };
+        }
+        if (blockCount <= RAG_THRESHOLDS.AMBER) {
+            return { fill: colors.amberFill, border: colors.amberBorder };
+        }
+        return { fill: colors.redFill, border: colors.redBorder };
+    }
+
+    function resize() {
+        const rect = hero.getBoundingClientRect();
+        width = canvas.width = rect.width;
+        height = canvas.height = rect.height;
+        initInterfaceBars(detectedWanInterface, detectedLanInterface);
+    }
+
+    function initInterfaceBars(wanName, lanName) {
+        interfaceBars = [];
+        // Position bars prominently on the right side
+        const barWidth = 40;
+        const barSpacing = 20;
+        const rightMargin = 30;
+        const startX = width - rightMargin - (barWidth * 2) - barSpacing;
+        const barHeight = height - 70;
+        const topPadding = 25;
+
+        // WAN bar - shows combined RX+TX traffic rate
+        interfaceBars.push({
+            name: wanName || 'WAN',
+            label: 'WAN',
+            x: startX,
+            y: topPadding,
+            width: barWidth,
+            height: barHeight,
+            fillLevel: 0,        // 0-1 fill based on traffic rate
+            targetFillLevel: 0,  // For smooth animation
+            type: 'wan',
+            iface: wanName || '',  // Actual interface name from API
+            ragColors: getRAGColors(0),
+            rate: 0              // Current rate in bytes/sec
+        });
+
+        // LAN bar
+        interfaceBars.push({
+            name: lanName || 'LAN',
+            label: 'LAN',
+            x: startX + barWidth + barSpacing,
+            y: topPadding,
+            width: barWidth,
+            height: barHeight,
+            fillLevel: 0,
+            targetFillLevel: 0,
+            type: 'lan',
+            iface: lanName || '',
+            ragColors: getRAGColors(0),
+            rate: 0
+        });
+    }
+
+    // Store detected interface names for reuse
+    let detectedWanInterface = '';
+    let detectedLanInterface = '';
+
+    function spawnParticle(bar, direction, isThreat = false) {
+        const isRx = direction === 'down';
+        const fillTop = bar.y + bar.height * (1 - bar.fillLevel);
+        const startY = isRx ? bar.y : bar.y + bar.height;
+        const speed = 1.2 + Math.random() * 1.5;
+
+        particles.push({
+            x: bar.x + bar.width / 2 + (Math.random() - 0.5) * (bar.width - 10),
+            y: startY,
+            bar: bar,
+            direction: direction,
+            speed: isRx ? speed : -speed,
+            size: isThreat ? 5 : 2.5 + Math.random() * 1.5,
+            isThreat: isThreat,
+            isRx: isRx,
+            alpha: 1
+        });
+    }
+
+    function spawnBlockArrow(bar) {
+        const arrow = document.createElement('div');
+        arrow.className = 'block-arrow';
+        arrow.innerHTML = `<svg viewBox="0 0 24 24" fill="#FF6B8A">
+            <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/>
+        </svg>`;
+        arrow.style.left = (bar.x - 45) + 'px';
+        arrow.style.top = (bar.y + bar.height / 2 - 16) + 'px';
+        hero.appendChild(arrow);
+        setTimeout(() => arrow.remove(), 1200);
+
+        // Spawn threat particles
+        for (let i = 0; i < 3; i++) {
+            setTimeout(() => spawnParticle(bar, 'down', true), i * 100);
+        }
+    }
+
+    function spawnThreatDart() {
+        const dart = document.createElement('div');
+        dart.className = 'threat-dart';
+        dart.style.left = (Math.random() * (width - 200) + 25) + 'px';
+        dart.style.top = (Math.random() * (height - 30) + 15) + 'px';
+        hero.appendChild(dart);
+        setTimeout(() => dart.remove(), 800);
+
+        if (interfaceBars.length > 0) {
+            spawnBlockArrow(interfaceBars[0]);
+        }
+    }
+
+    function update() {
+        // Smooth fill level animation
+        interfaceBars.forEach(bar => {
+            const diff = bar.targetFillLevel - bar.fillLevel;
+            bar.fillLevel += diff * 0.1;
+        });
+
+        // Update particles
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.y += p.speed;
+
+            // Slight drift
+            p.x += (Math.random() - 0.5) * 0.3;
+            const minX = p.bar.x + 5;
+            const maxX = p.bar.x + p.bar.width - 5;
+            p.x = Math.max(minX, Math.min(maxX, p.x));
+
+            // Fade at edges
+            const barTop = p.bar.y;
+            const barBottom = p.bar.y + p.bar.height;
+            if (p.direction === 'down' && p.y > barBottom - 15) {
+                p.alpha = Math.max(0, (barBottom - p.y) / 15);
+            } else if (p.direction === 'up' && p.y < barTop + 15) {
+                p.alpha = Math.max(0, (p.y - barTop) / 15);
+            }
+
+            if (p.y > barBottom + 5 || p.y < barTop - 5 || p.alpha <= 0) {
+                particles.splice(i, 1);
+            }
+        }
+
+        // Spawn particles based on traffic rate
+        interfaceBars.forEach(bar => {
+            const spawnRate = 0.02 + bar.fillLevel * 0.15;
+            if (Math.random() < spawnRate) {
+                spawnParticle(bar, Math.random() > 0.5 ? 'down' : 'up');
+            }
+        });
+    }
+
+    function formatRate(bytesPerSec) {
+        if (bytesPerSec < 1024) return bytesPerSec.toFixed(0) + ' B/s';
+        if (bytesPerSec < 1024 * 1024) return (bytesPerSec / 1024).toFixed(1) + ' KB/s';
+        return (bytesPerSec / (1024 * 1024)).toFixed(2) + ' MB/s';
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, width, height);
+
+        interfaceBars.forEach(bar => {
+            const fillHeight = bar.height * bar.fillLevel;
+            const fillY = bar.y + bar.height - fillHeight;
+            const radius = 6;
+
+            // Draw bar background
+            ctx.fillStyle = colors.barBg;
+            ctx.strokeStyle = colors.barBorder;
+            ctx.lineWidth = 1;
+            drawRoundedRect(ctx, bar.x, bar.y, bar.width, bar.height, radius);
+            ctx.fill();
+            ctx.stroke();
+
+            // Draw filled portion with RAG color
+            if (fillHeight > 0) {
+                ctx.fillStyle = bar.ragColors.fill;
+                ctx.strokeStyle = bar.ragColors.border;
+                ctx.lineWidth = 2;
+
+                // Clip to bar bounds for fill
+                ctx.save();
+                ctx.beginPath();
+                drawRoundedRect(ctx, bar.x, bar.y, bar.width, bar.height, radius);
+                ctx.clip();
+
+                // Draw fill from bottom
+                ctx.fillRect(bar.x, fillY, bar.width, fillHeight);
+                ctx.restore();
+
+                // Glow effect on border
+                ctx.shadowColor = bar.ragColors.border;
+                ctx.shadowBlur = 10;
+                drawRoundedRect(ctx, bar.x, bar.y, bar.width, bar.height, radius);
+                ctx.stroke();
+                ctx.shadowBlur = 0;
+            }
+
+            // Draw interface label and name
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
+            ctx.textAlign = 'center';
+            // Show label (WAN/LAN) and interface name if detected
+            const displayLabel = bar.iface ? `${bar.label} (${bar.iface})` : bar.label;
+            ctx.fillText(displayLabel, bar.x + bar.width / 2, bar.y + bar.height + 16);
+
+            // Draw rate below label
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.font = '9px system-ui';
+            ctx.fillText(formatRate(bar.rate), bar.x + bar.width / 2, bar.y + bar.height + 28);
+
+            // Draw directional indicators inside bar
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.font = '10px system-ui';
+            ctx.fillText('▼', bar.x + bar.width / 2, bar.y + 14);
+            ctx.fillText('▲', bar.x + bar.width / 2, bar.y + bar.height - 6);
+        });
+
+        // Draw particles
+        particles.forEach(p => {
+            const color = p.isThreat ? colors.threat : (p.isRx ? colors.rxParticle : colors.txParticle);
+            ctx.beginPath();
+            ctx.fillStyle = color;
+            ctx.globalAlpha = p.alpha;
+            ctx.shadowColor = color;
+            ctx.shadowBlur = p.isThreat ? 10 : 4;
+            ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.globalAlpha = 1;
+        });
+    }
+
+    function drawRoundedRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+    }
+
+    function animate() {
+        update();
+        draw();
+        requestAnimationFrame(animate);
+    }
+
+    function formatBytes(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+
+    async function fetchTrafficStats() {
+        try {
+            const response = await fetch('/api/core/dashboard');
+            if (response.ok) {
+                const data = await response.json();
+                const now = Date.now();
+                const timeDelta = (now - lastUpdateTime) / 1000; // seconds
+                lastUpdateTime = now;
+
+                // Update hero stats
+                const rxEl = document.getElementById('hero-rx');
+                const txEl = document.getElementById('hero-tx');
+                const blockedEl = document.getElementById('hero-blocked');
+                const threatStat = document.getElementById('hero-threat-stat');
+
+                if (data.network) {
+                    if (rxEl) rxEl.textContent = formatBytes(data.network.rx_bytes || 0);
+                    if (txEl) txEl.textContent = formatBytes(data.network.tx_bytes || 0);
+                }
+
+                // Detect interface names from API response and update bars if needed
+                if (data.interfaces) {
+                    const ifaceNames = Object.keys(data.interfaces);
+                    let wanIface = '';
+                    let lanIface = '';
+
+                    // Find WAN and LAN interfaces from the response
+                    ifaceNames.forEach(name => {
+                        const stats = data.interfaces[name];
+                        if (stats.type === 'wan' && !wanIface) wanIface = name;
+                        if (stats.type === 'lan' && !lanIface) lanIface = name;
+                    });
+
+                    // Update detected interfaces if they changed
+                    if ((wanIface && wanIface !== detectedWanInterface) ||
+                        (lanIface && lanIface !== detectedLanInterface)) {
+                        detectedWanInterface = wanIface || detectedWanInterface;
+                        detectedLanInterface = lanIface || detectedLanInterface;
+                        // Reinitialize bars with new interface names
+                        initInterfaceBars(detectedWanInterface, detectedLanInterface);
+                    }
+
+                    // Calculate rates and update bars for each interface
+                    Object.entries(data.interfaces).forEach(([ifaceName, stats]) => {
+                        // Skip if no actual bytes (interface doesn't exist)
+                        if (stats.rx_bytes === 0 && stats.tx_bytes === 0 && !trafficHistory[ifaceName]) {
+                            // Only skip on first call if truly zero
+                            // Allow subsequent updates even if zero (idle interface)
+                        }
+
+                        // Initialize history for this interface if needed
+                        if (!trafficHistory[ifaceName]) {
+                            trafficHistory[ifaceName] = {
+                                rxBytes: stats.rx_bytes, txBytes: stats.tx_bytes,
+                                rxRate: 0, txRate: 0,
+                                maxRate: 1024 * 1024  // 1 MB/s default max
+                            };
+                            // Skip rate calculation on first data point
+                        } else {
+                            const hist = trafficHistory[ifaceName];
+
+                            // Calculate rate (bytes per second)
+                            const rxDelta = Math.max(0, stats.rx_bytes - hist.rxBytes);
+                            const txDelta = Math.max(0, stats.tx_bytes - hist.txBytes);
+                            const totalRate = (rxDelta + txDelta) / Math.max(timeDelta, 1);
+
+                            hist.rxRate = rxDelta / Math.max(timeDelta, 1);
+                            hist.txRate = txDelta / Math.max(timeDelta, 1);
+
+                            // Update max rate for scaling (with decay)
+                            hist.maxRate = Math.max(hist.maxRate * 0.99, totalRate, 1024);
+
+                            // Find bar by interface name OR by type
+                            const bar = interfaceBars.find(b =>
+                                b.iface === ifaceName || b.name === ifaceName || b.type === stats.type
+                            );
+                            if (bar) {
+                                bar.rate = totalRate;
+                                bar.targetFillLevel = Math.min(1, totalRate / hist.maxRate);
+                                // Update bar's interface name if we matched by type
+                                if (bar.iface !== ifaceName) {
+                                    bar.iface = ifaceName;
+                                    bar.name = ifaceName;
+                                }
+                            }
+
+                            // Store current values for next calculation
+                            hist.rxBytes = stats.rx_bytes;
+                            hist.txBytes = stats.tx_bytes;
+                        }
+                    });
+                }
+
+                // Update block count and RAG colors
+                const currentBlocks = (data.threats?.blocked || 0);
+                totalBlocks = currentBlocks;
+                if (blockedEl) blockedEl.textContent = currentBlocks;
+
+                // Update RAG colors on all bars
+                const ragColors = getRAGColors(currentBlocks);
+                interfaceBars.forEach(bar => {
+                    bar.ragColors = ragColors;
+                });
+
+                // Spawn visual effects for new blocks
+                if (currentBlocks > lastThreatCount && lastThreatCount > 0) {
+                    const newThreats = Math.min(currentBlocks - lastThreatCount, 5);
+                    for (let i = 0; i < newThreats; i++) {
+                        setTimeout(() => spawnThreatDart(), i * 200);
+                    }
+                    if (threatStat) {
+                        threatStat.classList.remove('has-threats');
+                        void threatStat.offsetWidth;
+                        threatStat.classList.add('has-threats');
+                    }
+                }
+                lastThreatCount = currentBlocks;
+            }
+        } catch (e) {
+            // Continue visualization even on error
+        }
+    }
+
+    // Initialize
+    resize();
+    window.addEventListener('resize', resize);
+    animate();
+
+    // Poll every 3 seconds
+    fetchTrafficStats();
+    setInterval(fetchTrafficStats, 3000);
+
+    // Expose for testing
+    window.triggerThreatDart = spawnThreatDart;
+    window.triggerBlockArrow = () => {
+        if (interfaceBars.length > 0) spawnBlockArrow(interfaceBars[0]);
+    };
+})();
+</script>
+
+<!-- Quick Stats -->
+<div class="quick-stats">
+    <div class="quick-stat clickable" onclick="navigateTo('clients')">
+        <div class="quick-stat-icon green">
+            <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M4 6h18V4H4c-1.1 0-2 .9-2 2v11H0v3h14v-3H4V6zm19 2h-6c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h6c.55 0 1-.45 1-1V9c0-.55-.45-1-1-1zm-1 9h-4v-7h4v7z"/>
+            </svg>
+        </div>
+        <div class="quick-stat-value" id="stat-clients">{{ connected_clients }}</div>
+        <div class="quick-stat-label">Clients</div>
+    </div>
+
+    <div class="quick-stat clickable" onclick="navigateTo('security')">
+        <div class="quick-stat-icon red">
+            <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/>
+            </svg>
+        </div>
+        <div class="quick-stat-value" id="stat-threats-blocked">{{ threats.blocked|default(0) }}</div>
+        <div class="quick-stat-label">Blocked</div>
+    </div>
+
+    <div class="quick-stat clickable" onclick="navigateTo('system')">
+        <div class="quick-stat-icon blue">
+            <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+            </svg>
+        </div>
+        <div class="quick-stat-value" id="stat-uptime">{{ system.uptime }}</div>
+        <div class="quick-stat-label">Uptime</div>
+    </div>
+
+    <div class="quick-stat clickable" onclick="navigateTo('security')">
+        <div class="quick-stat-icon amber">
+            <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M11 15h2v2h-2v-2zm0-8h2v6h-2V7zm.99-5C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"/>
+            </svg>
+        </div>
+        <div class="quick-stat-value" id="stat-qsecbit">{{ "%.2f"|format(threats.qsecbit_score|default(0)) }}</div>
+        <div class="quick-stat-label">QSecBit</div>
+    </div>
+</div>
+
+<!-- System Health Panel -->
+<div class="health-panel">
+    <div class="health-header">
+        <h3>
+            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24" style="color: var(--hp-primary);">
+                <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6z"/>
+            </svg>
+            System Health
+        </h3>
+        <button class="btn btn-sm btn-secondary" onclick="loadDashboardData()">Refresh</button>
+    </div>
+    <div class="health-grid">
+        <div class="health-item">
+            <div class="health-ring">
+                <svg viewBox="0 0 100 100">
+                    <circle class="health-ring-bg" cx="50" cy="50" r="40"/>
+                    <circle class="health-ring-fill green" id="memory-ring" cx="50" cy="50" r="40"/>
+                </svg>
+                <div class="health-ring-value" id="memory-value">{{ system.memory.percent }}%</div>
+            </div>
+            <div class="health-label">Memory</div>
+            <div class="health-detail" id="memory-detail">{{ system.memory.used|default(0) }} / {{ system.memory.total|default(0) }} MB</div>
+        </div>
+
+        <div class="health-item">
+            <div class="health-ring">
+                <svg viewBox="0 0 100 100">
+                    <circle class="health-ring-bg" cx="50" cy="50" r="40"/>
+                    <circle class="health-ring-fill green" id="cpu-ring" cx="50" cy="50" r="40"/>
+                </svg>
+                <div class="health-ring-value" id="cpu-value">{{ "%.0f"|format(system.load[0]|default(0) * 25) }}%</div>
+            </div>
+            <div class="health-label">CPU Load</div>
+            <div class="health-detail" id="cpu-detail">Load: {{ "%.2f"|format(system.load[0]|default(0)) }}</div>
+        </div>
+
+        <div class="health-item">
+            <div class="health-ring">
+                <svg viewBox="0 0 100 100">
+                    <circle class="health-ring-bg" cx="50" cy="50" r="40"/>
+                    <circle class="health-ring-fill green" id="temp-ring" cx="50" cy="50" r="40"/>
+                </svg>
+                <div class="health-ring-value" id="temp-value">{{ "%.0f"|format(system.temperature|default(0)) }}°</div>
+            </div>
+            <div class="health-label">Temperature</div>
+            <div class="health-detail" id="temp-detail">{{ "%.1f"|format(system.temperature|default(0)) }}°C</div>
+        </div>
+    </div>
+</div>
+
+<!-- Navigation Tiles -->
+<div class="nav-tiles">
+    <!-- Security -->
+    <div class="nav-tile" onclick="navigateTo('security')">
+        <div class="nav-tile-header">
+            <div class="nav-tile-icon" style="background: linear-gradient(135deg, #ef4444, #b91c1c);">
+                <svg fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/>
+                </svg>
+            </div>
+            <div class="nav-tile-info">
+                <h4>Security</h4>
+                <p>QSecBit metrics, threat detection, block log</p>
+            </div>
+        </div>
+        <div class="nav-tile-footer">
+            <span class="nav-tile-stat">Score: <strong id="tile-qsecbit">{{ "%.2f"|format(threats.qsecbit_score|default(0)) }}</strong></span>
+            <span class="nav-tile-arrow">View &rarr;</span>
+        </div>
+    </div>
+
+    <!-- dnsXai -->
+    <div class="nav-tile" onclick="navigateTo('dnsxai')">
+        <div class="nav-tile-header">
+            <div class="nav-tile-icon" style="background: linear-gradient(135deg, #F05B2D, #d14a1f);">
+                <svg fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                </svg>
+            </div>
+            <div class="nav-tile-info">
+                <h4>dnsXai</h4>
+                <p>AI-powered DNS protection, ML classifier</p>
+            </div>
+        </div>
+        <div class="nav-tile-footer">
+            <span class="nav-tile-stat" id="tile-dns-status">Active</span>
+            <span class="nav-tile-arrow">Manage &rarr;</span>
+        </div>
+    </div>
+
+    <!-- Clients -->
+    <div class="nav-tile" onclick="navigateTo('clients')">
+        <div class="nav-tile-header">
+            <div class="nav-tile-icon" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8);">
+                <svg fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M4 6h18V4H4c-1.1 0-2 .9-2 2v11H0v3h14v-3H4V6zm19 2h-6c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h6c.55 0 1-.45 1-1V9c0-.55-.45-1-1-1zm-1 9h-4v-7h4v7z"/>
+                </svg>
+            </div>
+            <div class="nav-tile-info">
+                <h4>Connected Clients</h4>
+                <p>Monitor devices on your network</p>
+            </div>
+        </div>
+        <div class="nav-tile-footer">
+            <span class="nav-tile-stat"><strong id="tile-clients">{{ connected_clients }}</strong> connected</span>
+            <span class="nav-tile-arrow">View &rarr;</span>
+        </div>
+    </div>
+
+    <!-- Network Config -->
+    <div class="nav-tile" onclick="navigateTo('config')">
+        <div class="nav-tile-header">
+            <div class="nav-tile-icon" style="background: linear-gradient(135deg, #10b981, #059669);">
+                <svg fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
+                </svg>
+            </div>
+            <div class="nav-tile-info">
+                <h4>Network Config</h4>
+                <p>WiFi, hotspot, routes, interfaces</p>
+            </div>
+        </div>
+        <div class="nav-tile-footer">
+            <span class="nav-tile-stat">Configure</span>
+            <span class="nav-tile-arrow">Open &rarr;</span>
+        </div>
+    </div>
+
+    <!-- VPN -->
+    <div class="nav-tile" onclick="navigateTo('vpn')">
+        <div class="nav-tile-header">
+            <div class="nav-tile-icon" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9);">
+                <svg fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+                </svg>
+            </div>
+            <div class="nav-tile-info">
+                <h4>VPN</h4>
+                <p>WireGuard and OpenVPN tunnels</p>
+            </div>
+        </div>
+        <div class="nav-tile-footer">
+            <span class="nav-tile-stat" id="tile-vpn-status">Ready</span>
+            <span class="nav-tile-arrow">Manage &rarr;</span>
+        </div>
+    </div>
+
+    <!-- System -->
+    <div class="nav-tile" onclick="navigateTo('system')">
+        <div class="nav-tile-header">
+            <div class="nav-tile-icon" style="background: linear-gradient(135deg, #6b7280, #374151);">
+                <svg fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+                </svg>
+            </div>
+            <div class="nav-tile-info">
+                <h4>System</h4>
+                <p>Services, updates, logs, settings</p>
+            </div>
+        </div>
+        <div class="nav-tile-footer">
+            <span class="nav-tile-stat">Settings &amp; Updates</span>
+            <span class="nav-tile-arrow">Open &rarr;</span>
+        </div>
+    </div>
+</div>
+
+<!-- VM Management Section (hidden by default, shown via JS if VMs available) -->
+<div class="vm-section" id="vm-section" style="display: none;">
+    <h3 class="section-title" style="margin: var(--spacing-xl) 0 var(--spacing-lg); font-size: 1.25rem; color: var(--text-primary);">
+        <svg fill="currentColor" viewBox="0 0 24 24" style="width: 24px; height: 24px; vertical-align: middle; margin-right: 8px;">
+            <path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/>
+        </svg>
+        Virtual Machines
+    </h3>
+    <div class="nav-tiles">
+        <!-- Home Assistant -->
+        <div class="nav-tile vm-tile" id="vm-tile-homeassistant">
+            <div class="nav-tile-header">
+                <div class="nav-tile-icon" style="background: linear-gradient(135deg, #18bcf2, #0d9dd9);">
+                    <svg fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 2L4 7v10l8 5 8-5V7l-8-5zm0 2.31l6 3.75v7.88l-6 3.75-6-3.75V8.06l6-3.75z"/>
+                        <path d="M12 8a4 4 0 100 8 4 4 0 000-8zm0 6a2 2 0 110-4 2 2 0 010 4z"/>
+                    </svg>
+                </div>
+                <div class="nav-tile-info">
+                    <h4>Home Assistant</h4>
+                    <p>Smart home automation platform</p>
+                </div>
+            </div>
+            <div class="nav-tile-footer">
+                <span class="nav-tile-stat vm-status" id="vm-status-homeassistant">
+                    <span class="status-indicator stopped"></span> Checking...
+                </span>
+                <a href="http://192.168.4.10:8123" target="_blank" class="nav-tile-arrow" id="vm-link-homeassistant" style="text-decoration: none;">Open &rarr;</a>
+            </div>
+        </div>
+
+        <!-- OpenMediaVault -->
+        <div class="nav-tile vm-tile" id="vm-tile-openmediavault">
+            <div class="nav-tile-header">
+                <div class="nav-tile-icon" style="background: linear-gradient(135deg, #5c6bc0, #3949ab);">
+                    <svg fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M2 20h20v-4H2v4zm2-3h2v2H4v-2zM2 4v4h20V4H2zm4 3H4V5h2v2zm-4 7h20v-4H2v4zm2-3h2v2H4v-2z"/>
+                    </svg>
+                </div>
+                <div class="nav-tile-info">
+                    <h4>OpenMediaVault</h4>
+                    <p>NAS &amp; storage management</p>
+                </div>
+            </div>
+            <div class="nav-tile-footer">
+                <span class="nav-tile-stat vm-status" id="vm-status-openmediavault">
+                    <span class="status-indicator stopped"></span> Checking...
+                </span>
+                <a href="http://192.168.4.11" target="_blank" class="nav-tile-arrow" id="vm-link-openmediavault" style="text-decoration: none;">Open &rarr;</a>
+            </div>
+        </div>
+    </div>
+    <div class="vm-actions" style="margin-top: var(--spacing-md); display: flex; gap: var(--spacing-sm);">
+        <button class="btn btn-sm" onclick="vmAction('homeassistant', 'start')" id="btn-start-ha" style="display: none;">Start HA</button>
+        <button class="btn btn-sm" onclick="vmAction('openmediavault', 'start')" id="btn-start-omv" style="display: none;">Start OMV</button>
+    </div>
+</div>
+
+<style>
+/* VM Section Styles */
+.vm-tile .nav-tile-footer {
+    justify-content: space-between;
+}
+.vm-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.status-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+.status-indicator.running {
+    background: #10b981;
+    box-shadow: 0 0 8px #10b981;
+}
+.status-indicator.stopped {
+    background: #6b7280;
+}
+.status-indicator.error {
+    background: #ef4444;
+}
+</style>
+
+<script>
+// VM Management Functions
+let vmSupportEnabled = false;
+
+async function checkVMSupport() {
+    try {
+        const response = await fetch('/api/vms/status');
+        const data = await response.json();
+        vmSupportEnabled = data.enabled;
+
+        if (vmSupportEnabled) {
+            document.getElementById('vm-section').style.display = 'block';
+            fetchVMStatus();
+            // Poll VM status every 30 seconds
+            setInterval(fetchVMStatus, 30000);
+        }
+    } catch (e) {
+        console.log('VM support check failed:', e);
+    }
+}
+
+async function fetchVMStatus() {
+    if (!vmSupportEnabled) return;
+
+    try {
+        const response = await fetch('/api/vms');
+        const data = await response.json();
+
+        data.vms.forEach(vm => {
+            const statusEl = document.getElementById(`vm-status-${vm.name}`);
+            const linkEl = document.getElementById(`vm-link-${vm.name}`);
+            const startBtn = document.getElementById(`btn-start-${vm.name === 'homeassistant' ? 'ha' : 'omv'}`);
+
+            if (statusEl) {
+                const indicator = statusEl.querySelector('.status-indicator');
+                if (vm.state === 'running') {
+                    indicator.className = 'status-indicator running';
+                    statusEl.innerHTML = `<span class="status-indicator running"></span> Running`;
+                    if (startBtn) startBtn.style.display = 'none';
+                } else {
+                    indicator.className = 'status-indicator stopped';
+                    statusEl.innerHTML = `<span class="status-indicator stopped"></span> ${vm.state}`;
+                    if (startBtn) startBtn.style.display = 'inline-block';
+                }
+            }
+        });
+    } catch (e) {
+        console.log('VM status fetch failed:', e);
+    }
+}
+
+async function vmAction(vmName, action) {
+    try {
+        const response = await fetch(`/api/vms/${vmName}/${action}`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            setTimeout(fetchVMStatus, 2000);
+        } else {
+            alert(`Failed to ${action} ${vmName}: ${data.error}`);
+        }
+    } catch (e) {
+        alert(`Error: ${e.message}`);
+    }
+}
+
+// Initialize VM support check
+document.addEventListener('DOMContentLoaded', checkVMSupport);
+</script>
+
+<script>
+// Update health rings animation
+function updateHealthRings() {
+    const circumference = 251; // 2 * PI * 40
+
+    // Memory ring
+    const memPercent = parseFloat(document.getElementById('memory-value')?.textContent) || 0;
+    const memRing = document.getElementById('memory-ring');
+    if (memRing) {
+        const memOffset = circumference - (memPercent / 100) * circumference;
+        memRing.style.strokeDashoffset = memOffset;
+        memRing.className = 'health-ring-fill ' + (memPercent > 80 ? 'red' : memPercent > 60 ? 'amber' : 'green');
+    }
+
+    // CPU ring
+    const cpuPercent = parseFloat(document.getElementById('cpu-value')?.textContent) || 0;
+    const cpuRing = document.getElementById('cpu-ring');
+    if (cpuRing) {
+        const cpuOffset = circumference - (cpuPercent / 100) * circumference;
+        cpuRing.style.strokeDashoffset = cpuOffset;
+        cpuRing.className = 'health-ring-fill ' + (cpuPercent > 80 ? 'red' : cpuPercent > 60 ? 'amber' : 'green');
+    }
+
+    // Temp ring (scale 0-80°C to percentage)
+    const temp = parseFloat(document.getElementById('temp-value')?.textContent) || 0;
+    const tempPercent = Math.min((temp / 80) * 100, 100);
+    const tempRing = document.getElementById('temp-ring');
+    if (tempRing) {
+        const tempOffset = circumference - (tempPercent / 100) * circumference;
+        tempRing.style.strokeDashoffset = tempOffset;
+        tempRing.className = 'health-ring-fill ' + (temp > 70 ? 'red' : temp > 55 ? 'amber' : 'green');
+    }
+}
+
+// Initialize rings on load
+setTimeout(updateHealthRings, 100);
+</script>

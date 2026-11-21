@@ -822,6 +822,10 @@ pub const CMD_RX_READV: u32 = 38;
 /// OUT = [`txvmsg::encode_out`]. A TX ring slot holds [`txvmsg::slot_encode`].
 pub const CMD_TX_DATAV: u32 = 39;
 
+/// ADR 0067 E1b: what the bus did since this server instance started (`hal::sdio::BusStats`, counts only — EL0 has no
+/// timer on the CM5; the kernel times every call). IN = nothing, OUT = `BusStats::LEN` bytes (`BusStats::encode`).
+pub const CMD_BUS_STATS: u32 = 40;
+
 /// The most frames one vectored call moves: half a ring, so a full batch always fits a ring that the
 /// other side has drained to at most half. The kernel may ask for fewer.
 pub const VEC_MAX: usize = crate::el0ring::SLOTS / 2;

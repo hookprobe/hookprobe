@@ -23,6 +23,8 @@ NAMES = (
     "hookprobe_ioc_v1",
     "domain_list",
     "phiusiil_csv",
+    "cve_record_v5",
+    "osv_advisory",
 )
 
 

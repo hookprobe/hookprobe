@@ -5,7 +5,7 @@
 > RESEARCH = research/non-commercial; COMMERCIAL = paid licence; RESTRICTED = agreement/membership; UNKNOWN = not verified.
 > Gate columns are `licensing.decide()` for each purpose: ✅ allowed, — denied.
 
-Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — total 149.
+Sources: COMMERCIAL 11, OPEN 89, RESEARCH 22, RESTRICTED 32, UNKNOWN 51 — total 205.
 
 ## attack_simulation
 
@@ -13,6 +13,8 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 |---|---|---|---|---|---|---|---|---|---|
 | `atomic-red-team` | [Atomic Red Team](https://github.com/redcanaryco/atomic-red-team) | Red Canary / US | OPEN | ✅ | ✅ | ✅ | public_download | 4 | partially_verified |
 | `lanl-comprehensive-multisource-2015` | [LANL Comprehensive, Multi-Source Cyber-Security Events (2015)](https://csr.lanl.gov/data/cyber1/) | Los Alamos National Laboratory / US | OPEN | ✅ | ✅ | ✅ | registration | 4 | verified |
+| `gtfobins` | [GTFOBins](https://gtfobins.github.io/) | GTFOBins project / INT | OPEN | — | ✅ | ✅ | public_download | 3 | partially_verified |
+| `lolbas` | [LOLBAS](https://lolbas-project.github.io/) | LOLBAS Project / INT | OPEN | — | ✅ | ✅ | public_download | 3 | partially_verified |
 | `mitre-caldera` | [MITRE CALDERA](https://github.com/apache/caldera) | MITRE (repo now github.com/apache/calder / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
 | `otrf-security-datasets` | [OTRF Security-Datasets (formerly Mordor)](https://github.com/OTRF/Security-Datasets) | Open Threat Research Forge (Roberto & Jo / global | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `splunk-attack-data` | [Splunk attack_data](https://github.com/splunk/attack_data) | Splunk Threat Research Team / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
@@ -29,7 +31,10 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 
 | id | name | org / country | class | train | eval | ship | access | P | verified |
 |---|---|---|---|---|---|---|---|---|---|
+| `cesnet-datazoo` | [CESNET DataZoo traffic datasets (CESNET-TLS-Year22, CESNET-QUIC22, CESNET-TLS22)](https://github.com/CESNET/CESNET-Datazoo) | CESNET and FIT CTU Prague / CZ | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `cisco-umbrella-top1m` | [Cisco Umbrella Popularity List (top 1M)](https://s3-us-west-1.amazonaws.com/umbrella-static/index.html) | Cisco Umbrella / US | UNKNOWN | — | — | — | public_download | 3 | verified |
+| `misp-warninglists` | [MISP Warninglists](https://github.com/MISP/misp-warninglists) | MISP Project (CIRCL) / LU | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
+| `nist-nsrl-rds` | [NIST NSRL Reference Data Set (RDSv3)](https://www.nist.gov/itl/ssd/software-quality-group/national-software-reference-library-nsrl) | NIST Software Quality Group / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
 | `tranco` | [Tranco top-sites list](https://tranco-list.eu/) | KU Leuven DistriNet / TU Delft et al. / BE | UNKNOWN | — | — | — | public_download | 3 | verified |
 | `mawi-wide` | [MAWI Working Group Traffic Archive (WIDE backbone)](https://mawi.wide.ad.jp/mawi/) | MAWI Working Group, WIDE Project / JP | RESEARCH | — | — | — | public_download | 2 | verified |
 | `caida-anonymized-passive-traces` | [CAIDA Anonymized Internet Traces (passive_dataset)](https://www.caida.org/catalog/datasets/passive_dataset/) | CAIDA, UC San Diego / US | RESTRICTED | — | — | — | agreement | 1 | partially_verified |
@@ -66,7 +71,10 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 |---|---|---|---|---|---|---|---|---|---|
 | `et-open` | [Proofpoint Emerging Threats Open ruleset](https://rules.emergingthreats.net/) | Proofpoint (Emerging Threats) / US | OPEN | — | ✅ | ✅ | public_download | 5 | partially_verified |
 | `sigmahq-rules` | [SigmaHQ detection rules](https://github.com/SigmaHQ/sigma) | SigmaHQ community (Florian Roth, Thomas  / DE | OPEN | ✅ | ✅ | ✅ | public_download | 4 | partially_verified |
+| `dfir-report-rules` | [The DFIR Report Sigma / YARA / Suricata rules](https://github.com/The-DFIR-Report) | The DFIR Report / - | OPEN | — | ✅ | ✅ | public_download | 3 | verified |
+| `elastic-protections-artifacts` | [Elastic protections-artifacts (YARA and behaviour rules)](https://github.com/elastic/protections-artifacts) | Elastic / US | RESTRICTED | — | — | — | public_download | 3 | verified |
 | `et-pro` | [Proofpoint ET Pro ruleset](https://www.proofpoint.com/us/products/et-pro-ruleset) | Proofpoint / US | COMMERCIAL | — | — | — | commercial_contract | 3 | unverified |
+| `inquest-yara-rules` | [InQuest YARA rules](https://github.com/InQuest/yara-rules) | InQuest / US | OPEN | — | ✅ | ✅ | public_download | 3 | verified |
 | `neo23x0-signature-base` | [Neo23x0 signature-base (YARA + IOC)](https://github.com/Neo23x0/signature-base) | Florian Roth / Nextron Systems / DE | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
 | `yara-forge` | [YARA-Forge rule packages](https://github.com/YARAHQ/yara-forge) | YARA HQ (Florian Roth et al.) / DE | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
 | `abusech-yaraify` | [abuse.ch YARAify](https://yaraify.abuse.ch/) | abuse.ch (Bern University of Applied Sci / CH | OPEN | — | ✅ | ✅ | api_key | 2 | verified |
@@ -90,6 +98,7 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `lu-circl-passive-dns` | [CIRCL Passive DNS](https://circl.lu/services/passive-dns/) | CIRCL / LU | RESTRICTED | — | — | — | agreement | 4 | verified |
 | `spamhaus-dnsbl-dqs` | [Spamhaus DNSBLs (ZEN/SBL/XBL/PBL/DBL, ZRD) public mirrors and Data Query Service](https://www.spamhaus.org/organization/dnsblusage/) | Spamhaus Technology / GB | COMMERCIAL | — | — | — | commercial_contract | 4 | verified |
 | `bccc-cic-bell-dns-2024` | [BCCC-CIC-Bell-DNS-2024](https://www.yorku.ca/research/bccc/ucs-technical/cybersecurity-datasets-cds/malicious-dns-and-attacks-bccc-cic-bell-dns-2024/) | BCCC, York University / CA | UNKNOWN | — | — | — | request_form | 3 | partially_verified |
+| `openintel` | [OpenINTEL active DNS measurements](https://openintel.nl/data/) | OpenINTEL (University of Twente, SURF, S / NL | RESEARCH | — | — | — | public_download | 3 | verified |
 | `ro-rotld` | [ROTLD .ro registry (ICI Bucuresti)](https://www.rotld.ro/) | ICI Bucuresti (National Institute for R& / RO | UNKNOWN | — | — | — | reports_only | 3 | partially_verified |
 | `tu-dns-tunnelling-2023` | [DNS tunnelling dataset (Tu, Liu, Sun, Computers & Security 2023)](https://github.com/Utah1A/DNS-tunnelling-detection-by-fusing-encoding-feature-and-behavioral-feature) | Tianjin University Trusted Software Lab  / CN | UNKNOWN | — | — | — | public_download | 3 | verified |
 | `bccc-cira-cic-dohbrw-2020` | [BCCC-CIRA-CIC-DoHBrw-2020 (balanced)](https://www.yorku.ca/research/bccc/ucs-technical/cybersecurity-datasets-cds/dns-over-https-bccc-cira-cic-dohbrw-2020/) | BCCC, York University / CA | UNKNOWN | — | — | — | request_form | 2 | partially_verified |
@@ -125,6 +134,11 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | id | name | org / country | class | train | eval | ship | access | P | verified |
 |---|---|---|---|---|---|---|---|---|---|
 | `abusech-urlhaus` | [abuse.ch URLhaus](https://urlhaus.abuse.ch/) | abuse.ch (Bern University of Applied Sci / CH | RESTRICTED | — | — | — | api_key | 5 | verified |
+| `ember-2017-2018` | [EMBER 2017/2018 PE feature dataset](https://github.com/elastic/ember) | Elastic / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
+| `ember2024` | [EMBER2024 multi-format malware feature dataset](https://github.com/FutureComputing4AI/EMBER2024) | FutureComputing4AI (Joyce et al.) / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
+| `malpedia` | [Malpedia](https://malpedia.caad.fkie.fraunhofer.de/) | Fraunhofer FKIE / DE | RESEARCH | — | — | — | registration | 3 | verified |
+| `ossf-malicious-packages` | [OpenSSF Malicious Packages](https://github.com/ossf/malicious-packages) | Open Source Security Foundation (OpenSSF / INT | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
+| `sorel-20m` | [SOREL-20M](https://github.com/sophos/SOREL-20M) | Sophos AI and ReversingLabs / GB | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
 | `stratosphere-mcfp-captures` | [Stratosphere / Malware Capture Facility Project captures (CTU-Malware-Capture-Botnet-*, Normal, Mixed)](https://www.stratosphereips.org/datasets-overview) | Stratosphere Laboratory, CTU Prague / CZ | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
 | `abusech-malwarebazaar` | [abuse.ch MalwareBazaar](https://bazaar.abuse.ch/) | abuse.ch (Bern University of Applied Sci / CH | RESTRICTED | — | — | — | api_key | 2 | verified |
 
@@ -154,7 +168,10 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `int-apwg-ecx` | [APWG eCrime eXchange (eCX)](https://apwg.org/ecx/) | Anti-Phishing Working Group / INT | RESTRICTED | — | — | — | membership | 4 | verified |
 | `lu-circl-opendata` | [CIRCL Open Data (phishing screenshots, BGP Ranking, AIL screenshots, Hugging Face datasets)](https://new.circl.lu/opendata/) | CIRCL / LU | OPEN | ✅ | ✅ | ✅ | public_download | 4 | partially_verified |
 | `ro-dnsc-rss` | [DNSC alerts and news RSS feed](https://www.dnsc.ro/tag/alerte) | Directoratul National de Securitate Cibe / RO | UNKNOWN | — | — | — | public_download | 4 | verified |
+| `phishing-army` | [Phishing Army blocklist](https://phishing.army/) | Phishing Army (community project) / IT | UNKNOWN | — | — | — | public_download | 3 | verified |
+| `phishing-database-mitchellkrogza` | [Phishing.Database](https://github.com/Phishing-Database/Phishing.Database) | Phishing.Database project (Mitchell Krog / ZA | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
 | `phiusiil-phishing-url` | [PhiUSIIL Phishing URL Dataset](https://archive.ics.uci.edu/dataset/967/phiusiil+phishing+url+dataset) | Babasaheb Bhimrao Ambedkar University (P / IN | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
+| `pl-certpl-warning-list` | [CERT Polska Warning List (Lista Ostrzezen)](https://cert.pl/en/warning-list/) | CERT Polska (NASK-PIB) / PL | RESTRICTED | — | — | — | public_download | 3 | verified |
 | `ro-romanian-phishing-datasets` | [Romanian-language phishing datasets (public)](https://data.mendeley.com/datasets/6yv6nhk92n) | n/a / RO | UNKNOWN | — | — | — | reports_only | 3 | partially_verified |
 | `uk-cambridge-cybercrime-centre` | [Cambridge Cybercrime Centre datasets](https://www.cambridgecybercrime.uk/datasets.html) | University of Cambridge / UK | RESEARCH | — | — | — | agreement | 3 | verified |
 | `iscx-url2016` | [ISCX-URL2016](https://www.unb.ca/cic/datasets/url-2016.html) | Canadian Institute for Cybersecurity, UN / CA | RESEARCH | — | — | — | registration | 2 | verified |
@@ -167,8 +184,11 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 
 | id | name | org / country | class | train | eval | ship | access | P | verified |
 |---|---|---|---|---|---|---|---|---|---|
+| `aptnotes` | [APTnotes](https://github.com/aptnotes/data) | APTnotes project (community) / - | UNKNOWN | — | — | — | public_download | 3 | verified |
 | `ch-bacs-semiannual-reports` | [BACS / NCSC Semi-Annual Reports (Halbjahresbericht)](https://www.bacs.admin.ch/en/situation-reports) | Federal Office for Cybersecurity (BACS), / CH | UNKNOWN | — | — | — | reports_only | 3 | verified |
+| `dfir-report` | [The DFIR Report (intrusion reports)](https://thedfirreport.com/) | The DFIR Report / - | RESTRICTED | — | — | — | reports_only | 3 | verified |
 | `eu-enisa-threat-landscape` | [ENISA Threat Landscape 2026](https://www.enisa.europa.eu/news/exploring-the-evolution-of-the-cyber-threat-landscape-how-dependencies-weaken-our-digital-resilience) | ENISA / EU | OPEN | ✅ | ✅ | ✅ | reports_only | 3 | partially_verified |
+| `vx-underground-papers` | [vx-underground papers and APT report archive](https://vx-underground.org/) | vx-underground / - | UNKNOWN | — | — | — | public_download | 3 | verified |
 | `ch-switch-cert-report` | [Switch-CERT Report / registry takedown statistics](https://www.switch.ch/en/switch-cert-report) | Switch-CERT / CH | UNKNOWN | — | — | — | reports_only | 2 | unverified |
 | `eu-cert-eu-threat-intel` | [CERT-EU Cyber Briefs and Threat Landscape Report](https://cert.europa.eu/publications/threat-intelligence) | CERT-EU / EU | OPEN | ✅ | ✅ | ✅ | reports_only | 2 | verified |
 | `uk-ncsc-annual-review-acd` | [NCSC UK Annual Review 2026 - Active Cyber Defence](https://www.ncsc.gov.uk/collection/annual-review-2026/building-strong-foundations/securing-uks-internet) | NCSC (UK) / UK | UNKNOWN | — | — | — | reports_only | 2 | verified |
@@ -182,6 +202,8 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `hf-witfoo-precinct6` | [WitFoo Precinct6 Cybersecurity Dataset v2.1.0](https://huggingface.co/datasets/witfoo/precinct6-cybersecurity) | WitFoo / US | OPEN | ✅ | ✅ | ✅ | public_download | 4 | partially_verified |
 | `hf-nist-cybersecurity-training` | [NIST Cybersecurity Training Dataset v1.1](https://huggingface.co/datasets/ethanolivertroy/nist-cybersecurity-training) | ethanolivertroy (individual) / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
 | `hf-trendyol-cybersecurity-instruct` | [Trendyol Cybersecurity Defense Instruction-Tuning Dataset v2.0](https://huggingface.co/datasets/Trendyol/Trendyol-Cybersecurity-Instruction-Tuning-Dataset) | Trendyol Security Team / TR | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
+| `secqa` | [SecQA](https://huggingface.co/datasets/zefang-liu/secqa) | Zefang Liu (Hugging Face) / - | RESEARCH | — | — | — | public_download | 3 | verified |
+| `trendmicro-primus` | [Trend Micro Primus datasets (FineWeb, Seed, Instruct, Reasoning)](https://huggingface.co/trendmicro-ailab) | Trend Micro AI Lab / TW | UNKNOWN | — | — | — | registration | 3 | verified |
 | `hf-cybermetric` | [CyberMetric](https://huggingface.co/datasets/tihanyin/CyberMetric) | Tihanyi, Ferrag, Jain, Bisztray, Debbah  / AE | OPEN | ✅ | ✅ | ✅ | public_download | 2 | partially_verified |
 | `hf-fenrir-v2-1` | [Cybersecurity-Dataset-Fenrir v2.1](https://huggingface.co/datasets/AlicanKiraz0/Cybersecurity-Dataset-Fenrir-v2.1) | Alican Kiraz (individual) / TR | OPEN | ✅ | ✅ | ✅ | public_download | 2 | partially_verified |
 | `hookprobe-synthetic-soc` | [HookProbe synthetic SOC triage templates](https://github.com/hookprobe/hookprobe) | HookProbe / RO | OPEN | ✅ | ✅ | ✅ | public_download | 2 | verified |
@@ -191,7 +213,14 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | id | name | org / country | class | train | eval | ship | access | P | verified |
 |---|---|---|---|---|---|---|---|---|---|
 | `mitre-attack-stix` | [MITRE ATT&CK (STIX 2.1 data)](https://github.com/mitre-attack/attack-stix-data) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 5 | verified |
+| `mitre-attack-ics` | [MITRE ATT&CK for ICS (STIX 2.1 data)](https://github.com/mitre-attack/attack-stix-data) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 4 | verified |
+| `mitre-attack-mobile` | [MITRE ATT&CK for Mobile (STIX 2.1 data)](https://github.com/mitre-attack/attack-stix-data) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 4 | verified |
+| `misp-galaxy` | [MISP Galaxy clusters](https://github.com/MISP/misp-galaxy) | MISP Project (CIRCL) / LU | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
+| `misp-taxonomies` | [MISP Taxonomies](https://github.com/MISP/misp-taxonomies) | MISP Project (CIRCL) / LU | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
+| `mitre-atlas` | [MITRE ATLAS data](https://atlas.mitre.org/) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `mitre-cwe` | [CWE - Common Weakness Enumeration](https://cwe.mitre.org/) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
+| `mitre-d3fend` | [MITRE D3FEND ontology](https://d3fend.mitre.org/) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
+| `mitre-emb3d` | [MITRE EMB3D (embedded device threat model)](https://emb3d.mitre.org/) | The MITRE Corporation / US | RESTRICTED | — | — | — | public_download | 3 | verified |
 | `nvd-cpe-dictionary` | [CPE Dictionary / CPE Match (NVD)](https://nvd.nist.gov/products/cpe) | NIST NVD / US | OPEN | ✅ | ✅ | ✅ | api_key | 3 | unverified |
 | `oasis-stix-taxii` | [OASIS STIX 2.1 / TAXII 2.1 specifications (+ JSON schemas)](https://www.oasis-open.org/) | OASIS Open CTI Technical Committee / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
 | `first-cvss-spec` | [CVSS v4.0 / v3.1 Specification](https://www.first.org/cvss/v4.0/specification-document) | FIRST.Org / US | OPEN | ✅ | ✅ | ✅ | public_download | 2 | partially_verified |
@@ -206,14 +235,28 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `spamhaus-drop` | [Spamhaus DROP / DROPv6 / ASN-DROP](https://www.spamhaus.org/blocklists/do-not-route-or-peer/) | The Spamhaus Project / Spamhaus Technolo / GB | RESTRICTED | — | — | — | public_download | 5 | verified |
 | `lu-circl-hashlookup` | [CIRCL hashlookup](https://circl.lu/services/hashlookup/) | CIRCL / LU | OPEN | ✅ | ✅ | ✅ | public_download | 4 | verified |
 | `ro-bitdefender-malware-ioc` | [Bitdefender Labs malware-ioc repository](https://github.com/bitdefender/malware-ioc) | Bitdefender / RO | UNKNOWN | — | — | — | public_download | 4 | verified |
+| `certfr-avis-alertes-ioc` | [CERT-FR advisories, alerts, CTI reports and IoC feeds](https://cert.cyber.gouv.fr/) | CERT-FR (ANSSI) / FR | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `ch-govcert-cti-github` | [GovCERT.ch CTI repository (IOC lists and reports)](https://github.com/govcert-ch/CTI) | GovCERT.ch (operational CERT within BACS / CH | UNKNOWN | — | — | — | public_download | 3 | verified |
 | `cins-army` | [CINS Army list (ci-badguys)](https://cinsscore.com/) | Sentinel IPS (Collective Intelligence Ne / US | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
+| `digitalside-threat-intel` | [DigitalSide Threat-Intel](https://osint.digitalside.it/) | DigitalSide (Davide Baglieri) / IT | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
+| `eset-malware-ioc` | [ESET malware-ioc](https://github.com/eset/malware-ioc) | ESET / SK | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `greynoise-community` | [GreyNoise Community API](https://docs.greynoise.io/docs/using-the-greynoise-community-api) | GreyNoise Intelligence / US | COMMERCIAL | — | — | — | api_key | 3 | unverified |
 | `int-shadowserver-reports` | [Shadowserver network reports and public dashboard](https://www.shadowserver.org/what-we-do/network-reporting/get-reports/) | The Shadowserver Foundation / INT | RESTRICTED | — | — | — | eligibility_restricted | 3 | verified |
+| `ipinfo-lite` | [IPinfo Lite](https://ipinfo.io/lite) | IPinfo / US | OPEN | — | ✅ | ✅ | registration | 3 | verified |
+| `ipsum-stamparm` | [IPsum threat-IP aggregate](https://github.com/stamparm/ipsum) | Miroslav Stampar (stamparm) / HR | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
+| `iptoasn` | [IPtoASN database](https://iptoasn.com/) | iptoasn.com (Frank Denis) / INT | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `lu-circl-passive-ssl` | [CIRCL Passive SSL](https://circl.lu/services/passive-ssl/) | CIRCL / LU | RESTRICTED | — | — | — | agreement | 3 | verified |
+| `maltrail-trails` | [Maltrail static trails](https://github.com/stamparm/maltrail) | Miroslav Stampar (stamparm) / HR | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
 | `misp-default-feeds` | [MISP default feed list (feed-metadata/defaults.json)](https://github.com/MISP/MISP/blob/2.5/app/files/feed-metadata/defaults.json) | MISP Project (CIRCL) / LU | UNKNOWN | — | — | — | public_download | 3 | verified |
+| `misp-feed-botvrij` | [botvrij.eu OSINT feed](https://www.botvrij.eu/) | botvrij.eu (Koen Van Impe) / BE | UNKNOWN | — | — | — | public_download | 3 | verified |
+| `ransomware-live` | [Ransomware.live](https://www.ransomware.live/) | Ransomware.live (Julien Mousqueton) / FR | RESTRICTED | — | — | — | api_key | 3 | verified |
+| `ransomwhere` | [Ransomwhere ransomware payment tracker](https://ransomwhe.re/) | Ransomwhere (Jack Cable) / US | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
 | `ro-bitdefender-matter-iot` | [Bitdefender Matter IoT dataset (benign traffic)](https://github.com/bitdefender/matter-iot-dataset) | Bitdefender / RO | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `ro-roedunet-simargl2021` | [RoEduNet-SIMARGL2021 network intrusion dataset](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8272217/) | University Politehnica of Bucharest (CS  / RO | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
+| `routeviews` | [University of Oregon RouteViews](https://www.routeviews.org/routeviews/) | University of Oregon RouteViews Project / US | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
+| `team-cymru-ip-asn` | [Team Cymru IP-to-ASN mapping and Bogon Reference](https://team-cymru.com/ip-asn-mapping) | Team Cymru / US | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
+| `tor-collector-exit-lists` | [Tor Metrics CollecTor (exit lists, relay descriptors)](https://metrics.torproject.org/collector.html) | The Tor Project / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
+| `volexity-threat-intel` | [Volexity threat-intel IoCs](https://github.com/volexity/threat-intel) | Volexity, Inc. / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `alienvault-otx` | [LevelBlue (AlienVault) Open Threat Exchange (OTX)](https://otx.alienvault.com/) | LevelBlue (formerly AT&T Cybersecurity / / US | RESTRICTED | — | — | — | api_key | 2 | partially_verified |
 | `blocklist-de` | [blocklist.de attacker lists](https://www.blocklist.de/en/export.html) | blocklist.de (volunteer project) / DE | UNKNOWN | — | — | — | public_download | 2 | partially_verified |
 | `dshield-isc` | [SANS ISC / DShield data and API](https://isc.sans.edu/api/) | SANS Internet Storm Center / US | RESEARCH | — | — | — | public_download | 2 | verified |
@@ -233,14 +276,27 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 |---|---|---|---|---|---|---|---|---|---|
 | `cisa-kev` | [CISA Known Exploited Vulnerabilities Catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) | US Cybersecurity and Infrastructure Secu / US | OPEN | ✅ | ✅ | ✅ | public_download | 5 | verified |
 | `cisa-vulnrichment` | [CISA Vulnrichment](https://github.com/cisagov/vulnrichment) | US Cybersecurity and Infrastructure Secu / US | OPEN | ✅ | ✅ | ✅ | public_download | 4 | verified |
-| `cve-list-v5` | [CVE List (CVE JSON 5.x records)](https://github.com/CVEProject/cvelistV5) | CVE Program (MITRE as Secretariat; spons / US | OPEN | ✅ | ✅ | ✅ | public_download | 4 | partially_verified |
+| `cve-list-v5` | [CVE List (CVE JSON 5.x records)](https://github.com/CVEProject/cvelistV5) | CVE Program (MITRE as Secretariat; spons / US | OPEN | ✅ | ✅ | ✅ | public_download | 4 | verified |
 | `eu-enisa-euvd` | [European Union Vulnerability Database (EUVD)](https://euvd.enisa.europa.eu/) | ENISA / EU | UNKNOWN | — | — | — | public_download | 4 | partially_verified |
 | `first-epss` | [EPSS - Exploit Prediction Scoring System](https://www.first.org/epss/) | FIRST.Org EPSS SIG (scores produced by E / US | UNKNOWN | — | — | — | public_download | 4 | partially_verified |
 | `lu-circl-vulnerability-lookup` | [Vulnerability-Lookup (vulnerability.circl.lu)](https://www.vulnerability-lookup.org/documentation/) | CIRCL / LU | OPEN | ✅ | ✅ | ✅ | public_download | 4 | partially_verified |
 | `nist-nvd-api2` | [NVD CVE/CPE API 2.0](https://nvd.nist.gov/developers/start-here) | NIST National Vulnerability Database / US | OPEN | ✅ | ✅ | ✅ | api_key | 4 | partially_verified |
+| `cisa-csaf-advisories` | [CISA CSAF advisories (ICS / IT)](https://github.com/cisagov/CSAF) | US Cybersecurity and Infrastructure Secu / US | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
+| `de-bsi-certbund-csaf` | [BSI CERT-Bund WID CSAF advisories](https://wid.cert-bund.de/.well-known/csaf/provider-metadata.json) | Bundesamt fuer Sicherheit in der Informa / DE | UNKNOWN | — | — | — | public_download | 3 | verified |
 | `eu-cert-eu-advisories` | [CERT-EU Security Advisories](https://cert.europa.eu/publications/security-advisories) | CERT-EU / EU | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `github-advisory-db` | [GitHub Advisory Database](https://github.com/github/advisory-database) | GitHub (Microsoft) / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
+| `gitlab-advisories-community` | [GitLab Advisory Database (Open Source Edition)](https://gitlab.com/gitlab-org/advisories-community) | GitLab B.V. / NL | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
+| `golang-vulndb` | [Go Vulnerability Database](https://go.dev/security/vuln/database) | Go team (Google) / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
+| `jp-jvn-ipedia-myjvn` | [JVN iPedia / MyJVN API](https://jvndb.jvn.jp/en/) | IPA and JPCERT/CC / JP | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
+| `nl-ncsc-csaf` | [NCSC-NL security advisories (CSAF)](https://www.ncsc.nl/en/producten-en-diensten/security-advisories) | Nationaal Cyber Security Centrum (NCSC-N / NL | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
+| `nuclei-templates` | [ProjectDiscovery nuclei-templates](https://github.com/projectdiscovery/nuclei-templates) | ProjectDiscovery / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
 | `osv-dev` | [OSV.dev (Open Source Vulnerabilities)](https://osv.dev/) | Google / OpenSSF / US | UNKNOWN | — | — | — | public_download | 3 | verified |
+| `poc-in-github` | [PoC-in-GitHub (nomi-sec)](https://github.com/nomi-sec/PoC-in-GitHub) | nomi-sec / JP | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
+| `pypa-advisory-db` | [PyPA Python Packaging Advisory Database](https://github.com/pypa/advisory-database) | Python Packaging Authority (PyPA) / INT | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
+| `redhat-csaf-vex` | [Red Hat Product Security CSAF advisories and VEX](https://security.access.redhat.com/data/csaf/v2/provider-metadata.json) | Red Hat Product Security / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
+| `rustsec-advisory-db` | [RustSec Advisory Database](https://rustsec.org/) | Rust Secure Code Working Group (RustSec) / INT | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
+| `trickest-cve` | [trickest/cve PoC index](https://github.com/trickest/cve) | Trickest / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
+| `ubuntu-security-notices` | [Ubuntu Security Notices (USN) in OSV format](https://github.com/canonical/ubuntu-security-notices) | Canonical Ltd / GB | OPEN | — | ✅ | ✅ | public_download | 3 | verified |
 | `exploit-db` | [Exploit Database (Exploit-DB)](https://gitlab.com/exploit-database/exploitdb) | OffSec / US | OPEN | — | ✅ | ✅ | public_download | 2 | partially_verified |
 | `hf-all-cve-records` | [All-CVE-Records-Training-Dataset (CVE chat-style 1999-2025)](https://huggingface.co/datasets/AlicanKiraz0/All-CVE-Records-Training-Dataset) | Alican Kiraz (individual) / TR | OPEN | ✅ | ✅ | ✅ | public_download | 2 | partially_verified |
 
@@ -265,6 +321,7 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `agpl-3.0-only` | OPEN | yes | yes | yes | no | HookProbe's own synthetic data; HookProbe holds the copyright and also licenses it commercially (LICENSING.md). |
 | `alienvault-otx-terms` | RESTRICTED | no | unclear | no | no | Per-source terms from the feeds research pass. |
 | `apache-2.0` | OPEN | yes | yes | yes | no |  |
+| `aptnotes-terms` | UNKNOWN | unclear | unclear | no | no | From the 2026-11-21 licence check of an operator-supplied source list. Repo has no licence; each linked vendor PDF keeps its publisher's copyright. |
 | `awid3-terms` | RESTRICTED | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
 | `bccc-cic-bell-dns-2024-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
 | `bccc-cic-ids2017-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
@@ -275,7 +332,9 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `caida-anonymized-passive-traces-terms` | RESTRICTED | no | requires_agreement | no | no | Per-source terms from the academic research pass. |
 | `cc-by-4.0` | OPEN | yes | yes | yes | no | Training permitted; attribution is kept in the dataset manifest and model card. |
 | `cc-by-nc-4.0` | RESEARCH | no | unclear | no | no |  |
+| `cc-by-nc-sa-4.0` | RESEARCH | no | no | yes | yes | Non-commercial only; share-alike. |
 | `cc0-1.0` | OPEN | yes | yes | yes | no |  |
+| `certfr-avis-alertes-ioc-terms` | OPEN | yes | yes | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `ch-academic-datasets-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
 | `ch-bacs-semiannual-reports-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
 | `ch-cyd-campus-fellowships-terms` | RESTRICTED | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
@@ -289,6 +348,7 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `ciciot2023-terms` | RESEARCH | unclear | unclear | yes | no | Per-source terms from the academic research pass. |
 | `cins-army-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the feeds research pass. |
 | `cira-cic-dohbrw-2020-terms` | RESEARCH | unclear | unclear | yes | no | Per-source terms from the academic research pass. |
+| `cisa-csaf-advisories-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `cisco-umbrella-top1m-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
 | `crowdstrike-falcon-intel-terms` | COMMERCIAL | requires_agreement | no | no | no | Per-source terms from the feeds research pass. |
 | `cse-cic-ids2018-terms` | RESEARCH | unclear | unclear | yes | no | Per-source terms from the academic research pass. |
@@ -297,11 +357,15 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `cve-list-v5-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
 | `darpa-optc-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
 | `darpa-transparent-computing-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
+| `de-bsi-certbund-csaf-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
+| `dfir-report-terms` | RESTRICTED | no | no | no | no | From the 2026-11-21 licence check of an operator-supplied source list. Footer: '(c) 2025 The DFIR Report. All Rights Reserved.' No open licence. |
 | `dgarchive-terms` | RESEARCH | requires_agreement | requires_agreement | no | no | Per-source terms from the academic research pass. |
 | `distrinet-cic-ids-2017-2018-improved-terms` | RESEARCH | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
 | `dns-threats-palau-2019-terms` | UNKNOWN | unclear | unclear | yes | no | Per-source terms from the academic research pass. |
 | `drl-1.1` | OPEN | yes | yes | yes | no | Alerts produced by these rules must keep the rule author's identification (runtime duty for Mission Control). |
 | `dshield-isc-terms` | RESEARCH | unclear | no | no | no | Per-source terms from the feeds research pass. |
+| `elastic-license-2.0` | RESTRICTED | yes | unclear | yes | no | From the 2026-11-21 licence check of an operator-supplied source list. Source-available, not OSI: no providing the software to third parties as a hosted or mana |
+| `eset-malware-ioc-terms` | OPEN | yes | yes | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `et-compromised-ips-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the feeds research pass. |
 | `et-open-terms` | OPEN | yes | unclear | yes | no | Per-source terms from the feeds research pass. |
 | `et-pro-terms` | COMMERCIAL | requires_agreement | no | no | no | Per-source terms from the feeds research pass. |
@@ -316,10 +380,12 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `google-threat-intel-virustotal-terms` | COMMERCIAL | requires_agreement | no | no | no | Per-source terms from the feeds research pass. |
 | `gpl-2.0-or-later` | OPEN | yes | unclear | yes | no | Copyleft data/code: fine for the AGPL edition and evaluation; training a model shipped under the commercial licence is unresolved. |
 | `gpl-3.0` | OPEN | yes | unclear | yes | no | As gpl-2.0-or-later. |
+| `gpl-3.0-dfir-report-rules` | OPEN | yes | unclear | yes | yes | From the 2026-11-21 licence check of an operator-supplied source list. Copyleft; the page did not show -only vs -or-later. Training not addressed. |
 | `greynoise-community-terms` | COMMERCIAL | unclear | no | no | no | Per-source terms from the feeds research pass. |
 | `hf-all-cve-records-terms` | OPEN | yes | yes | yes | no | Per-source terms from the academic research pass. |
 | `hf-cti-bench-terms` | RESEARCH | no | no | yes | no | Per-source terms from the academic research pass. |
 | `hf-ealvaradob-phishing-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
+| `inquest-yara-rules-terms` | OPEN | yes | unclear | yes | no | From the 2026-11-21 licence check of an operator-supplied source list. MIT permits use without restriction; training left 'unclear' as reported by the check, pe |
 | `int-apwg-ecx-terms` | RESTRICTED | requires_agreement | requires_agreement | no | no | Per-source terms from the regional research pass. |
 | `int-aws-activate-terms` | COMMERCIAL | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
 | `int-first-membership-terms` | RESTRICTED | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
@@ -327,7 +393,11 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `int-microsoft-for-startups-terms` | COMMERCIAL | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
 | `int-oracle-for-startups-terms` | COMMERCIAL | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
 | `int-shadowserver-reports-terms` | RESTRICTED | requires_agreement | unclear | no | no | Per-source terms from the regional research pass. |
+| `ipinfo-lite-terms` | OPEN | yes | yes | yes | yes | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
+| `ipsum-stamparm-terms` | UNKNOWN | unclear | unclear | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. Reclassified from OPEN: the data's own terms do not gr |
+| `iptoasn-terms` | OPEN | yes | yes | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `iscx-url2016-terms` | RESEARCH | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
+| `jp-jvn-ipedia-myjvn-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `lu-circl-ail-framework-terms` | OPEN | yes | unclear | yes | no | Per-source terms from the regional research pass. |
 | `lu-circl-hashlookup-terms` | OPEN | yes | yes | yes | no | Per-source terms from the regional research pass. |
 | `lu-circl-misp-communities-terms` | RESTRICTED | requires_agreement | requires_agreement | no | no | Per-source terms from the regional research pass. |
@@ -335,23 +405,35 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `lu-circl-passive-dns-terms` | RESTRICTED | requires_agreement | requires_agreement | no | no | Per-source terms from the regional research pass. |
 | `lu-circl-passive-ssl-terms` | RESTRICTED | requires_agreement | requires_agreement | no | no | Per-source terms from the regional research pass. |
 | `lu-circl-vulnerability-lookup-terms` | OPEN | yes | yes | yes | no | Per-source terms from the regional research pass. |
+| `malpedia-terms` | RESEARCH | requires_agreement | requires_agreement | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
+| `maltrail-trails-terms` | UNKNOWN | unclear | unclear | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. Reclassified from OPEN: the data's own terms do not gr |
 | `mawi-wide-terms` | RESEARCH | no | unclear | unclear | no | Per-source terms from the academic research pass. |
 | `mawilab-terms` | RESEARCH | no | unclear | unclear | no | Per-source terms from the academic research pass. |
 | `metasploit-framework-terms` | OPEN | yes | unclear | yes | no | Per-source terms from the feeds research pass. |
 | `microsoft-defender-ti-terms` | COMMERCIAL | requires_agreement | no | no | no | Per-source terms from the feeds research pass. |
 | `misp-default-feeds-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the feeds research pass. |
+| `misp-feed-botvrij-terms` | UNKNOWN | unclear | unclear | no | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. Reclassified from OPEN: the data's own terms do not gr |
 | `mit` | OPEN | yes | yes | yes | no |  |
 | `mitre-attack-stix-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
 | `mitre-capec-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
 | `mitre-cwe-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
+| `mitre-emb3d-terms` | RESTRICTED | yes | unclear | requires_agreement | no | From the 2026-11-21 licence check of an operator-supplied source list. Grants use, copy and derivative works 'for internal business purposes or commercial use', |
 | `netlab360-dga-terms` | OPEN | yes | yes | yes | no | Per-source terms from the academic research pass. |
+| `nist-nsrl-rds-terms` | OPEN | yes | yes | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `nist-nvd-api2-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
+| `nl-ncsc-csaf-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `nvd-cpe-dictionary-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
 | `oasis-stix-taxii-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
+| `openintel-terms` | RESEARCH | requires_agreement | requires_agreement | no | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `openphish-community-terms` | RESTRICTED | no | no | no | no | Per-source terms from the feeds research pass. |
 | `osv-dev-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the feeds research pass. |
+| `phishing-army-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. Reclassified from OPEN: the data's own terms do not gr |
+| `phishing-database-mitchellkrogza-terms` | UNKNOWN | unclear | unclear | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. Reclassified from OPEN: the data's own terms do not gr |
 | `phishstats-terms` | RESTRICTED | unclear | requires_agreement | no | no | Per-source terms from the feeds research pass. |
 | `phishtank-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the feeds research pass. |
+| `pl-certpl-warning-list-terms` | RESTRICTED | yes | yes | unclear | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. Classed RESTRICTED because redistribution is not addre |
+| `ransomware-live-terms` | RESTRICTED | requires_agreement | requires_agreement | no | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
+| `ransomwhere-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `recorded-future-terms` | COMMERCIAL | requires_agreement | no | no | no | Per-source terms from the feeds research pass. |
 | `ro-bitdefender-malware-ioc-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
 | `ro-bitdefender-voyager-terms` | RESTRICTED | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
@@ -363,13 +445,18 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `ro-roedunet-simargl2021-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
 | `ro-romanian-phishing-datasets-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
 | `ro-rotld-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
+| `routeviews-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `shadowserver-reports-terms` | RESTRICTED | unclear | unclear | no | no | Per-source terms from the feeds research pass. |
+| `sorel-20m-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `spamhaus-dnsbl-dqs-terms` | COMMERCIAL | requires_agreement | requires_agreement | no | no | Per-source terms from the feeds research pass. |
 | `spamhaus-drop-terms` | RESTRICTED | yes | unclear | unclear | no | Per-source terms from the feeds research pass. |
 | `stratosphere-mcfp-captures-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
+| `team-cymru-ip-asn-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `ton-iot-terms` | RESEARCH | requires_agreement | requires_agreement | unclear | no | Per-source terms from the academic research pass. |
 | `tranco-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
+| `trendmicro-primus-terms` | UNKNOWN | unclear | unclear | unclear | no | From the 2026-11-21 licence check of an operator-supplied source list. Gated: access conditions unread without login. FineWeb part also binds FineWeb licence +  |
 | `tu-dns-tunnelling-2023-terms` | UNKNOWN | no | unclear | no | no | Per-source terms from the academic research pass. |
+| `ubuntu-security-notices-terms` | OPEN | yes | yes | yes | yes | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `ugr16-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
 | `uk-cambridge-cybercrime-centre-terms` | RESEARCH | no | requires_agreement | no | no | Per-source terms from the regional research pass. |
 | `uk-cisp-terms` | RESTRICTED | requires_agreement | no | no | no | Per-source terms from the regional research pass. |
@@ -377,4 +464,6 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `uk-ncsc-github-terms` | OPEN | yes | unclear | yes | no | Per-source terms from the regional research pass. |
 | `unsw-nb15-terms` | RESEARCH | requires_agreement | requires_agreement | unclear | no | Per-source terms from the academic research pass. |
 | `uq-netflow-nids-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
+| `volexity-threat-intel-terms` | OPEN | yes | yes | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
+| `vx-underground-papers-terms` | UNKNOWN | unclear | unclear | unclear | no | From the 2026-11-21 licence check of an operator-supplied source list. |
 | `yara-forge-terms` | UNKNOWN | unclear | unclear | yes | no | Per-source terms from the feeds research pass. |

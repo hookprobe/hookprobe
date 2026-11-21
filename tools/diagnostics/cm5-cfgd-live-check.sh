@@ -17,6 +17,7 @@ ok=0; n=0
 chk() { n=$((n + 1)); if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else echo "BAD $2"; fi; }
 pi() { ssh -o BatchMode=yes -o ConnectTimeout=8 "$PI" "$@"; }
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+. "$(dirname "$0")/lib-bench-baseline.sh"; bench_baseline_wrap "$KEY" "$LOG" "$MC"   # gap-fix E3: bench state before + after
 since() { tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000'; }
 waitlog() { for _ in $(seq 1 "$2"); do since | grep -aq "$1" && return 0; sleep 2; done; return 1; }
 api() { python3 -I - "$MC" "$KEY" "$1" "${2:-}" <<'PY'

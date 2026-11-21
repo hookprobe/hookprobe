@@ -77,6 +77,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "aptnotes-terms",
+   "name": "None stated (links to third-party vendor reports)",
+   "spdx": null,
+   "url": null,
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "no",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list. Repo has no licence; each linked vendor PDF keeps its publisher's copyright.",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "awid3-terms",
    "name": "None stated (copyright 'All Rights Reserved', Info-Sec-Lab)",
    "spdx": null,
@@ -227,6 +242,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "cc-by-nc-sa-4.0",
+   "name": "Creative Commons Attribution-NonCommercial-ShareAlike 4.0",
+   "spdx": "CC-BY-NC-SA-4.0",
+   "url": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+   "class": "RESEARCH",
+   "commercial_use": "no",
+   "training_use": "no",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": true,
+   "attribution_required": true,
+   "notes": "Non-commercial only; share-alike.",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "cc0-1.0",
    "name": "Creative Commons Zero 1.0",
    "spdx": "CC0-1.0",
@@ -240,6 +270,21 @@
    "attribution_required": false,
    "notes": null,
    "verified_on": "2026-11-18"
+  },
+  {
+   "id": "certfr-avis-alertes-ioc-terms",
+   "name": "Licence Ouverte / Open Licence v2.0 (Etalab)",
+   "spdx": "etalab-2.0",
+   "url": "https://cert.cyber.gouv.fr/mentions-legales/",
+   "class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "yes",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
   },
   {
    "id": "ch-academic-datasets-terms",
@@ -437,6 +482,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "cisa-csaf-advisories-terms",
+   "name": "none stated",
+   "spdx": null,
+   "url": null,
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "cisco-umbrella-top1m-terms",
    "name": "None stated (page footer '© Cisco Umbrella, 2016'). Tranco describes it as 'available free of charge'.",
    "spdx": null,
@@ -557,6 +617,36 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "de-bsi-certbund-csaf-terms",
+   "name": "none stated",
+   "spdx": null,
+   "url": null,
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
+  },
+  {
+   "id": "dfir-report-terms",
+   "name": "All rights reserved",
+   "spdx": null,
+   "url": "https://thedfirreport.com/",
+   "class": "RESTRICTED",
+   "commercial_use": "no",
+   "training_use": "no",
+   "redistribution": "no",
+   "derivatives": "no",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list. Footer: '(c) 2025 The DFIR Report. All Rights Reserved.' No open licence.",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "dgarchive-terms",
    "name": "CC BY-NC-SA 3.0 (DGArchive Terms of Service)",
    "spdx": null,
@@ -630,6 +720,36 @@
    "attribution_required": true,
    "notes": "Per-source terms from the feeds research pass.",
    "verified_on": "2026-11-18"
+  },
+  {
+   "id": "elastic-license-2.0",
+   "name": "Elastic License 2.0",
+   "spdx": "Elastic-2.0",
+   "url": "https://www.elastic.co/licensing/elastic-license",
+   "class": "RESTRICTED",
+   "commercial_use": "yes",
+   "training_use": "unclear",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list. Source-available, not OSI: no providing the software to third parties as a hosted or managed service; keep notices. Training not mentioned. Classed RESTRICTED because the hosted-service limit needs legal review for an MSSP product.",
+   "verified_on": "2026-11-21"
+  },
+  {
+   "id": "eset-malware-ioc-terms",
+   "name": "BSD 2-Clause",
+   "spdx": "BSD-2-Clause",
+   "url": "https://opensource.org/licenses/BSD-2-Clause",
+   "class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "yes",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
   },
   {
    "id": "et-compromised-ips-terms",
@@ -842,6 +962,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "gpl-3.0-dfir-report-rules",
+   "name": "GNU GPL 3.0",
+   "spdx": "GPL-3.0-or-later",
+   "url": "https://github.com/The-DFIR-Report/Sigma-Rules",
+   "class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "unclear",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": true,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list. Copyleft; the page did not show -only vs -or-later. Training not addressed.",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "greynoise-community-terms",
    "name": "GreyNoise Terms (proprietary)",
    "spdx": null,
@@ -900,6 +1035,21 @@
    "attribution_required": true,
    "notes": "Per-source terms from the academic research pass.",
    "verified_on": "2026-11-18"
+  },
+  {
+   "id": "inquest-yara-rules-terms",
+   "name": "MIT License (InQuest yara-rules)",
+   "spdx": "MIT",
+   "url": "https://github.com/InQuest/yara-rules",
+   "class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "unclear",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list. MIT permits use without restriction; training left 'unclear' as reported by the check, pending a decision to treat MIT as training-permitted like the generic 'mit' entry.",
+   "verified_on": "2026-11-21"
   },
   {
    "id": "int-apwg-ecx-terms",
@@ -1007,6 +1157,51 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "ipinfo-lite-terms",
+   "name": "Creative Commons Attribution-ShareAlike 4.0",
+   "spdx": "CC-BY-SA-4.0",
+   "url": "https://ipinfo.io/lite",
+   "class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "yes",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": true,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
+  },
+  {
+   "id": "ipsum-stamparm-terms",
+   "name": "The Unlicense",
+   "spdx": "Unlicense",
+   "url": "https://unlicense.org/",
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "yes",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": false,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. Reclassified from OPEN: the data's own terms do not grant commercial use (only the repository code is licensed).",
+   "verified_on": "2026-11-21"
+  },
+  {
+   "id": "iptoasn-terms",
+   "name": "Open Data Commons Public Domain Dedication and License 1.0",
+   "spdx": "PDDL-1.0",
+   "url": "https://opendatacommons.org/licenses/pddl/1-0/",
+   "class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "yes",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": false,
+   "attribution_required": false,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "iscx-url2016-terms",
    "name": "UNB CIC dataset terms (custom, no named licence) (no licence note on the page; FAQ applies)",
    "spdx": null,
@@ -1020,6 +1215,21 @@
    "attribution_required": true,
    "notes": "Per-source terms from the academic research pass.",
    "verified_on": "2026-11-18"
+  },
+  {
+   "id": "jp-jvn-ipedia-myjvn-terms",
+   "name": "MyJVN service-related tools terms of use (Japanese, 2023-03-29)",
+   "spdx": null,
+   "url": "https://jvndb.jvn.jp/apis/myjvn//document/termsofuse.pdf",
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
   },
   {
    "id": "lu-circl-ail-framework-terms",
@@ -1127,6 +1337,36 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "malpedia-terms",
+   "name": "CC BY-NC-SA 3.0 (public content)",
+   "spdx": null,
+   "url": "https://malpedia.caad.fkie.fraunhofer.de/usage/tos",
+   "class": "RESEARCH",
+   "commercial_use": "requires_agreement",
+   "training_use": "requires_agreement",
+   "redistribution": "yes",
+   "derivatives": "requires_agreement",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
+  },
+  {
+   "id": "maltrail-trails-terms",
+   "name": "MIT License",
+   "spdx": "MIT",
+   "url": "https://opensource.org/licenses/MIT",
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "yes",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. Reclassified from OPEN: the data's own terms do not grant commercial use (only the repository code is licensed).",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "mawi-wide-terms",
    "name": "WIDE usage terms: 'You may use WIDE traffic data for only research purposes. Actions that trespass upon users' privacy are prohibited.'",
    "spdx": null,
@@ -1202,6 +1442,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "misp-feed-botvrij-terms",
+   "name": "botvrij.eu terms (site FAQ)",
+   "spdx": null,
+   "url": "https://www.botvrij.eu/",
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "no",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. Reclassified from OPEN: the data's own terms do not grant commercial use (only the repository code is licensed).",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "mit",
    "name": "MIT License",
    "spdx": "MIT",
@@ -1262,6 +1517,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "mitre-emb3d-terms",
+   "name": "MITRE EMB3D Terms of Use",
+   "spdx": null,
+   "url": "https://emb3d.mitre.org/subtabs/terms-of-use.html",
+   "class": "RESTRICTED",
+   "commercial_use": "yes",
+   "training_use": "unclear",
+   "redistribution": "requires_agreement",
+   "derivatives": "yes",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list. Grants use, copy and derivative works 'for internal business purposes or commercial use', with MITRE's notice kept and use reported to EMB3D@mitre.org; other uses via techtransfer@mitre.org. Training is not mentioned.",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "netlab360-dga-terms",
    "name": "MIT License (GitHub repo)",
    "spdx": null,
@@ -1277,6 +1547,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "nist-nsrl-rds-terms",
+   "name": "US Government work - public domain (17 USC 105)",
+   "spdx": null,
+   "url": "https://www.nist.gov/itl/ssd/software-quality-group/national-software-reference-library-nsrl/subscribe/redistribution",
+   "class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "yes",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "nist-nvd-api2-terms",
    "name": "NVD Terms of Use (US Government work; notice requested)",
    "spdx": null,
@@ -1290,6 +1575,21 @@
    "attribution_required": true,
    "notes": "Per-source terms from the feeds research pass.",
    "verified_on": "2026-11-18"
+  },
+  {
+   "id": "nl-ncsc-csaf-terms",
+   "name": "none stated",
+   "spdx": null,
+   "url": null,
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
   },
   {
    "id": "nvd-cpe-dictionary-terms",
@@ -1322,6 +1622,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "openintel-terms",
+   "name": "CC BY-NC-SA 4.0",
+   "spdx": null,
+   "url": "https://openintel.nl/download/terms/",
+   "class": "RESEARCH",
+   "commercial_use": "requires_agreement",
+   "training_use": "requires_agreement",
+   "redistribution": "no",
+   "derivatives": "requires_agreement",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "openphish-community-terms",
    "name": "OpenPhish Terms of Use",
    "spdx": null,
@@ -1352,6 +1667,36 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "phishing-army-terms",
+   "name": "Phishing Army usage and licensing",
+   "spdx": null,
+   "url": "https://phishing.army/license/",
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. Reclassified from OPEN: the data's own terms do not grant commercial use (only the repository code is licensed).",
+   "verified_on": "2026-11-21"
+  },
+  {
+   "id": "phishing-database-mitchellkrogza-terms",
+   "name": "MIT License",
+   "spdx": "MIT",
+   "url": "https://opensource.org/licenses/MIT",
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "yes",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. Reclassified from OPEN: the data's own terms do not grant commercial use (only the repository code is licensed).",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "phishstats-terms",
    "name": "PhishStats Terms of Service",
    "spdx": null,
@@ -1380,6 +1725,51 @@
    "attribution_required": true,
    "notes": "Per-source terms from the feeds research pass.",
    "verified_on": "2026-11-18"
+  },
+  {
+   "id": "pl-certpl-warning-list-terms",
+   "name": "CERT Polska Warning List data usage policy",
+   "spdx": null,
+   "url": "https://cert.pl/en/warning-list/",
+   "class": "RESTRICTED",
+   "commercial_use": "yes",
+   "training_use": "yes",
+   "redistribution": "unclear",
+   "derivatives": "yes",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. Classed RESTRICTED because redistribution is not addressed; the terms do allow use for any purpose, including commercial, so a confirmation from the publisher could open training use.",
+   "verified_on": "2026-11-21"
+  },
+  {
+   "id": "ransomware-live-terms",
+   "name": "Ransomware.live Terms & Conditions",
+   "spdx": null,
+   "url": "https://www.ransomware.live/t&c",
+   "class": "RESTRICTED",
+   "commercial_use": "requires_agreement",
+   "training_use": "requires_agreement",
+   "redistribution": "no",
+   "derivatives": "requires_agreement",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
+  },
+  {
+   "id": "ransomwhere-terms",
+   "name": "none stated",
+   "spdx": null,
+   "url": null,
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
   },
   {
    "id": "recorded-future-terms",
@@ -1547,6 +1937,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "routeviews-terms",
+   "name": "none stated",
+   "spdx": null,
+   "url": null,
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "shadowserver-reports-terms",
    "name": "Shadowserver subscription terms (redistribution not addressed on page)",
    "spdx": null,
@@ -1560,6 +1965,21 @@
    "attribution_required": true,
    "notes": "Per-source terms from the feeds research pass.",
    "verified_on": "2026-11-18"
+  },
+  {
+   "id": "sorel-20m-terms",
+   "name": "Apache-2.0 (repo code); data licence not stated",
+   "spdx": null,
+   "url": "https://github.com/sophos/SOREL-20M",
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
   },
   {
    "id": "spamhaus-dnsbl-dqs-terms",
@@ -1607,6 +2027,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "team-cymru-ip-asn-terms",
+   "name": "none stated",
+   "spdx": null,
+   "url": null,
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "ton-iot-terms",
    "name": "UNSW custom terms: 'Free use of the TON_IoT datasets for academic research purposes is hereby granted in perpetuity. Use for commercial purposes is allowable after asking the author, Dr Nour Moustafa…",
    "spdx": null,
@@ -1637,6 +2072,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "trendmicro-primus-terms",
+   "name": "ODC-By 1.0 plus gated access conditions and upstream terms",
+   "spdx": "ODC-By-1.0",
+   "url": "https://huggingface.co/datasets/trendmicro-ailab/Primus-FineWeb",
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list. Gated: access conditions unread without login. FineWeb part also binds FineWeb licence + Common Crawl ToU; Instruct answers generated by GPT-4o; Reasoning from o1-preview and DeepSeek-R1 on CTI-Bench tasks (CTI-Bench licence not given).",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "tu-dns-tunnelling-2023-terms",
    "name": "None (GitHub repo has no LICENSE file)",
    "spdx": null,
@@ -1650,6 +2100,21 @@
    "attribution_required": true,
    "notes": "Per-source terms from the academic research pass.",
    "verified_on": "2026-11-18"
+  },
+  {
+   "id": "ubuntu-security-notices-terms",
+   "name": "Creative Commons Attribution-ShareAlike 4.0",
+   "spdx": "CC-BY-SA-4.0",
+   "url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "yes",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": true,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
   },
   {
    "id": "ugr16-terms",
@@ -1755,6 +2220,36 @@
    "attribution_required": true,
    "notes": "Per-source terms from the academic research pass.",
    "verified_on": "2026-11-18"
+  },
+  {
+   "id": "volexity-threat-intel-terms",
+   "name": "BSD 2-Clause",
+   "spdx": "BSD-2-Clause",
+   "url": "https://raw.githubusercontent.com/volexity/threat-intel/main/LICENSE.txt",
+   "class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "yes",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
+  },
+  {
+   "id": "vx-underground-papers-terms",
+   "name": "None found (site returned 403; archived papers are third-party works)",
+   "spdx": null,
+   "url": "https://vx-underground.org/",
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list.",
+   "verified_on": "2026-11-21"
   },
   {
    "id": "yara-forge-terms",

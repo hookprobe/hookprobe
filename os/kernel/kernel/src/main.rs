@@ -689,6 +689,8 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     let _ = rtwdog::take_crash_at_boot();
     #[cfg(feature = "cm5")]
     wifiheal::take_at_boot();
+    #[cfg(feature = "cm5")]
+    superv::take_previous_at_boot(); // the previous boot's recovery journal (kept across a warm reset)
     // VA!=PA proof: read the same physical word through the aliased high VA.
     let via_alias = unsafe { read_volatile((phys_probe as usize + sample_pa) as *const u64) };
     kprint!(" mmu : VA {:#x} -> PA {:#x} readback {} (VA!=PA: {})\n",
@@ -4600,6 +4602,7 @@ fn cm5_p10_probe() {
                                 let a = heal.step(&smp, &mut hp);
                                 superv::wifi_heal(a as u8, heal.class == wifiheal::Class::Healthy, smp.now_ms); // H1
                                 superv::probe_tick(smp.now_ms); // H4a: one functional probe per period
+                                superv::persist_tick(); // the journal snapshot for the next boot (only when it changed)
                                 a
                             };
                             match heal_act {
@@ -5765,6 +5768,24 @@ fn cm5_p10_probe() {
                                                     kprint!("   [WIFI-SPLIT] bus {} restarts={} faults={} | wpa {} restarts={} faults={} full_wipes={} contained={} poisoned={} pmksa={} | drbg seeds={} seed_fails={}\n",
                                                         bst, brs, bft, wst, wrs, wft, wwp, cn, po, pm.map_or(-1, |n| n as i64), ds, df);
                                                 }
+                                            }
+                                            // ADR 0067 E1b: what the SDIO bus did since the last heartbeat, next to the bus server's CPU
+                                            #[cfg(feature = "mctls")]
+                                            if let Some(b) = crate::el0srv::keyer::bus_stats() {
+                                                static mut PREV: Option<(hal::sdio::BusStats, u64, u64)> = None;
+                                                let cpu = crate::superv::cpu_total_us(hal::superv::C_WIFI_SRV);
+                                                let t = now() / (freq / 1000).max(1);
+                                                if let Some((p, pc, pt)) = unsafe { PREV } {
+                                                    let d = b.since(&p);
+                                                    let (us, ms) = (cpu.saturating_sub(pc), t.saturating_sub(pt).max(1));
+                                                    let x53 = (d.cmd53_rd + d.cmd53_wr + d.blk_rd + d.blk_wr) as u64;
+                                                    kprint!("   [SDIO-BUS] {} ms: el0-wifi cpu {} us ({} per mille) | cmd52 {} cmd53 rd {} wr {} blk rd {} wr {} | {} KB in {} KB out | frames {} dry polls {} | wait spins {} inhibit {} | per frame: cmd52 x100 {} cmd53 x100 {} | us per cmd53 (all el0-wifi cpu) {} | intstatus reads skipped (total) {}\n",
+                                                        ms, us, us / ms, d.cmd52, d.cmd53_rd, d.cmd53_wr, d.blk_rd, d.blk_wr, d.bytes_rd / 1024, d.bytes_wr / 1024,
+                                                        d.frames, d.dry_reads, d.wait_spins, d.inhibit_spins,
+                                                        (d.cmd52 as u64 * 100).checked_div(d.frames as u64).unwrap_or(0), (x53 * 100).checked_div(d.frames as u64).unwrap_or(0),
+                                                        us.checked_div(x53).unwrap_or(0), unsafe { arch_aarch64::cyw43::INT_POLL_SKIPPED });
+                                                }
+                                                unsafe { PREV = Some((b, cpu, t)) };
                                             }
                                             let (rq, ra, rn) = unsafe { uplink::RENEW_STATS };
                                             kprint!("   [WAN renew] in-loop DHCP renewal: requests={} acks={} naks={} (full re-bring-ups counted in renewals=)\n", rq, ra, rn);
@@ -7760,6 +7781,8 @@ pub extern "C" fn kmain() -> ! {
         let _ = wanlive::selftest(); // step 9: the WAN executor (verify first, teardown, NAT flush, PPPoE auth reject)
         let _ = wifilive::selftest(); // step 10: the Wi-Fi executor (derive first, the BSS bounce, keys wiped, LKG revert)
         let _ = superv::selftest(); // autoheal harness H1: the recovery journal
+        #[cfg(not(feature = "cm5"))]
+        let _ = superv::persist_selftest(); // the recovery journal across a warm reset
         let _ = wifiheal::selftest(); // audit A7: Wi-Fi self-heal (classify, kick -> bounce -> reload -> one reboot -> degrade)
         #[cfg(not(feature = "cm5"))]
         let _ = wifilive::after_selftest(); // follow-up: Mission Control serving re-evaluated + IPv6 state at an AP restart
