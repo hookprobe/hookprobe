@@ -18,6 +18,7 @@ os/drivers/firmware/*/LICENSE.md and are linked from the output.
 Licence texts come from each package's own LICENSE / COPYING / NOTICE files. For a crate offered as
 "MIT OR Apache-2.0" (or similar) the MIT text is reproduced (HookProbe takes it under MIT); otherwise every
 licence file is reproduced. Identical texts are printed once, with every package that uses them.
+Email addresses are removed from the texts (drop_emails); each copyright notice keeps its year and holder.
 
 Usage (needs the crates in the cargo cache: `cargo fetch --locked` in each workspace, and
 `npm ci --ignore-scripts` in os/mission-control):
@@ -127,6 +128,17 @@ def npm_packages():
     return out
 
 
+# No email addresses in the notices (secrets-scan.yml rejects personal webmail anywhere in the tree, and a person's
+# inbox is not part of a copyright notice: the notice is the year and the holder's name). "Name <addr>" keeps
+# the name; a bare address keeps its local part, which is then the only name given.
+EMAIL_IN_BRACKETS = re.compile(r"[ \t]*<[^<>\s@]+@[^<>\s]+>")
+BARE_EMAIL = re.compile(r"\b([A-Za-z0-9._%+-]+)@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b")
+
+
+def drop_emails(text):
+    return BARE_EMAIL.sub(r"\1", EMAIL_IN_BRACKETS.sub("", text))
+
+
 def licence_texts(pkg):
     """[(filename, text)] to reproduce for this package."""
     d = pkg["dir"]
@@ -144,11 +156,11 @@ def licence_texts(pkg):
     texts = []
     for f in files:
         with open(os.path.join(d, f), encoding="utf-8", errors="replace") as fh:
-            texts.append((f, fh.read().strip() + "\n"))
+            texts.append((f, drop_emails(fh.read().strip()) + "\n"))
     if not texts:
         # No licence file in the published package. Reproduce the standard text of the licence taken,
         # with the copyright holders as the package metadata names them (marked as such).
-        holders = ", ".join(pkg["authors"]) or "the authors listed at " + pkg["repo"]
+        holders = ", ".join(drop_emails(a) for a in pkg["authors"]) or "the authors listed at " + pkg["repo"]
         texts.append(("(no licence file in the package; standard MIT text, holders from Cargo.toml `authors`)",
                       f"Copyright (c) {holders}\n\n" + MIT_BODY))
     return texts
@@ -183,7 +195,8 @@ def render(crates, npm):
     o.append("also contains the third-party components below, each under its own licence. All of them are")
     o.append("permissive (MIT, Apache-2.0, BSD, ISC, 0BSD, Unicode) and compatible with AGPL-3.0.\n")
     o.append("The list is the union over every build flavour (`--all-features`) of heqk and the EL0 services it")
-    o.append("embeds, so any one image contains a subset of it. Files that sit **next to** the image on the boot")
+    o.append("embeds, so any one image contains a subset of it. Email addresses are left out of the licence texts;")
+    o.append("each copyright notice keeps its year and holder. Files that sit **next to** the image on the boot")
     o.append("partition have their own records:\n")
     o.append("- CM5 device tree (GPL-2.0, with its source): [`os/drivers/firmware/rpi-dtb/LICENSE.md`](../../drivers/firmware/rpi-dtb/LICENSE.md)")
     o.append("- CYW43455 Wi-Fi firmware (Cypress licence; NVRAM GPL-2.0): [`os/drivers/firmware/brcm-firmware-rpt/LICENSE.md`](../../drivers/firmware/brcm-firmware-rpt/LICENSE.md)\n")
