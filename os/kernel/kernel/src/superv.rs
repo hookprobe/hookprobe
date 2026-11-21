@@ -96,8 +96,14 @@ pub fn cpu_admit(c: u8) -> bool {
 pub fn cpu_admit_at(c: u8, now: u64) -> bool {
     // enforced on metal only: QEMU's emulated CPU time is not the device's (a TLS handshake under TCG would trip a
     // budget sized for the A76) — there every component is measured, none refused
-    #[cfg(feature = "cm5")]
+    #[cfg(all(feature = "cm5", not(feature = "swifi")))]
     let budget = hal::superv::cpu_budget_ms(c);
+    // the bench fault-injection image drives the servers on purpose: measured, never throttled
+    #[cfg(all(feature = "cm5", feature = "swifi"))]
+    let budget = {
+        let _ = hal::superv::cpu_budget_ms(c);
+        0
+    };
     #[cfg(not(feature = "cm5"))]
     let budget = 0;
     cpu_admit_with(c, now, budget)
@@ -567,19 +573,37 @@ pub fn render(w: &mut crate::mcstate::JsonBuf<'_>, limit: usize) {
 /// unable to answer is UNRECOVERED and fails the campaign.
 #[cfg(all(feature = "swifi", feature = "mctls"))]
 pub fn swifi_campaign() -> bool {
-    const N: u64 = match option_env!("HEQK_SWIFI_N") {
-        Some(s) => parse_u64(s),
-        None => 10_000,
-    };
-    const fn parse_u64(s: &str) -> u64 {
-        let b = s.as_bytes();
-        let (mut i, mut v) = (0, 0u64);
-        while i < b.len() {
-            v = v * 10 + (b[i] - b'0') as u64;
-            i += 1;
-        }
-        v
+    swifi_campaign_on(4, N_SWIFI)
+}
+
+/// H6 on metal (bench `swifi` CM5 image): the campaign against el0-lansvc, el0-tlshost and el0-hsh — never el0-wpa,
+/// which on the CM5 is the live security server holding the stations' keys. `n` injections.
+#[cfg(all(feature = "swifi", feature = "mctls", feature = "cm5"))]
+pub fn swifi_campaign_metal(n: u64) -> bool {
+    swifi_campaign_on(3, n)
+}
+
+#[cfg(all(feature = "swifi", feature = "mctls"))]
+const N_SWIFI: u64 = match option_env!("HEQK_SWIFI_N") {
+    Some(s) => parse_swifi_n(s),
+    None => 10_000,
+};
+#[cfg(all(feature = "swifi", feature = "mctls"))]
+const fn parse_swifi_n(s: &str) -> u64 {
+    let b = s.as_bytes();
+    let (mut i, mut v) = (0, 0u64);
+    while i < b.len() {
+        v = v * 10 + (b[i] - b'0') as u64;
+        i += 1;
     }
+    v
+}
+
+/// The campaign over the first `ns` servers of [lansvc, tlshost, hsh, wpa] (4 in QEMU; 3 on metal), `n` injections.
+#[cfg(all(feature = "swifi", feature = "mctls"))]
+fn swifi_campaign_on(ns: usize, n: u64) -> bool {
+    #[allow(non_snake_case)]
+    let N = n;
     let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut rnd = move || {
         x ^= x << 13;
@@ -594,7 +618,7 @@ pub fn swifi_campaign() -> bool {
     const NS: usize = 4;
     let mut c = [[0u64; 5]; NS];
     // H6f: the WPA security server (the product one is wired only on the CM5): a campaign instance
-    let wpa_up = crate::el0srv::keyer::swifi_setup();
+    let wpa_up = ns < 4 || crate::el0srv::keyer::swifi_setup();
     let (mut flips, mut raws) = (0u64, 0u64);
     // wrong answers that only the golden workload caught (the probe still answered correctly)
     let mut wl_only = 0u64;
@@ -668,7 +692,7 @@ pub fn swifi_campaign() -> bool {
     let mut golden = [[None::<u64>; 72]; NS];
     let mut usable = [0usize; NS];
     deliberate(|| {
-        for s in 0..NS {
+        for s in 0..ns {
             restore(s);
             for k in 0..NW[s] {
                 let a = call(s, k);
@@ -721,12 +745,17 @@ pub fn swifi_campaign() -> bool {
     let hs_ok = !tls_on || (shapes[0].0[0] == 0x16 && shapes[0].0[..shapes[0].1].contains(&0x17) && !shapes[1].0[..shapes[1].1].contains(&0x17) && shapes[2].1 == 0);
     arch_aarch64::_print(format_args!("   [swifi] TLS handshake workload: certificate={} | records answered to: accepted hello {:02x?}, unsupported suite {:02x?}, half a hello {:02x?}, hello + undecryptable record {:02x?} | as expected={}\n",
         tls_on, &shapes[0].0[..shapes[0].1], &shapes[1].0[..shapes[1].1], &shapes[2].0[..shapes[2].1], &shapes[3].0[..shapes[3].1], hs_ok));
-    let stable = usable[0] >= 8 && usable[1] >= 4 && usable[2] >= 8 && usable[3] >= 3 && (0..NS).all(|s| work(s) == 0);
+    let stable = usable[0] >= 8 && usable[1] >= 4 && usable[2] >= 8 && (ns < 4 || usable[3] >= 3) && (0..ns).all(|s| work(s) == 0);
     let both = both && stable && hs_ok;
     let mut i = 0u64;
     while both && i < N {
         let r = rnd();
-        let s = ((r >> 8) % NS as u64) as usize;
+        let s = ((r >> 8) % ns as u64) as usize;
+        // metal: the runtime watchdog is petted through the campaign (the AP loop waits for it)
+        #[cfg(feature = "cm5")]
+        if let Some(f) = unsafe { arch_aarch64::uplink::LONG_STEP_PET } {
+            f();
+        }
         let model_flip = (r >> 1) & 3 != 0; // 3 in 4 are bit flips, 1 in 4 a random call
         let (f0, r0) = stats(s);
         // --- inject (every fault inside is a campaign fault: journaled `planned`, kept out of the restart policy)
@@ -822,7 +851,7 @@ pub fn swifi_campaign() -> bool {
     restore(1);
     restore(2);
     restore(3);
-    let alive = (0..NS).all(|s| probe(s) == Some(true) && work(s) == 0);
+    let alive = (0..ns).all(|s| probe(s) == Some(true) && work(s) == 0);
     crate::el0srv::keyer::swifi_teardown();
     let unrec: u64 = c.iter().map(|x| x[4]).sum();
     let surfaced: u64 = c.iter().map(|x| x[2] + x[3]).sum();
