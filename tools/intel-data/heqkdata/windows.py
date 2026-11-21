@@ -61,7 +61,7 @@ import shutil
 import sqlite3
 import tempfile
 
-from . import VERSION, adapters, canon, context, licensing
+from . import VERSION, adapters, canon, context, instrlike, licensing
 from .adapters import Ctx, Reject
 
 # Bump when the window content changes for the same inputs (host rule, pseudonyms, fields, drops), so a new
@@ -328,7 +328,7 @@ def _write_window(out, head, n_events, make_events, chunk_events, make_context=N
     size = chunk_events or max(1, n_events)
     n = max(1, -(-n_events // size))
     for i in range(n):
-        line = dict(head, chunk=[i, n], events=make_events(i * size, (i + 1) * size))
+        line = dict(head, chunk=[i, n], events=[instrlike.wrap(e) for e in make_events(i * size, (i + 1) * size)])
         if make_context is not None:  # per chunk: the remotes of this chunk's events
             line["remote_context"] = make_context(i * size, (i + 1) * size)
         if i:
