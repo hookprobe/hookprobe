@@ -154,6 +154,8 @@ pub struct Journal {
     pub by_kind: [u32; 6],
     /// Entries closed, per `Outcome` (index 0 unused).
     pub by_outcome: [u32; 4],
+    /// Bumped by every change (open, repeat, close, acted): the persister writes a snapshot only when it moved.
+    gen: u32,
 }
 
 impl Default for Journal {
@@ -164,7 +166,7 @@ impl Default for Journal {
 
 impl Journal {
     pub const fn new() -> Self {
-        Journal { ring: [EMPTY; JOURNAL_N], total: 0, dropped: 0, by_kind: [0; 6], by_outcome: [0; 4] }
+        Journal { ring: [EMPTY; JOURNAL_N], total: 0, dropped: 0, by_kind: [0; 6], by_outcome: [0; 4], gen: 0 }
     }
 
     pub fn total(&self) -> u32 {
@@ -179,6 +181,11 @@ impl Journal {
         self.total == 0
     }
 
+    /// Changes so far (wraps): equal values = nothing to persist.
+    pub fn generation(&self) -> u32 {
+        self.gen
+    }
+
     fn slot(seq: u32) -> usize {
         (seq as usize - 1) % JOURNAL_N
     }
@@ -190,6 +197,7 @@ impl Journal {
     }
 
     fn finish(&mut self, s: usize, outcome: Outcome, t_ms: u64) {
+        self.gen = self.gen.wrapping_add(1);
         let r = &mut self.ring[s];
         r.outcome = outcome;
         r.t_done_ms = t_ms.max(r.t_detect_ms);
@@ -200,6 +208,7 @@ impl Journal {
     /// absorbs it (repeats += 1); at a different rung the open entry is closed `Escalated` and a new one opens.
     /// Returns the seq of the entry that now carries it.
     pub fn open(&mut self, component: u8, kind: Kind, rung: Rung, t_ms: u64) -> u32 {
+        self.gen = self.gen.wrapping_add(1);
         if let Some(s) = self.open_of(component) {
             if self.ring[s].rung == rung {
                 self.ring[s].repeats = self.ring[s].repeats.saturating_add(1);
@@ -236,6 +245,7 @@ impl Journal {
             let r = &mut self.ring[s];
             if r.t_acted_ms == 0 {
                 r.t_acted_ms = t_ms.max(r.t_detect_ms).max(1);
+                self.gen = self.gen.wrapping_add(1);
             }
         }
     }
@@ -263,6 +273,142 @@ impl Journal {
         }
         Some(&self.ring[Self::slot(seq)])
     }
+}
+
+// --- the journal across a warm reset (H1 follow-up, plan Wave 2c C5) ---
+// The kernel keeps a snapshot of the journal in the reserved crash-record page (`crashrec::journal_area`), rewritten
+// whenever the journal changes; the next boot takes it once. A watchdog / panic / planned reset keeps DRAM, so the
+// boot after it can say what the previous boot recovered from; a power cut loses it (and an invalid or torn snapshot
+// reads as none — never as someone else's history).
+
+const SNAP_MAGIC: u64 = u64::from_le_bytes(*b"HQJRNL01");
+const SNAP_HDR: usize = 72;
+const SNAP_ENT: usize = 24;
+/// Bytes of one encoded snapshot (header + every ring slot + check word).
+pub const SNAP_LEN: usize = SNAP_HDR + JOURNAL_N * SNAP_ENT + 8;
+
+impl Kind {
+    pub fn from_u8(v: u8) -> Option<Kind> {
+        [Kind::Exception, Kind::Budget, Kind::InitRefused, Kind::Complaint, Kind::Probe, Kind::Planned].get(v as usize).copied()
+    }
+}
+impl Rung {
+    pub fn from_u8(v: u8) -> Option<Rung> {
+        [Rung::Restart, Rung::Kick, Rung::Bounce, Rung::Reload, Rung::Reboot, Rung::Degrade, Rung::Throttle, Rung::Wipe].get(v as usize).copied()
+    }
+}
+impl Outcome {
+    pub fn from_u8(v: u8) -> Option<Outcome> {
+        [Outcome::Pending, Outcome::Recovered, Outcome::Escalated, Outcome::Failed].get(v as usize).copied()
+    }
+}
+
+fn snap_sum(b: &[u8]) -> u64 {
+    // FNV-1a: detects a torn or random page (the reader only reports it; not a security boundary)
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for x in b {
+        h ^= *x as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+fn ms32(t: u64) -> u32 {
+    t.min(u32::MAX as u64) as u32
+}
+
+/// The previous boot's journal, as the next boot read it back (times in ms of THAT boot's uptime, saturated at
+/// u32::MAX ~ 49 days).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrevBoot {
+    pub total: u32,
+    pub dropped: u32,
+    pub by_kind: [u32; 6],
+    pub by_outcome: [u32; 4],
+    /// Uptime of that boot when the snapshot was written (its last journal change).
+    pub written_ms: u64,
+    /// Entries kept, newest first in `entries[..n]`.
+    pub n: usize,
+    pub entries: [Recovery; JOURNAL_N],
+}
+
+impl PrevBoot {
+    pub fn newest_first(&self) -> impl Iterator<Item = &Recovery> + '_ {
+        self.entries[..self.n].iter()
+    }
+}
+
+impl Journal {
+    /// Encode the journal (newest first) with `now_ms` as the write time.
+    pub fn encode(&self, now_ms: u64, out: &mut [u8; SNAP_LEN]) {
+        out.fill(0);
+        out[0..8].copy_from_slice(&SNAP_MAGIC.to_le_bytes());
+        out[8..12].copy_from_slice(&self.total.to_le_bytes());
+        out[12..16].copy_from_slice(&self.dropped.to_le_bytes());
+        for (i, v) in self.by_kind.iter().enumerate() {
+            out[16 + 4 * i..20 + 4 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        for (i, v) in self.by_outcome.iter().enumerate() {
+            out[40 + 4 * i..44 + 4 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        out[56..64].copy_from_slice(&now_ms.to_le_bytes());
+        let n = self.len();
+        out[64..68].copy_from_slice(&(n as u32).to_le_bytes());
+        for (k, r) in self.newest_first().enumerate() {
+            let o = SNAP_HDR + k * SNAP_ENT;
+            out[o..o + 4].copy_from_slice(&r.seq.to_le_bytes());
+            out[o + 4] = r.component;
+            out[o + 5] = r.kind as u8;
+            out[o + 6] = r.rung as u8;
+            out[o + 7] = r.outcome as u8;
+            out[o + 8..o + 10].copy_from_slice(&r.repeats.to_le_bytes());
+            out[o + 12..o + 16].copy_from_slice(&ms32(r.t_detect_ms).to_le_bytes());
+            out[o + 16..o + 20].copy_from_slice(&ms32(r.t_acted_ms).to_le_bytes());
+            out[o + 20..o + 24].copy_from_slice(&ms32(r.t_done_ms).to_le_bytes());
+        }
+        let sum = snap_sum(&out[..SNAP_LEN - 8]);
+        out[SNAP_LEN - 8..].copy_from_slice(&sum.to_le_bytes());
+    }
+}
+
+/// Read a snapshot back. None = no snapshot (never written, cleared, a power cut) or one that fails its check or
+/// holds a value no journal could have written.
+pub fn decode_snapshot(b: &[u8]) -> Option<PrevBoot> {
+    if b.len() < SNAP_LEN {
+        return None;
+    }
+    let u32_at = |o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
+    let u64_at = |o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap_or([0; 8]));
+    if u64_at(0) != SNAP_MAGIC || u64_at(SNAP_LEN - 8) != snap_sum(&b[..SNAP_LEN - 8]) {
+        return None;
+    }
+    let n = u32_at(64) as usize;
+    let total = u32_at(8);
+    if n > JOURNAL_N || n as u64 > total as u64 {
+        return None;
+    }
+    let mut p = PrevBoot { total, dropped: u32_at(12), by_kind: [0; 6], by_outcome: [0; 4], written_ms: u64_at(56), n, entries: [EMPTY; JOURNAL_N] };
+    for i in 0..6 {
+        p.by_kind[i] = u32_at(16 + 4 * i);
+    }
+    for i in 0..4 {
+        p.by_outcome[i] = u32_at(40 + 4 * i);
+    }
+    for k in 0..n {
+        let o = SNAP_HDR + k * SNAP_ENT;
+        p.entries[k] = Recovery {
+            seq: u32_at(o),
+            component: b[o + 4],
+            kind: Kind::from_u8(b[o + 5])?,
+            rung: Rung::from_u8(b[o + 6])?,
+            outcome: Outcome::from_u8(b[o + 7])?,
+            repeats: u16::from_le_bytes([b[o + 8], b[o + 9]]),
+            t_detect_ms: u32_at(o + 12) as u64,
+            t_acted_ms: u32_at(o + 16) as u64,
+            t_done_ms: u32_at(o + 20) as u64,
+        };
+    }
+    Some(p)
 }
 
 /// What happens when a component's own recovery is exhausted (plan Wave 2c C1 / C3).
@@ -797,6 +943,52 @@ mod tests {
         assert_eq!(c.due(100 * PROBE_PERIOD_MS, 2), Some(0));
         assert_eq!(c.due(100 * PROBE_PERIOD_MS + 5, 2), None);
         assert_eq!(c.due(u64::MAX / 2, 0), None);
+    }
+
+    #[test]
+    fn snapshot_round_trip() {
+        let mut j = Journal::new();
+        let g0 = j.generation();
+        j.open(1, Kind::Probe, Rung::Wipe, 100);
+        j.acted(1, 120);
+        j.close(1, Outcome::Pending, 300);
+        j.open(2, Kind::Exception, Rung::Restart, 400);
+        j.open(2, Kind::Exception, Rung::Restart, 401); // a repeat
+        assert!(j.generation() != g0);
+        let g1 = j.generation();
+        j.close(9, Outcome::Pending, 500); // nothing open: no change
+        assert_eq!(j.generation(), g1);
+        let mut b = [0u8; SNAP_LEN];
+        j.encode(777, &mut b);
+        let p = decode_snapshot(&b).expect("valid snapshot");
+        assert_eq!((p.total, p.n, p.written_ms, p.by_kind, p.by_outcome), (2, 2, 777, j.by_kind, j.by_outcome));
+        let got: Vec<Recovery> = p.newest_first().copied().collect();
+        let want: Vec<Recovery> = j.newest_first().copied().collect();
+        assert_eq!(got, want);
+        assert_eq!(got[0].repeats, 1);
+        assert_eq!(got[1].rung, Rung::Wipe);
+        // any flipped byte, a cleared page, a short buffer: no snapshot
+        for i in [0, 9, 70, SNAP_HDR + 5, SNAP_LEN - 1] {
+            let mut c = b;
+            c[i] ^= 0x20;
+            assert_eq!(decode_snapshot(&c), None, "byte {}", i);
+        }
+        assert_eq!(decode_snapshot(&[0u8; SNAP_LEN]), None);
+        assert_eq!(decode_snapshot(&b[..SNAP_LEN - 1]), None);
+        // a wrapped ring keeps the newest JOURNAL_N, newest first
+        let mut w = Journal::new();
+        for t in 0..(JOURNAL_N as u64 + 10) {
+            w.open((t % 5) as u8, Kind::Budget, Rung::Throttle, t);
+            w.close((t % 5) as u8, Outcome::Pending, t + 1);
+        }
+        w.encode(1, &mut b);
+        let p = decode_snapshot(&b).unwrap();
+        assert_eq!((p.n, p.total, p.dropped), (JOURNAL_N, JOURNAL_N as u32 + 10, 10));
+        assert_eq!(p.entries[0].seq, JOURNAL_N as u32 + 10);
+        // an empty journal is a valid snapshot ("nothing happened"), unlike no snapshot at all
+        Journal::new().encode(5, &mut b);
+        assert_eq!(decode_snapshot(&b).map(|p| (p.total, p.n)), Some((0, 0)));
+        assert!(SNAP_LEN <= 0x800);
     }
 
     #[test]

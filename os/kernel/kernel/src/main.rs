@@ -689,6 +689,8 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     let _ = rtwdog::take_crash_at_boot();
     #[cfg(feature = "cm5")]
     wifiheal::take_at_boot();
+    #[cfg(feature = "cm5")]
+    superv::take_previous_at_boot(); // the previous boot's recovery journal (kept across a warm reset)
     // VA!=PA proof: read the same physical word through the aliased high VA.
     let via_alias = unsafe { read_volatile((phys_probe as usize + sample_pa) as *const u64) };
     kprint!(" mmu : VA {:#x} -> PA {:#x} readback {} (VA!=PA: {})\n",
@@ -4600,6 +4602,7 @@ fn cm5_p10_probe() {
                                 let a = heal.step(&smp, &mut hp);
                                 superv::wifi_heal(a as u8, heal.class == wifiheal::Class::Healthy, smp.now_ms); // H1
                                 superv::probe_tick(smp.now_ms); // H4a: one functional probe per period
+                                superv::persist_tick(); // the journal snapshot for the next boot (only when it changed)
                                 a
                             };
                             match heal_act {
@@ -7760,6 +7763,8 @@ pub extern "C" fn kmain() -> ! {
         let _ = wanlive::selftest(); // step 9: the WAN executor (verify first, teardown, NAT flush, PPPoE auth reject)
         let _ = wifilive::selftest(); // step 10: the Wi-Fi executor (derive first, the BSS bounce, keys wiped, LKG revert)
         let _ = superv::selftest(); // autoheal harness H1: the recovery journal
+        #[cfg(not(feature = "cm5"))]
+        let _ = superv::persist_selftest(); // the recovery journal across a warm reset
         let _ = wifiheal::selftest(); // audit A7: Wi-Fi self-heal (classify, kick -> bounce -> reload -> one reboot -> degrade)
         #[cfg(not(feature = "cm5"))]
         let _ = wifilive::after_selftest(); // follow-up: Mission Control serving re-evaluated + IPv6 state at an AP restart
