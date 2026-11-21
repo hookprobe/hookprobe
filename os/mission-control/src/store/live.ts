@@ -1,13 +1,13 @@
 /**
  * live — Mission Control's real-data layer for the standalone Layer-0 landing (`/`).
  *
- * Wires the EXISTING mock signals (`store/mock.ts`) to the real `hookprobe-api` read-API
- * (ADR 0001: Rust/Axum, read-only over `crates/hookprobe-evidence`'s SQLite evidence graph) —
+ * Wires the EXISTING mock signals (`store/mock.ts`) to the device's real read API (served by
+ * heqk: `os/kernel/kernel/src/http.rs`) —
  * this is the "one real UI workspace off mocks end-to-end" proof: Organism Status orb +
  * Security pillar / "needs you" queue on the calm landing page.
  *
  * Fetch-and-subscribe, never a hard dependency: if the API is unreachable (a dev box with no
- * `evidence.db` / no `hookprobe-api` running, or a device that hasn't first-booted yet), every
+ * device behind it, or a device that hasn't first-booted yet), every
  * signal this module would update simply keeps its `store/mock.ts` default — the existing
  * Layer-0 mock experience is the graceful fallback, never a broken screen (same "capability-
  * gated, never a broken button" posture MissionControl.md asks of the whole UI).
@@ -15,8 +15,8 @@
  * What's wired here:
  *  - Organism Status orb: `GET /api/qsecbit` → the resilience% + heartbeat sparkline.
  *    QSECBIT's `score` is a RISK score in `[0,1]`, LOWER = healthier (see
- *    `modules/qsecbit/src/lib.rs`'s `QsecbitOutput` doc comment: "A resilience percentage can
- *    be derived as `(1.0 − score) * 100.0`") — `resiliencePct` below applies exactly that.
+ *    heqk `mcstate.rs` `qs_row`: risk milli-units written as `0.xxx`), so resilience% is
+ *    `(1.0 − score) * 100.0` — `resiliencePct` below applies exactly that.
  *  - Security pillar / "needs you": `GET /api/incidents` → open-incident count.
  *  - Live updates: `GET /api/stream` (SSE) → qsecbit/incident deltas as they land, so the orb
  *    and the incident count update without a page reload ("Living, not refreshing").
@@ -25,8 +25,7 @@
  *  Shield (ads/malware blocked counts), My Network (device/zone counts), Get Online (WAN/Wi-Fi
  *  status), Timeline & Export's retention/storage figures, and `autonomousActions` (no
  *  `responses`-table read-API endpoint yet). The Mission Control (`/mission`) MSSP dashboard and
- *  the Investigate incident-story/hypotheses narrative also stay fully mocked — see the
- *  hookprobe-api build report for the complete list.
+ *  the Investigate incident-story/hypotheses narrative also stay fully mocked.
  */
 
 import { setQsecbit, setQsecbitKnown, setHeartbeat, heartbeatLive, setHeartbeatLive, setSecurity, setLastCheckedAt, security } from './mock';

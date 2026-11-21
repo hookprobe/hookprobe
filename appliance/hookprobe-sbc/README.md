@@ -21,5 +21,6 @@ Granted from the Platform Manifest, never from the board name. Everything starts
 | `edge_ai` | RK3588 NPU (6 TOPS); M.2 M-key 2280 AI accelerator slot (NPU or FPGA card, PCIe 3.0 ×1) | later |
 | Thread / Matter (**no token yet**: needs an ADR 0003 amendment) | Thread module on a UART | later |
 
-Token names are the ones in `legacy/linux-tier/manifest/schema/manifest.schema.json` and the legacy
-`rk3588.yaml`. New tokens are added in ADR 0003, never invented here.
+Token names are the capability ids of ADR 0003 (Platform Manifest schema). A device reports the ones it
+has at `GET /api/capabilities` (`os/kernel/kernel/src/capabilities.rs`). New tokens are added in ADR 0003,
+never invented here.
