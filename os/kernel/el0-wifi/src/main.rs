@@ -290,6 +290,12 @@ pub extern "C" fn _start() -> ! {
         CMD_BUS_PROBE => bus_probe(),
         CMD_RX_READ => rx_read(),
         CMD_RX_READV => rx_readv(),
+        // E1b: the bus counters (the kernel prints them per heartbeat next to this server's CPU time)
+        CMD_BUS_STATS => {
+            let mut o = [0u8; hal::sdio::BusStats::LEN];
+            unsafe { (*core::ptr::addr_of!(BUS)).stats.encode(&mut o) };
+            reply(&o)
+        }
         // S1: the key-transfer page el0-wpa writes is readable here (S3: a key record on its way to the chip)
         CMD_KEYX_PEEK => {
             let mut o = [0u8; 16];

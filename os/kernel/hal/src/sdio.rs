@@ -47,6 +47,59 @@ pub const SB_ADDR_LOW: u32 = 0x1000A;
 pub const SB_ADDR_MID: u32 = 0x1000B;
 pub const SB_ADDR_HIGH: u32 = 0x1000C;
 
+/// ADR 0067 E1b: what the bus did (counts only — EL0 has no timer on the CM5; the kernel times each call and divides).
+/// `wait_spins` = INT_STATUS polls spent waiting for a command / data / transfer-done bit (a proxy for bus wait time);
+/// `dry_reads` = F2 first reads that found no frame (a poll that cost a CMD53 for nothing).
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct BusStats {
+    pub cmd52: u32,
+    pub cmd53_rd: u32,
+    pub cmd53_wr: u32,
+    pub blk_rd: u32,
+    pub blk_wr: u32,
+    pub bytes_rd: u64,
+    pub bytes_wr: u64,
+    pub wait_spins: u64,
+    pub inhibit_spins: u64,
+    pub frames: u32,
+    pub dry_reads: u32,
+}
+
+impl BusStats {
+    /// Encoded size (the el0-wifi `CMD_BUS_STATS` reply).
+    pub const LEN: usize = 64;
+    pub fn encode(&self, o: &mut [u8; Self::LEN]) {
+        o.fill(0);
+        let w32 = [self.cmd52, self.cmd53_rd, self.cmd53_wr, self.blk_rd, self.blk_wr, self.frames, self.dry_reads];
+        for (i, v) in w32.iter().enumerate() {
+            o[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        for (i, v) in [self.bytes_rd, self.bytes_wr, self.wait_spins, self.inhibit_spins].iter().enumerate() {
+            o[28 + i * 8..36 + i * 8].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    pub fn decode(b: &[u8]) -> Option<Self> {
+        if b.len() < Self::LEN {
+            return None;
+        }
+        let u = |o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
+        let q = |o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap_or([0; 8]));
+        Some(BusStats { cmd52: u(0), cmd53_rd: u(4), cmd53_wr: u(8), blk_rd: u(12), blk_wr: u(16), frames: u(20), dry_reads: u(24),
+            bytes_rd: q(28), bytes_wr: q(36), wait_spins: q(44), inhibit_spins: q(52) })
+    }
+    /// `self - earlier`, saturating (a server restart resets the counters: the delta is then 0, never a wrap).
+    pub fn since(&self, e: &Self) -> Self {
+        BusStats {
+            cmd52: self.cmd52.saturating_sub(e.cmd52), cmd53_rd: self.cmd53_rd.saturating_sub(e.cmd53_rd),
+            cmd53_wr: self.cmd53_wr.saturating_sub(e.cmd53_wr), blk_rd: self.blk_rd.saturating_sub(e.blk_rd),
+            blk_wr: self.blk_wr.saturating_sub(e.blk_wr), bytes_rd: self.bytes_rd.saturating_sub(e.bytes_rd),
+            bytes_wr: self.bytes_wr.saturating_sub(e.bytes_wr), wait_spins: self.wait_spins.saturating_sub(e.wait_spins),
+            inhibit_spins: self.inhibit_spins.saturating_sub(e.inhibit_spins), frames: self.frames.saturating_sub(e.frames),
+            dry_reads: self.dry_reads.saturating_sub(e.dry_reads),
+        }
+    }
+}
+
 pub struct Bus<M: Mmio> {
     pub m: M,
     /// Wi-Fi degraded (wifiheal): every access fails at once, the bus is never touched.
@@ -61,11 +114,14 @@ pub struct Bus<M: Mmio> {
     /// read is issued and then never completes — the caller's excursion budget is the only way out. Never set by the
     /// kernel's own bus, and reset with the server's writable pages after its restart.
     pub stall_next_cmd53: bool,
+    /// E1b: what the bus did since this instance started (counts only).
+    pub stats: BusStats,
 }
 
 impl<M: Mmio> Bus<M> {
     pub const fn new(m: M) -> Self {
-        Bus { m, off: false, sdio_diag: (0, 0), cmd53_diag: (0, 0, 0), blk_diag: 0, stall_next_cmd53: false }
+        Bus { m, off: false, sdio_diag: (0, 0), cmd53_diag: (0, 0, 0), blk_diag: 0, stall_next_cmd53: false, stats: BusStats {
+            cmd52: 0, cmd53_rd: 0, cmd53_wr: 0, blk_rd: 0, blk_wr: 0, bytes_rd: 0, bytes_wr: 0, wait_spins: 0, inhibit_spins: 0, frames: 0, dry_reads: 0 } }
     }
 
     /// Issue one command; Some(RESP0) when it completed without an error.
@@ -78,6 +134,7 @@ impl<M: Mmio> Bus<M> {
         let inhibit = CMD_INHIBIT | if data { DAT_INHIBIT } else { 0 };
         while m.r32(PRESENT_STATE) & inhibit != 0 {
             spin += 1;
+            self.stats.inhibit_spins += 1;
             if spin > 200_000 {
                 // Inhibit stuck (the command engine wedged on an in-band card interrupt): soft-reset the CMD (+ DAT
                 // for data commands) circuit, then proceed. Standard SDHCI error recovery.
@@ -114,6 +171,7 @@ impl<M: Mmio> Bus<M> {
                 break;
             }
             spin += 1;
+            self.stats.wait_spins += 1;
             if spin > 1_000_000 {
                 self.sdio_diag = (m.r32(PRESENT_STATE), st);
                 return None;
@@ -124,11 +182,12 @@ impl<M: Mmio> Bus<M> {
 
     /// CMD52 (IO_RW_DIRECT): one byte on function `fnum`; returns the read / echoed byte.
     pub fn cmd52(&mut self, write: bool, fnum: u32, addr: u32, val: u8) -> Option<u8> {
+        self.stats.cmd52 += 1;
         let arg = ((write as u32) << 31) | ((fnum & 7) << 28) | ((write as u32) << 27) | ((addr & 0x1_FFFF) << 9) | (val as u32);
         self.cmd(CMD52_IO_RW_DIRECT, arg, RESP_48, true, false).map(|r| (r & 0xFF) as u8)
     }
 
-    fn wait(&self, bit: u32, limit: u32) -> Result<(), u32> {
+    fn wait(&mut self, bit: u32, limit: u32) -> Result<(), u32> {
         let mut spin = 0u32;
         loop {
             let st = self.m.r32(INT_STATUS);
@@ -139,6 +198,7 @@ impl<M: Mmio> Bus<M> {
                 return Err(st);
             }
             spin += 1;
+            self.stats.wait_spins += 1;
             if spin > limit {
                 return Err(st);
             }
@@ -148,6 +208,8 @@ impl<M: Mmio> Bus<M> {
     /// CMD53 byte-mode read (<= 512 B). F2 (the WLAN FIFO) is read at a FIXED address, F1 incrementing (brcmfmac).
     pub fn cmd53_read(&mut self, fnum: u32, addr: u32, out: &mut [u8]) -> bool {
         let n = out.len().min(512);
+        self.stats.cmd53_rd += 1;
+        self.stats.bytes_rd += n as u64;
         self.m.w16(BLK_SIZE_CNT, n as u16);
         self.m.w16(BLK_SIZE_CNT + 2, 1);
         self.m.w16(CMD_XFER, XM_READ | XM_BLKCNT_EN);
@@ -183,6 +245,8 @@ impl<M: Mmio> Bus<M> {
     /// CMD53 byte-mode write (<= 512 B, incrementing).
     pub fn cmd53_write(&mut self, fnum: u32, addr: u32, data: &[u8]) -> bool {
         let n = data.len().min(512);
+        self.stats.cmd53_wr += 1;
+        self.stats.bytes_wr += n as u64;
         self.m.w16(BLK_SIZE_CNT, n as u16);
         self.m.w16(BLK_SIZE_CNT + 2, 1);
         self.m.w16(CMD_XFER, XM_BLKCNT_EN);
@@ -219,6 +283,8 @@ impl<M: Mmio> Bus<M> {
         if out.len() < need || nblocks == 0 || nblocks > 0x1ff || !bs.is_multiple_of(4) {
             return false;
         }
+        self.stats.blk_rd += 1;
+        self.stats.bytes_rd += need as u64;
         self.m.w16(BLK_SIZE_CNT, bs as u16);
         self.m.w16(BLK_SIZE_CNT + 2, nblocks as u16);
         self.m.w16(CMD_XFER, XM_READ | XM_BLKCNT_EN | XM_MULTI);
@@ -253,6 +319,8 @@ impl<M: Mmio> Bus<M> {
         if data.len() < need || nblocks == 0 || nblocks > 0x1ff || !bs.is_multiple_of(4) {
             return false;
         }
+        self.stats.blk_wr += 1;
+        self.stats.bytes_wr += need as u64;
         self.m.w16(BLK_SIZE_CNT, bs as u16);
         self.m.w16(BLK_SIZE_CNT + 2, nblocks as u16);
         self.m.w16(CMD_XFER, XM_BLKCNT_EN | XM_MULTI);
@@ -433,6 +501,7 @@ impl<M: Mmio> Bus<M> {
             if ok && (l != 0 || c != 0) {
                 break;
             }
+            self.stats.dry_reads += 1;
             waited += 1;
             if waited > max_dry {
                 return RxRead::Dry;
@@ -445,6 +514,7 @@ impl<M: Mmio> Bus<M> {
             Err(_) => return RxRead::BadHdr { drained: self.rxfail(false) },
         };
         let hw_len = hdr.len;
+        self.stats.frames += 1;
         let mut valid = FIRSTREAD;
         let mut block = false;
         if (hw_len as usize) > FIRSTREAD {
@@ -734,6 +804,18 @@ mod tests {
         let mut f = Bus::new(Fake::new());
         *f.m.fail.borrow_mut() = true;
         assert!(!f.backplane_write(0x0001_8000, &data, 64));
+    }
+
+    #[test]
+    fn bus_stats_encode_round_trip_and_since() {
+        let a = BusStats { cmd52: 1, cmd53_rd: 2, cmd53_wr: 3, blk_rd: 4, blk_wr: 5, bytes_rd: 6_000_000_000, bytes_wr: 7, wait_spins: 8, inhibit_spins: 9, frames: 10, dry_reads: 11 };
+        let mut b = [0u8; BusStats::LEN];
+        a.encode(&mut b);
+        assert_eq!(BusStats::decode(&b), Some(a));
+        assert_eq!(BusStats::decode(&b[..BusStats::LEN - 1]), None);
+        let z = BusStats::default();
+        assert_eq!(a.since(&z), a);
+        assert_eq!(z.since(&a), z); // a restart reset the counters: 0, never a wrap
     }
 
     #[test]

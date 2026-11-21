@@ -121,6 +121,11 @@ fn cpu_admit_with(c: u8, now: u64, budget: u32) -> bool {
 }
 
 /// A call of component `c` that started at `t0_ticks` just returned: charge its duration.
+/// E1b: all CPU charged to component `c` since boot (us).
+pub fn cpu_total_us(c: u8) -> u64 {
+    cpu(c).total_us
+}
+
 pub fn cpu_charge(c: u8, t0_ticks: u64) {
     let us = crate::clock::ticks().saturating_sub(t0_ticks) / (crate::clock::freq() / 1_000_000).max(1);
     cpu(c).charge(us);
@@ -370,12 +375,17 @@ pub fn probe_stats() -> (u64, u64) {
 /// H4a: one functional probe when due (the main loop calls this every iteration; it costs one comparison until then,
 /// and at most one bounded EL0 excursion per `PROBE_PERIOD_MS`).
 pub fn probe_tick(now_ms: u64) {
-    // two slots in turn (each server is asked once per two periods): el0-lansvc, el0-tlshost
-    let Some(slot) = (unsafe { (*core::ptr::addr_of_mut!(PROBES)).due(now_ms, 2) }) else { return };
+    // four slots in turn (each server is asked once per four periods, i.e. every minute): el0-lansvc, el0-tlshost,
+    // and (D1, abandoned endpoint) el0-hsh and el0-wpa — a server that stops answering its protocol without faulting
+    let Some(slot) = (unsafe { (*core::ptr::addr_of_mut!(PROBES)).due(now_ms, 4) }) else { return };
     let (name, r) = match slot {
         0 => ("el0-lansvc", crate::lansvc::probe(false)),
         #[cfg(feature = "mctls")]
-        _ => ("el0-tlshost", crate::tlshost::probe(false)),
+        1 => ("el0-tlshost", crate::tlshost::probe(false)),
+        #[cfg(feature = "mctls")]
+        2 => ("el0-hsh", crate::hsh::probe(false)),
+        #[cfg(feature = "mctls")]
+        _ => ("el0-wpa", crate::el0srv::keyer::probe(false)),
         #[cfg(not(feature = "mctls"))]
         _ => ("el0-tlshost", None),
     };

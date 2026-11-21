@@ -113,6 +113,12 @@ def build(store, registry, purpose, *, collections=None, cap_per_source=None, so
         if aid in meta and aid not in current:
             bump(f"superseded_acquisition:{sid}")
             continue
+        # A flow without a label (CTU-13 'Background': unknown, not benign) can never become an example
+        # (build_network keeps malicious/benign only); dropping it here keeps 18M background flows out of
+        # memory. Counted, so the manifest shows how many were left out.
+        if r["kind"] == "flow" and r["labels"]["label"] is None:
+            bump(f"unlabelled_flow:{sid}")
+            continue
         lic = registry.licenses.get(r["provenance"]["license_id"])
         if lic is None:
             bump(f"unknown_licence:{r['provenance']['license_id']}")

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hookprobe"
+version = "0.1.0"
+description = "HookProbe SDK — AI-Native Edge Security Platform"
+readme = "README.md"
+license = {text = "AGPL-3.0"}
+requires-python = ">=3.9"
+authors = [{name = "HookProbe Team", email = "qsecbit@hookprobe.com"}]
+keywords = ["security", "ids", "npu", "edge-ai", "cybersecurity"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Security",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Programming Language :: Python :: 3",
+]
+dependencies = []
+
+[project.optional-dependencies]
+inference = ["numpy>=1.24", "llama-cpp-python>=0.2.0"]
+full = ["numpy>=1.24", "llama-cpp-python>=0.2.0", "requests>=2.31"]
+
+[project.urls]
+Homepage = "https://hookprobe.com"
+Documentation = "https://docs.hookprobe.com"
+Repository = "https://github.com/hookprobe/hookprobe"
+
+[project.scripts]
+hookprobe-ctl = "hookprobe.cli:main"

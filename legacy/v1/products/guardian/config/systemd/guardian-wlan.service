@@ -1,0 +1,37 @@
+[Unit]
+Description=Guardian WLAN Interface Setup for AP Mode
+Documentation=https://github.com/hookprobe/hookprobe
+# Start early in boot, before networking and hostapd
+DefaultDependencies=no
+After=local-fs.target systemd-udevd.service
+Before=network-pre.target hostapd.service guardian-offline.service
+Wants=systemd-udevd.service
+
+# Don't require network - we ARE the network for LAN clients
+# This service must start even without WAN (eth0/wlan0) connectivity
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Wait for udev to settle (USB WiFi adapters)
+ExecStartPre=/bin/sleep 3
+ExecStartPre=-/usr/bin/udevadm settle --timeout=10
+
+# Unblock WiFi if rfkill blocked
+ExecStartPre=-/usr/sbin/rfkill unblock wifi
+
+# Setup script for wlan1 AP interface
+ExecStart=/usr/local/bin/guardian-wlan-setup.sh
+
+# Ensure proper permissions
+User=root
+Group=root
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-wlan
+
+[Install]
+WantedBy=multi-user.target

@@ -2791,6 +2791,26 @@ fn rxv_next(h: El0Keyer, sdb: u32, max_dry: u32, block: bool, rx: &mut [u8]) -> 
     }
 }
 
+/// The shortest gap between two SDIO-core intstatus reads on the RX poll path (E1b step 2), in counter ticks of
+/// the 54 MHz CM5 / 62.5 MHz QEMU generic timer (computed from CNTFRQ at use).
+const INT_POLL_MIN_US: u64 = 2_000;
+static mut INT_POLL_LAST: u64 = 0;
+/// RX polls that skipped the intstatus read (E1b; the heartbeat prints it).
+pub static mut INT_POLL_SKIPPED: u64 = 0;
+fn intstatus_due() -> bool {
+    let now = ticks();
+    let frq: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) frq) };
+    let gap = INT_POLL_MIN_US * (frq / 1_000_000).max(1);
+    if now.wrapping_sub(unsafe { INT_POLL_LAST }) >= gap {
+        unsafe { INT_POLL_LAST = now };
+        true
+    } else {
+        unsafe { INT_POLL_SKIPPED += 1 };
+        false
+    }
+}
+
 fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)> {
     // ADR 0065 step 4b-2: the bus traffic of reading one frame is `hal::sdio::Bus::read_frame` (host-tested; the
     // code el0-wifi runs). It keeps every rule this function had: the header checked by the fuzzed `hal::sdpcm_hdr`
@@ -2817,7 +2837,12 @@ fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, u
         }
         rxv_reset(); // the server could not: nothing of a batch is left; the single-frame path below serves
     }
-    let mut skip = false;
+    // ADR 0067 E1b step 2: the SDIO-core intstatus (7 CMD52: the backplane window + 4 byte reads) only finds mailbox
+    // events — frames are found by the F2 read itself. Metal (am28B, 97 Mbps download): ~9 000 dry polls a second,
+    // each paying that intstatus read for nothing. Read it when at least INT_POLL_MIN_US passed since the last read
+    // (and always after a mailbox interrupt, below): idle polls (~260 ms apart) are unchanged; under load the mailbox
+    // is still seen within 2 ms.
+    let mut skip = !intstatus_due();
     let mut el0_blk = None;
     let r = loop {
         let r = match el0h.map(|h| el0_rx_chunked(h, sdb, max_dry, skip, block, rx)) {

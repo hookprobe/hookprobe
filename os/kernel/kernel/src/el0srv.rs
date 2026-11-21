@@ -436,6 +436,16 @@ mod imp {
                 ring::reset(&mut self.tx);
             }
         }
+        /// D1: a functional probe found the server answering wrongly without a fault: reset it (image + control page;
+        /// persistent state kept), counted for the restart policy unless `counted` is false (a self-test's tamper).
+        pub fn probe_reset(&mut self, counted: bool) {
+            if counted {
+                let _ = self.sup.fault(now_ms());
+            } else {
+                self.sup.fault_uncounted();
+            }
+            self.reset();
+        }
         /// H7: a wipe the caller did not see as a fault (the server refused its saved state): open the episode, so
         /// the next good call closes the journal entry. Not counted for the restart policy.
         pub fn wipe_opened(&mut self) {
@@ -1603,6 +1613,16 @@ pub mod keyer {
     /// `/api/health` wifi_driver.bus: (state, restarts, faults, ticks of the last fault or 0). State: "absent" = the
     /// server is not loaded (the in-kernel driver serves — D5), "handed_to_wifiheal" = Wi-Fi was degraded after a
     /// failed recovery, "backoff" = restarting after a fault, else "running". Only counters, nothing derived.
+    /// ADR 0067 E1b: the bus server's counters (None = absent / backoff / an undecodable reply).
+    pub fn bus_stats() -> Option<hal::sdio::BusStats> {
+        let s = bus_srv()?;
+        let mut o = [0u8; hal::sdio::BusStats::LEN];
+        match s.call_io(hal::wifisrvabi::CMD_BUS_STATS, &[], &mut o) {
+            (Call::Done(ST_OK, ..), n) if n == o.len() => hal::sdio::BusStats::decode(&o),
+            _ => None,
+        }
+    }
+
     pub fn bus_health() -> (&'static str, u64, u64, u64) {
         let Some(s) = bus_srv() else { return ("absent", 0, 0, 0) };
         let st = if crate::wifiheal::status().0.starts_with("degraded") {
@@ -1721,6 +1741,60 @@ pub mod keyer {
         };
         arch_aarch64::_print(format_args!(" [WIFI-INJECT] {}: {}\n", kind, r));
         Ok(r)
+    }
+
+    /// D1 (abandoned endpoint): the functional probe of el0-wpa — the PMKSA count must come back as a plausible
+    /// number. Through `wpa_call`, so a saved state that fails its check still takes the H7 path (wipe), and a fault
+    /// takes the containment path. None = not asked (absent / backoff) or it faulted; Some(false) = a wrong answer
+    /// without a fault -> journaled (kind probe) and the server reset (its state pages kept). `tamper`: self-test only.
+    pub fn probe(tamper: bool) -> Option<bool> {
+        let s = srv()?;
+        if s.backoff_left_ms() > 0 {
+            return None;
+        }
+        let good = match wpa_call(hal::wpasrvabi::CMD_PMKSA_COUNT, &[], &mut [], None)? {
+            (Call::Done(ST_OK, n, _), _) => n <= 4096,
+            (Call::Done(..), _) => false,
+            _ => return None,
+        };
+        if good && !tamper {
+            return Some(true);
+        }
+        let _ = crate::superv::server_probe_failed("el0-wpa");
+        srv()?.probe_reset(!tamper);
+        Some(false)
+    }
+
+    /// [P-probe-wpa] (QEMU): the probe answers; a simulated wrong answer is journaled kind probe and el0-wpa reset (a
+    /// restart: no wipe, the PMKSA cache kept); the next probe answers; the entry closes Recovered.
+    #[cfg(all(feature = "wpa3", not(feature = "cm5")))]
+    pub(crate) fn probe_selftest() -> bool {
+        let wait = || {
+            let ms = |t: u64| t / (crate::clock::freq() / 1000).max(1);
+            let t0 = ms(crate::clock::ticks());
+            while ms(crate::clock::ticks()) < t0 + super::imp::BACKOFF_MS * 4 + 5 {}
+        };
+        let count = || match wpa_call(hal::wpasrvabi::CMD_PMKSA_COUNT, &[], &mut [], None) {
+            Some((Call::Done(ST_OK, n, _), _)) => Some(n),
+            _ => None,
+        };
+        let saved = crate::superv::swap(hal::superv::Journal::new());
+        let (r0, w0) = srv().map_or((0, 0), |s| (s.restarts, s.wipes));
+        let c0 = count();
+        let good = probe(false) == Some(true);
+        let wrong = probe(true) == Some(false);
+        let reset = srv().is_some_and(|s| s.restarts == r0 + 1 && s.wipes == w0);
+        wait();
+        let again = probe(false) == Some(true) && count() == c0;
+        let c = hal::superv::component_id("el0-wpa");
+        let journaled = crate::superv::journal().newest_first().any(|e| e.component == c && e.kind == hal::superv::Kind::Probe && e.outcome == hal::superv::Outcome::Recovered);
+        let _ = crate::superv::swap(saved);
+        let pass = good && wrong && reset && again && journaled;
+        arch_aarch64::_print(format_args!(
+            " [P-probe-wpa] {} — D1 abandoned endpoint, the functional probe of el0-wpa: the PMKSA count answers={} a wrong answer (no fault) is caught={} reset as a restart, no wipe={} the next probe answers, the cache kept={} journaled kind probe, closed Recovered={}\n",
+            if pass { "PASS" } else { "FAIL" }, good, wrong, reset, again, journaled
+        ));
+        pass
     }
 
     /// (state, restarts, faults, full wipes, ticks of the last fault or 0, PMKSA entries).
@@ -2188,6 +2262,8 @@ pub fn sae_selftest() -> bool {
     let _ = keyer::contain_selftest(&sta);
     #[cfg(not(feature = "cm5"))]
     let _ = keyer::state_selftest(); // autoheal harness H7: a corrupted saved state is wiped, never reused
+    #[cfg(not(feature = "cm5"))]
+    let _ = keyer::probe_selftest(); // D1: the functional probe of el0-wpa
     unsafe { WPA = None };
     let pass = setup && committed && ok_peer && accepted && clean1 && fresh && m1 && m3 && keyed && clean2 && cached && nosae && psk_own && group_own && k1 && unseeded_refuses && seeded_works;
     arch_aarch64::_print(format_args!(
