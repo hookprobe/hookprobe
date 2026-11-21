@@ -837,7 +837,7 @@ pub fn reboot(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<()
 }
 
 /// ADR 0065 S4, BENCH ONLY (feature `wifi-inject`): `POST /api/bench/wifi-inject` — kind (cmd53-stall | bus-fault |
-/// wpa-station-m2 | wpa-fault), sta (aa:bb:cc:dd:ee:ff, for wpa-station-m2), reason, seq, owner_key. The same guards
+/// wpa-station-m2 | wpa-fault | wpa-state-corrupt | bus-read-wpa), sta (aa:bb:cc:dd:ee:ff, for wpa-station-m2), reason, seq, owner_key. The same guards
 /// as the owner reboot: origin, CSRF, rate, replay, a reason, owner re-authentication.
 #[cfg(feature = "wifi-inject")]
 pub fn wifi_inject(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<&'static str, &'static str> {

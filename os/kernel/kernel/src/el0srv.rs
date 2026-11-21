@@ -441,9 +441,10 @@ mod imp {
         pub fn wipe_opened(&mut self) {
             self.sup.fault_uncounted();
         }
-        /// H7 test hook (QEMU): flip one bit of the persistent state the server would load next — a data byte of slot 0
-        /// when that slot is the selected one, else the selected slot's check word. False = nothing saved yet.
-        #[cfg(all(feature = "wpa3", not(feature = "cm5")))]
+        /// H7 test hook (QEMU self-test; on metal only the bench `wifi-inject` image): flip one bit of the persistent
+        /// state the server would load next — a data byte of slot 0 when that slot is the selected one, else the
+        /// selected slot's check word. False = nothing saved yet.
+        #[cfg(any(all(feature = "wpa3", not(feature = "cm5")), feature = "wifi-inject"))]
         pub fn corrupt_state(&mut self) -> bool {
             if self.nstate == 0 {
                 return false;
@@ -458,6 +459,12 @@ mod imp {
                 core::ptr::write_volatile(at as *mut u8, core::ptr::read_volatile(at as *const u8) ^ 0x10);
             }
             true
+        }
+        /// H7 metal (bench `wifi-inject` only): restart the server now (image + control page restored, the state pages
+        /// kept) — its next call loads the saved state again, as after a fault.
+        #[cfg(feature = "wifi-inject")]
+        pub fn restart_now(&mut self) {
+            self.reset();
         }
         /// A full wipe (ADR 0065 step 4g): the reset, AND the persistent state pages zeroed — every secret the server
         /// held is gone. The next call starts a fresh, empty incarnation.
@@ -1667,6 +1674,16 @@ pub mod keyer {
                 Some((Call::Fault, _)) => "el0-wpa faulted outside a station call: full wipe",
                 _ => return Err("security server unavailable"),
             },
+            // H7: one bit of el0-wpa's saved state flipped, then a restart: its next call must refuse the state
+            // (ST_STATE_BAD), the kernel full-wipes (never reuses it), every station re-keys, journaled kind probe / rung wipe
+            "wpa-state-corrupt" => {
+                let s = srv().ok_or("security server unavailable")?;
+                if !s.corrupt_state() {
+                    return Err("el0-wpa has saved no state yet");
+                }
+                s.restart_now();
+                "flipped one bit of el0-wpa's saved state and restarted it: the next call must refuse it and wipe"
+            }
             // customer claim "security isolation": the bus server tries to read el0-wpa's image and its state pages (the
             // PMKSA cache, SAE state, PMKs, group keys) — each must FAULT; the key-transfer page is readable (RO, by
             // design) and must hold nothing between installs
@@ -1700,7 +1717,7 @@ pub mod keyer {
                     "ISOLATION PROBE FAILED (see [WIFI-ISOLATION])"
                 }
             }
-            _ => return Err("unknown kind (cmd53-stall | bus-fault | wpa-station-m2 | wpa-fault | bus-read-wpa)"),
+            _ => return Err("unknown kind (cmd53-stall | bus-fault | wpa-station-m2 | wpa-fault | wpa-state-corrupt | bus-read-wpa)"),
         };
         arch_aarch64::_print(format_args!(" [WIFI-INJECT] {}: {}\n", kind, r));
         Ok(r)
