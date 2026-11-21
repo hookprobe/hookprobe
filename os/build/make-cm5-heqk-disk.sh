@@ -176,6 +176,7 @@ else
 fi
 # Licences travel with the image: LICENSES/ on p1 holds every licence text and notice the image's contents ask
 # for, and the devicetree's GPL-2.0 source when a .dtb ships (os/build/licenses/stage-licences.sh).
+VER="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"   # also set below; needed here first (set -u)
 "$HERE/licenses/stage-licences.sh" "$STAGE" "$VER" $([ "$ZERO_LINUX" = 1 ] && echo --zero-linux)
 # Canonical config: the template with every kernel= line replaced by ONE slot line. The A and B
 # files differ only in that line, and the slot names have equal length, so swapping a commit is a
