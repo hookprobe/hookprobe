@@ -22,6 +22,8 @@ python3 -I heqk_data.py register iot-23 ~/data/IoT-23/CTU-IoT-Malware-Capture-39
 python3 -I heqk_data.py normalize                                    # raw -> heqk.security-event/1
 python3 -I heqk_data.py build --purpose commercial_training --cap 50000
 python3 -I heqk_data.py windows iot-23 --purpose commercial_training --splits dev   # Neuro host-hour windows
+python3 -I heqk_data.py windows ctu-13 --purpose commercial_training --splits dev   # CTU-13: hosts from labels
+python3 -I heqk_data.py lookup --purpose commercial_training                   # CVE + ATT&CK lookup tables (facts only)
 python3 -I heqk_data.py dga xjw3kq9vzt2lmpr8.com                     # heqk dga.rs, bit-exact
 python3 -I heqk_data.py dga-eval                                     # dga.rs FP/recall sweep on the store
 python3 -I heqk_data.py catalog --out ../../docs/research/intel-data/CATALOGUE.md
