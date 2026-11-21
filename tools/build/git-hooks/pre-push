@@ -63,8 +63,10 @@ check_range() {
   local label="$2"
   local pattern="$3"
   local hits
+  # Added lines only ('+', minus the '+++' file header): a push that REMOVES a match (e.g. merging main after
+  # #1422 dropped three webmail addresses) must not be refused for the very lines it deletes.
   hits="$(git diff "$range" -- . ':(exclude)tools/build/git-hooks/pre-push' ':(exclude).gitleaks.toml' ':(exclude).github/workflows/secrets-scan.yml' \
-            | grep_cmd -e "$pattern" || true)"
+            | grep -a '^+' | grep -av '^+++ ' | grep_cmd -e "$pattern" || true)"
   if [ -n "$hits" ]; then
     echo "PRE-PUSH SECRET TRIPWIRE [$label] -- refusing to push:" >&2
     echo "$hits" >&2
