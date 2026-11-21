@@ -63,8 +63,8 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 | GF-R9, R10 | reseed retry gate; doc comments | eng | done | #1309 |
 | GF-E1 | first-boot bring-up via el0-wifi (ADR 0065 D4.4) | eng; ADR edit op | done+metal; ADR status edit open (C2) | #1319 |
 | GF-E2 | single gate-status source | eng | done (this document) | — |
-| GF-E3 | bench baseline inside the regression runner | eng | open | cm5-bench-baseline.sh exists (#1293), not called by a runner |
-| GF-E4 | local mc-e2e uses a stale UI dist | eng | open | mc-e2e.sh builds the dist only when missing |
+| GF-E3 | bench restored before / after config-changing checks | eng | done+metal | #1428 (cfgd-live 20/20 with the wrapper on metal) |
+| GF-E4 | local mc-e2e uses a stale UI dist | eng | done | #1427 |
 | GF-E5 | ~980 ms post-upload reload round trips | eng | open (low) | #1294 |
 | GF-H1 (W3) | bench certificate SAN (192.168.200.146, unit name) | bench | done+metal | served cert checked 2026-11-21 (`openssl s_client` against 192.168.200.146:443): SAN heqk.local, r3q1.heqk.local, 10.99.0.1, 192.168.200.146, 10.200.0.6, written by the rpiboot flash of 20261120-l01-fwfiles-b1.md |
 | GF-H2 (W3) | browser flasher (ADR 0037) | op / bench | open | remaining-gaps #7 |
@@ -76,14 +76,14 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 | ID | What | Owner | State | Evidence |
 |---|---|---|---|---|
 | AH-H1 | failure kinds + recovery journal (`/api/recoveries`) | eng | done+metal | #1320 |
-| AH-H1+ | journal across a warm reset (`previous_boot`) | eng | done+metal (owner reboot; watchdog / panic reset not yet exercised) | #1419 (6/6) |
+| AH-H1+ | journal across a warm reset (`previous_boot`) | eng | done+metal (owner reboot + panic reset; watchdog reset not exercised) | #1419 (6/6 owner reboot; panic round am31C, comment on #1419) |
 | AH-H2 | supervisor table, one restart path | eng | done+metal | #1327 (7/7) |
 | AH-H3 | policy decay / hold-off / planned-reset reasons | eng | done+metal (H3a); H3b done-QEMU (pure policy) | #1328, #1336 |
 | AH-H4 | probes (H4a/H4b) + complaint channel (H4c) | eng | done+metal (a/b); H4c done-QEMU (no shipping server can be made to break the protocol on metal) | #1339, #1351, #1409 |
 | AH-H5 | CPU budget per server per window | eng | done+metal | #1356 (8/8) |
 | AH-H6 | software fault-injection campaign | eng / bench | done-QEMU (10k, 0 unrecovered); CM5 ≥1k campaign open | #1365–#1378 |
 | AH-H7 | state classes + el0-wpa saved-state integrity | eng | done+metal | #1418, #1420 (8/8) |
-| AH-next | "abandoned endpoint" kind | eng | open | — |
+| AH-D1 | abandoned endpoint: probes for el0-hsh and el0-wpa | eng | done-QEMU | #1430 ([P-probe-hsh], [P-probe-wpa]) |
 
 ## ADR 0065 (Wi-Fi out of the kernel)
 
@@ -128,7 +128,7 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 
 | ID | Owner | State | Note |
 |---|---|---|---|
-| EP-E1b SDIO bus efficiency | eng | in progress | step 1 counters measured on metal next |
+| EP-E1b SDIO bus efficiency | eng | done+metal | #1432: CMD52 −95%, el0-wifi CPU 44–49% → 35–42%, throughput unchanged (~97 Mbps) |
 | EP-L0.1 firmware files out of the image | eng / bench | merged; rpiboot case 4a not run | 20261120-l01-fwfiles-b1.md |
 | MT-E1 eth1 (RTL8111H) wired client | bench | open | heqk-metal-test-plan.md |
 | MT-J5, MT-J6 GEM RX ring 512; IPv6 re-probe | bench | no dedicated record | audit §3.1 |
