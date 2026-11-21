@@ -174,6 +174,9 @@ else
   [ -s "$DTB" ] || { echo "FATAL: proven layout needs $DTB (set HEQK_DTB, or use --zero-linux)"; exit 1; }
   cp "$DTB" "$STAGE/bcm2712-rpi-cm5-cm5io.dtb"
 fi
+# Licences travel with the image: LICENSES/ on p1 holds every licence text and notice the image's contents ask
+# for, and the devicetree's GPL-2.0 source when a .dtb ships (os/build/licenses/stage-licences.sh).
+"$HERE/licenses/stage-licences.sh" "$STAGE" "$VER" $([ "$ZERO_LINUX" = 1 ] && echo --zero-linux)
 # Canonical config: the template with every kernel= line replaced by ONE slot line. The A and B
 # files differ only in that line, and the slot names have equal length, so swapping a commit is a
 # same-size in-place rewrite.
@@ -321,6 +324,7 @@ mkfs.vfat -F 32 -n HEQKBOOT "$PART" >/dev/null
 for f in "$STAGE"/CYW43455.BIN "$STAGE"/CYW43455.NVR "$STAGE"/CYW43455.CLM "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/WAN.SIG "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/ALLOW.TXT "$STAGE"/ALLOW.SIG "$STAGE"/IOC.TXT "$STAGE"/IOC.SIG "$STAGE"/OUI.TXT "$STAGE"/OUI.SIG "$STAGE"/DEVICES.TXT "$STAGE"/DEVICES.SIG "$STAGE"/WIFI.TXT "$STAGE"/WIFI.SIG "$STAGE"/RULES.BIN "$STAGE"/RULES.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
   [ -e "$f" ] && mcopy -i "$PART" "$f" ::"$(basename "$f")"
 done
+mcopy -s -i "$PART" "$STAGE/LICENSES" ::   # after the boot set: the root keeps its existing entries in order
 dd if="$PART" of="$IMG" bs=512 seek=$P1_START conv=notrunc status=none
 
 echo "== [factory] 5/5 verify the image"
@@ -336,6 +340,8 @@ if [ "$ZERO_LINUX" = 1 ]; then
   check "zero Linux artifacts on p1 (no .dtb, no kernel8/initramfs)" \
     "! mdir -i '$IMG@@$((P1_START*512))' -b | grep -Eqi '\.dtb|kernel8|kernel_2712|initramfs|overlays'"
 fi
+check "LICENSES/ on p1 is byte-identical to what was staged ($(find "$STAGE/LICENSES" -type f | wc -l | tr -d ' ') files)" \
+  "'$HERE/licenses/stage-licences.sh' --verify '$IMG@@$((P1_START*512))' '$STAGE' >/dev/null"
 # The device's OWN code against the real layout: boot the QEMU p15-write kernel on a copy.
 KDIR="$HEQK/target/factory-check"   # private: never the shared target/
 # READ-ONLY check kernel (no p15-write): the p15-write self-tests write fixed LBAs (from 8192 up)

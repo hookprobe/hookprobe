@@ -10,6 +10,7 @@ Turns the heqk workspace + the Mission Control UI into **signed** boot artifacts
 | [`heqk-boot-key-check.sh`](heqk-boot-key-check.sh) | release-blocking gate: refuses a release image that carries DEV keys ([fingerprints](heqk-dev-key-fingerprints.txt)) |
 | [`heqk-sign/`](heqk-sign/) | the in-tree signer: Ed25519 + SLH-DSA-128s boot signatures |
 | [`licenses/gen_third_party.py`](licenses/gen_third_party.py) | [`licenses/THIRD_PARTY_NOTICES.md`](licenses/THIRD_PARTY_NOTICES.md): licence and text of every third-party crate and browser package a heqk image can contain (`--check` to verify) |
+| [`licenses/stage-licences.sh`](licenses/stage-licences.sh) | the `LICENSES/` folder every factory image carries on its boot partition: HookProbe's licence, the third-party notices, the Wi-Fi firmware and device-tree licence records with their licence texts, and the device tree's GPL-2.0 source (not with `--zero-linux`). The factory reads it back from the image and checks every file |
 
 ```sh
 # dev keys (once), then a production Mission Control factory image with no devicetree
