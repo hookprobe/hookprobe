@@ -27,7 +27,7 @@ python3 -I heqk_data.py lookup --purpose commercial_training                   #
 python3 -I heqk_data.py dga xjw3kq9vzt2lmpr8.com                     # heqk dga.rs, bit-exact
 python3 -I heqk_data.py dga-eval                                     # dga.rs FP/recall sweep on the store
 python3 -I heqk_data.py catalog --out ../../docs/research/intel-data/CATALOGUE.md
-python3 -I -m unittest discover -s tests -t tests                     # 86 tests, fixtures only
+python3 -I -m unittest discover -s tests -t tests                     # 89 tests, fixtures only
 ```
 
 Purposes are `commercial_training`, `evaluation`, `research` and `live_intel`. Each source is checked
