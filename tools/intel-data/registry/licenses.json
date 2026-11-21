@@ -77,6 +77,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "aptnotes-terms",
+   "name": "None stated (links to third-party vendor reports)",
+   "spdx": null,
+   "url": null,
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "no",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list. Repo has no licence; each linked vendor PDF keeps its publisher's copyright.",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "awid3-terms",
    "name": "None stated (copyright 'All Rights Reserved', Info-Sec-Lab)",
    "spdx": null,
@@ -225,6 +240,21 @@
    "attribution_required": true,
    "notes": null,
    "verified_on": "2026-11-18"
+  },
+  {
+   "id": "cc-by-nc-sa-4.0",
+   "name": "Creative Commons Attribution-NonCommercial-ShareAlike 4.0",
+   "spdx": "CC-BY-NC-SA-4.0",
+   "url": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+   "class": "RESEARCH",
+   "commercial_use": "no",
+   "training_use": "no",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": true,
+   "attribution_required": true,
+   "notes": "Non-commercial only; share-alike.",
+   "verified_on": "2026-11-21"
   },
   {
    "id": "cc0-1.0",
@@ -602,6 +632,21 @@
    "verified_on": "2026-11-21"
   },
   {
+   "id": "dfir-report-terms",
+   "name": "All rights reserved",
+   "spdx": null,
+   "url": "https://thedfirreport.com/",
+   "class": "RESTRICTED",
+   "commercial_use": "no",
+   "training_use": "no",
+   "redistribution": "no",
+   "derivatives": "no",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list. Footer: '(c) 2025 The DFIR Report. All Rights Reserved.' No open licence.",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "dgarchive-terms",
    "name": "CC BY-NC-SA 3.0 (DGArchive Terms of Service)",
    "spdx": null,
@@ -675,6 +720,21 @@
    "attribution_required": true,
    "notes": "Per-source terms from the feeds research pass.",
    "verified_on": "2026-11-18"
+  },
+  {
+   "id": "elastic-license-2.0",
+   "name": "Elastic License 2.0",
+   "spdx": "Elastic-2.0",
+   "url": "https://www.elastic.co/licensing/elastic-license",
+   "class": "RESTRICTED",
+   "commercial_use": "yes",
+   "training_use": "unclear",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list. Source-available, not OSI: no providing the software to third parties as a hosted or managed service; keep notices. Training not mentioned. Classed RESTRICTED because the hosted-service limit needs legal review for an MSSP product.",
+   "verified_on": "2026-11-21"
   },
   {
    "id": "eset-malware-ioc-terms",
@@ -902,6 +962,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "gpl-3.0-dfir-report-rules",
+   "name": "GNU GPL 3.0",
+   "spdx": "GPL-3.0-or-later",
+   "url": "https://github.com/The-DFIR-Report/Sigma-Rules",
+   "class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "unclear",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": true,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list. Copyleft; the page did not show -only vs -or-later. Training not addressed.",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "greynoise-community-terms",
    "name": "GreyNoise Terms (proprietary)",
    "spdx": null,
@@ -960,6 +1035,21 @@
    "attribution_required": true,
    "notes": "Per-source terms from the academic research pass.",
    "verified_on": "2026-11-18"
+  },
+  {
+   "id": "inquest-yara-rules-terms",
+   "name": "MIT License (InQuest yara-rules)",
+   "spdx": "MIT",
+   "url": "https://github.com/InQuest/yara-rules",
+   "class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "unclear",
+   "redistribution": "yes",
+   "derivatives": "yes",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list. MIT permits use without restriction; training left 'unclear' as reported by the check, pending a decision to treat MIT as training-permitted like the generic 'mit' entry.",
+   "verified_on": "2026-11-21"
   },
   {
    "id": "int-apwg-ecx-terms",
@@ -1425,6 +1515,21 @@
    "attribution_required": true,
    "notes": "Per-source terms from the feeds research pass.",
    "verified_on": "2026-11-18"
+  },
+  {
+   "id": "mitre-emb3d-terms",
+   "name": "MITRE EMB3D Terms of Use",
+   "spdx": null,
+   "url": "https://emb3d.mitre.org/subtabs/terms-of-use.html",
+   "class": "RESTRICTED",
+   "commercial_use": "yes",
+   "training_use": "unclear",
+   "redistribution": "requires_agreement",
+   "derivatives": "yes",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list. Grants use, copy and derivative works 'for internal business purposes or commercial use', with MITRE's notice kept and use reported to EMB3D@mitre.org; other uses via techtransfer@mitre.org. Training is not mentioned.",
+   "verified_on": "2026-11-21"
   },
   {
    "id": "netlab360-dga-terms",
@@ -1967,6 +2072,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "trendmicro-primus-terms",
+   "name": "ODC-By 1.0 plus gated access conditions and upstream terms",
+   "spdx": "ODC-By-1.0",
+   "url": "https://huggingface.co/datasets/trendmicro-ailab/Primus-FineWeb",
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list. Gated: access conditions unread without login. FineWeb part also binds FineWeb licence + Common Crawl ToU; Instruct answers generated by GPT-4o; Reasoning from o1-preview and DeepSeek-R1 on CTI-Bench tasks (CTI-Bench licence not given).",
+   "verified_on": "2026-11-21"
+  },
+  {
    "id": "tu-dns-tunnelling-2023-terms",
    "name": "None (GitHub repo has no LICENSE file)",
    "spdx": null,
@@ -2114,6 +2234,21 @@
    "share_alike": false,
    "attribution_required": true,
    "notes": "Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence.",
+   "verified_on": "2026-11-21"
+  },
+  {
+   "id": "vx-underground-papers-terms",
+   "name": "None found (site returned 403; archived papers are third-party works)",
+   "spdx": null,
+   "url": "https://vx-underground.org/",
+   "class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "From the 2026-11-21 licence check of an operator-supplied source list.",
    "verified_on": "2026-11-21"
   },
   {

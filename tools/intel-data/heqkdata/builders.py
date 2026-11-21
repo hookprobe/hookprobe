@@ -253,7 +253,10 @@ def build_cve_knowledge(records, cap_per_source=None, stats=None):
         b = r["body"]
         sid = r["provenance"]["source_id"]
         what = " ".join(x for x in (b["vendor"], b["product"]) if x)
-        parts = [f"{b['cve_id']}" + (f" ({what})" if what else "") + ": " + b["description"].strip()]
+        desc = b["description"].strip()
+        if len(desc) > 6000:  # the answer field is capped at 8192; a few CNA descriptions run past it
+            desc = desc[:6000].rsplit(" ", 1)[0] + " [description truncated]"
+        parts = [f"{b['cve_id']}" + (f" ({what})" if what else "") + ": " + desc]
         if b["cwe_ids"]:
             parts.append("Weakness: " + ", ".join(b["cwe_ids"]) + ".")
         sev = None

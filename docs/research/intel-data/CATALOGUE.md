@@ -5,7 +5,7 @@
 > RESEARCH = research/non-commercial; COMMERCIAL = paid licence; RESTRICTED = agreement/membership; UNKNOWN = not verified.
 > Gate columns are `licensing.decide()` for each purpose: ✅ allowed, — denied.
 
-Sources: COMMERCIAL 11, OPEN 85, RESEARCH 21, RESTRICTED 29, UNKNOWN 48 — total 194.
+Sources: COMMERCIAL 11, OPEN 89, RESEARCH 22, RESTRICTED 32, UNKNOWN 51 — total 205.
 
 ## attack_simulation
 
@@ -71,7 +71,10 @@ Sources: COMMERCIAL 11, OPEN 85, RESEARCH 21, RESTRICTED 29, UNKNOWN 48 — tota
 |---|---|---|---|---|---|---|---|---|---|
 | `et-open` | [Proofpoint Emerging Threats Open ruleset](https://rules.emergingthreats.net/) | Proofpoint (Emerging Threats) / US | OPEN | — | ✅ | ✅ | public_download | 5 | partially_verified |
 | `sigmahq-rules` | [SigmaHQ detection rules](https://github.com/SigmaHQ/sigma) | SigmaHQ community (Florian Roth, Thomas  / DE | OPEN | ✅ | ✅ | ✅ | public_download | 4 | partially_verified |
+| `dfir-report-rules` | [The DFIR Report Sigma / YARA / Suricata rules](https://github.com/The-DFIR-Report) | The DFIR Report / - | OPEN | — | ✅ | ✅ | public_download | 3 | verified |
+| `elastic-protections-artifacts` | [Elastic protections-artifacts (YARA and behaviour rules)](https://github.com/elastic/protections-artifacts) | Elastic / US | RESTRICTED | — | — | — | public_download | 3 | verified |
 | `et-pro` | [Proofpoint ET Pro ruleset](https://www.proofpoint.com/us/products/et-pro-ruleset) | Proofpoint / US | COMMERCIAL | — | — | — | commercial_contract | 3 | unverified |
+| `inquest-yara-rules` | [InQuest YARA rules](https://github.com/InQuest/yara-rules) | InQuest / US | OPEN | — | ✅ | ✅ | public_download | 3 | verified |
 | `neo23x0-signature-base` | [Neo23x0 signature-base (YARA + IOC)](https://github.com/Neo23x0/signature-base) | Florian Roth / Nextron Systems / DE | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
 | `yara-forge` | [YARA-Forge rule packages](https://github.com/YARAHQ/yara-forge) | YARA HQ (Florian Roth et al.) / DE | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
 | `abusech-yaraify` | [abuse.ch YARAify](https://yaraify.abuse.ch/) | abuse.ch (Bern University of Applied Sci / CH | OPEN | — | ✅ | ✅ | api_key | 2 | verified |
@@ -181,8 +184,11 @@ Sources: COMMERCIAL 11, OPEN 85, RESEARCH 21, RESTRICTED 29, UNKNOWN 48 — tota
 
 | id | name | org / country | class | train | eval | ship | access | P | verified |
 |---|---|---|---|---|---|---|---|---|---|
+| `aptnotes` | [APTnotes](https://github.com/aptnotes/data) | APTnotes project (community) / - | UNKNOWN | — | — | — | public_download | 3 | verified |
 | `ch-bacs-semiannual-reports` | [BACS / NCSC Semi-Annual Reports (Halbjahresbericht)](https://www.bacs.admin.ch/en/situation-reports) | Federal Office for Cybersecurity (BACS), / CH | UNKNOWN | — | — | — | reports_only | 3 | verified |
+| `dfir-report` | [The DFIR Report (intrusion reports)](https://thedfirreport.com/) | The DFIR Report / - | RESTRICTED | — | — | — | reports_only | 3 | verified |
 | `eu-enisa-threat-landscape` | [ENISA Threat Landscape 2026](https://www.enisa.europa.eu/news/exploring-the-evolution-of-the-cyber-threat-landscape-how-dependencies-weaken-our-digital-resilience) | ENISA / EU | OPEN | ✅ | ✅ | ✅ | reports_only | 3 | partially_verified |
+| `vx-underground-papers` | [vx-underground papers and APT report archive](https://vx-underground.org/) | vx-underground / - | UNKNOWN | — | — | — | public_download | 3 | verified |
 | `ch-switch-cert-report` | [Switch-CERT Report / registry takedown statistics](https://www.switch.ch/en/switch-cert-report) | Switch-CERT / CH | UNKNOWN | — | — | — | reports_only | 2 | unverified |
 | `eu-cert-eu-threat-intel` | [CERT-EU Cyber Briefs and Threat Landscape Report](https://cert.europa.eu/publications/threat-intelligence) | CERT-EU / EU | OPEN | ✅ | ✅ | ✅ | reports_only | 2 | verified |
 | `uk-ncsc-annual-review-acd` | [NCSC UK Annual Review 2026 - Active Cyber Defence](https://www.ncsc.gov.uk/collection/annual-review-2026/building-strong-foundations/securing-uks-internet) | NCSC (UK) / UK | UNKNOWN | — | — | — | reports_only | 2 | verified |
@@ -196,6 +202,8 @@ Sources: COMMERCIAL 11, OPEN 85, RESEARCH 21, RESTRICTED 29, UNKNOWN 48 — tota
 | `hf-witfoo-precinct6` | [WitFoo Precinct6 Cybersecurity Dataset v2.1.0](https://huggingface.co/datasets/witfoo/precinct6-cybersecurity) | WitFoo / US | OPEN | ✅ | ✅ | ✅ | public_download | 4 | partially_verified |
 | `hf-nist-cybersecurity-training` | [NIST Cybersecurity Training Dataset v1.1](https://huggingface.co/datasets/ethanolivertroy/nist-cybersecurity-training) | ethanolivertroy (individual) / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
 | `hf-trendyol-cybersecurity-instruct` | [Trendyol Cybersecurity Defense Instruction-Tuning Dataset v2.0](https://huggingface.co/datasets/Trendyol/Trendyol-Cybersecurity-Instruction-Tuning-Dataset) | Trendyol Security Team / TR | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
+| `secqa` | [SecQA](https://huggingface.co/datasets/zefang-liu/secqa) | Zefang Liu (Hugging Face) / - | RESEARCH | — | — | — | public_download | 3 | verified |
+| `trendmicro-primus` | [Trend Micro Primus datasets (FineWeb, Seed, Instruct, Reasoning)](https://huggingface.co/trendmicro-ailab) | Trend Micro AI Lab / TW | UNKNOWN | — | — | — | registration | 3 | verified |
 | `hf-cybermetric` | [CyberMetric](https://huggingface.co/datasets/tihanyin/CyberMetric) | Tihanyi, Ferrag, Jain, Bisztray, Debbah  / AE | OPEN | ✅ | ✅ | ✅ | public_download | 2 | partially_verified |
 | `hf-fenrir-v2-1` | [Cybersecurity-Dataset-Fenrir v2.1](https://huggingface.co/datasets/AlicanKiraz0/Cybersecurity-Dataset-Fenrir-v2.1) | Alican Kiraz (individual) / TR | OPEN | ✅ | ✅ | ✅ | public_download | 2 | partially_verified |
 | `hookprobe-synthetic-soc` | [HookProbe synthetic SOC triage templates](https://github.com/hookprobe/hookprobe) | HookProbe / RO | OPEN | ✅ | ✅ | ✅ | public_download | 2 | verified |
@@ -205,11 +213,14 @@ Sources: COMMERCIAL 11, OPEN 85, RESEARCH 21, RESTRICTED 29, UNKNOWN 48 — tota
 | id | name | org / country | class | train | eval | ship | access | P | verified |
 |---|---|---|---|---|---|---|---|---|---|
 | `mitre-attack-stix` | [MITRE ATT&CK (STIX 2.1 data)](https://github.com/mitre-attack/attack-stix-data) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 5 | verified |
+| `mitre-attack-ics` | [MITRE ATT&CK for ICS (STIX 2.1 data)](https://github.com/mitre-attack/attack-stix-data) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 4 | verified |
+| `mitre-attack-mobile` | [MITRE ATT&CK for Mobile (STIX 2.1 data)](https://github.com/mitre-attack/attack-stix-data) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 4 | verified |
 | `misp-galaxy` | [MISP Galaxy clusters](https://github.com/MISP/misp-galaxy) | MISP Project (CIRCL) / LU | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `misp-taxonomies` | [MISP Taxonomies](https://github.com/MISP/misp-taxonomies) | MISP Project (CIRCL) / LU | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `mitre-atlas` | [MITRE ATLAS data](https://atlas.mitre.org/) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `mitre-cwe` | [CWE - Common Weakness Enumeration](https://cwe.mitre.org/) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `mitre-d3fend` | [MITRE D3FEND ontology](https://d3fend.mitre.org/) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
+| `mitre-emb3d` | [MITRE EMB3D (embedded device threat model)](https://emb3d.mitre.org/) | The MITRE Corporation / US | RESTRICTED | — | — | — | public_download | 3 | verified |
 | `nvd-cpe-dictionary` | [CPE Dictionary / CPE Match (NVD)](https://nvd.nist.gov/products/cpe) | NIST NVD / US | OPEN | ✅ | ✅ | ✅ | api_key | 3 | unverified |
 | `oasis-stix-taxii` | [OASIS STIX 2.1 / TAXII 2.1 specifications (+ JSON schemas)](https://www.oasis-open.org/) | OASIS Open CTI Technical Committee / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
 | `first-cvss-spec` | [CVSS v4.0 / v3.1 Specification](https://www.first.org/cvss/v4.0/specification-document) | FIRST.Org / US | OPEN | ✅ | ✅ | ✅ | public_download | 2 | partially_verified |
@@ -310,6 +321,7 @@ Sources: COMMERCIAL 11, OPEN 85, RESEARCH 21, RESTRICTED 29, UNKNOWN 48 — tota
 | `agpl-3.0-only` | OPEN | yes | yes | yes | no | HookProbe's own synthetic data; HookProbe holds the copyright and also licenses it commercially (LICENSING.md). |
 | `alienvault-otx-terms` | RESTRICTED | no | unclear | no | no | Per-source terms from the feeds research pass. |
 | `apache-2.0` | OPEN | yes | yes | yes | no |  |
+| `aptnotes-terms` | UNKNOWN | unclear | unclear | no | no | From the 2026-11-21 licence check of an operator-supplied source list. Repo has no licence; each linked vendor PDF keeps its publisher's copyright. |
 | `awid3-terms` | RESTRICTED | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
 | `bccc-cic-bell-dns-2024-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
 | `bccc-cic-ids2017-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
@@ -320,6 +332,7 @@ Sources: COMMERCIAL 11, OPEN 85, RESEARCH 21, RESTRICTED 29, UNKNOWN 48 — tota
 | `caida-anonymized-passive-traces-terms` | RESTRICTED | no | requires_agreement | no | no | Per-source terms from the academic research pass. |
 | `cc-by-4.0` | OPEN | yes | yes | yes | no | Training permitted; attribution is kept in the dataset manifest and model card. |
 | `cc-by-nc-4.0` | RESEARCH | no | unclear | no | no |  |
+| `cc-by-nc-sa-4.0` | RESEARCH | no | no | yes | yes | Non-commercial only; share-alike. |
 | `cc0-1.0` | OPEN | yes | yes | yes | no |  |
 | `certfr-avis-alertes-ioc-terms` | OPEN | yes | yes | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `ch-academic-datasets-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
@@ -345,11 +358,13 @@ Sources: COMMERCIAL 11, OPEN 85, RESEARCH 21, RESTRICTED 29, UNKNOWN 48 — tota
 | `darpa-optc-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
 | `darpa-transparent-computing-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
 | `de-bsi-certbund-csaf-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
+| `dfir-report-terms` | RESTRICTED | no | no | no | no | From the 2026-11-21 licence check of an operator-supplied source list. Footer: '(c) 2025 The DFIR Report. All Rights Reserved.' No open licence. |
 | `dgarchive-terms` | RESEARCH | requires_agreement | requires_agreement | no | no | Per-source terms from the academic research pass. |
 | `distrinet-cic-ids-2017-2018-improved-terms` | RESEARCH | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
 | `dns-threats-palau-2019-terms` | UNKNOWN | unclear | unclear | yes | no | Per-source terms from the academic research pass. |
 | `drl-1.1` | OPEN | yes | yes | yes | no | Alerts produced by these rules must keep the rule author's identification (runtime duty for Mission Control). |
 | `dshield-isc-terms` | RESEARCH | unclear | no | no | no | Per-source terms from the feeds research pass. |
+| `elastic-license-2.0` | RESTRICTED | yes | unclear | yes | no | From the 2026-11-21 licence check of an operator-supplied source list. Source-available, not OSI: no providing the software to third parties as a hosted or mana |
 | `eset-malware-ioc-terms` | OPEN | yes | yes | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `et-compromised-ips-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the feeds research pass. |
 | `et-open-terms` | OPEN | yes | unclear | yes | no | Per-source terms from the feeds research pass. |
@@ -365,10 +380,12 @@ Sources: COMMERCIAL 11, OPEN 85, RESEARCH 21, RESTRICTED 29, UNKNOWN 48 — tota
 | `google-threat-intel-virustotal-terms` | COMMERCIAL | requires_agreement | no | no | no | Per-source terms from the feeds research pass. |
 | `gpl-2.0-or-later` | OPEN | yes | unclear | yes | no | Copyleft data/code: fine for the AGPL edition and evaluation; training a model shipped under the commercial licence is unresolved. |
 | `gpl-3.0` | OPEN | yes | unclear | yes | no | As gpl-2.0-or-later. |
+| `gpl-3.0-dfir-report-rules` | OPEN | yes | unclear | yes | yes | From the 2026-11-21 licence check of an operator-supplied source list. Copyleft; the page did not show -only vs -or-later. Training not addressed. |
 | `greynoise-community-terms` | COMMERCIAL | unclear | no | no | no | Per-source terms from the feeds research pass. |
 | `hf-all-cve-records-terms` | OPEN | yes | yes | yes | no | Per-source terms from the academic research pass. |
 | `hf-cti-bench-terms` | RESEARCH | no | no | yes | no | Per-source terms from the academic research pass. |
 | `hf-ealvaradob-phishing-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
+| `inquest-yara-rules-terms` | OPEN | yes | unclear | yes | no | From the 2026-11-21 licence check of an operator-supplied source list. MIT permits use without restriction; training left 'unclear' as reported by the check, pe |
 | `int-apwg-ecx-terms` | RESTRICTED | requires_agreement | requires_agreement | no | no | Per-source terms from the regional research pass. |
 | `int-aws-activate-terms` | COMMERCIAL | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
 | `int-first-membership-terms` | RESTRICTED | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
@@ -400,6 +417,7 @@ Sources: COMMERCIAL 11, OPEN 85, RESEARCH 21, RESTRICTED 29, UNKNOWN 48 — tota
 | `mitre-attack-stix-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
 | `mitre-capec-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
 | `mitre-cwe-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
+| `mitre-emb3d-terms` | RESTRICTED | yes | unclear | requires_agreement | no | From the 2026-11-21 licence check of an operator-supplied source list. Grants use, copy and derivative works 'for internal business purposes or commercial use', |
 | `netlab360-dga-terms` | OPEN | yes | yes | yes | no | Per-source terms from the academic research pass. |
 | `nist-nsrl-rds-terms` | OPEN | yes | yes | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `nist-nvd-api2-terms` | OPEN | yes | yes | yes | no | Per-source terms from the feeds research pass. |
@@ -436,6 +454,7 @@ Sources: COMMERCIAL 11, OPEN 85, RESEARCH 21, RESTRICTED 29, UNKNOWN 48 — tota
 | `team-cymru-ip-asn-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `ton-iot-terms` | RESEARCH | requires_agreement | requires_agreement | unclear | no | Per-source terms from the academic research pass. |
 | `tranco-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
+| `trendmicro-primus-terms` | UNKNOWN | unclear | unclear | unclear | no | From the 2026-11-21 licence check of an operator-supplied source list. Gated: access conditions unread without login. FineWeb part also binds FineWeb licence +  |
 | `tu-dns-tunnelling-2023-terms` | UNKNOWN | no | unclear | no | no | Per-source terms from the academic research pass. |
 | `ubuntu-security-notices-terms` | OPEN | yes | yes | yes | yes | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `ugr16-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
@@ -446,4 +465,5 @@ Sources: COMMERCIAL 11, OPEN 85, RESEARCH 21, RESTRICTED 29, UNKNOWN 48 — tota
 | `unsw-nb15-terms` | RESEARCH | requires_agreement | requires_agreement | unclear | no | Per-source terms from the academic research pass. |
 | `uq-netflow-nids-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
 | `volexity-threat-intel-terms` | OPEN | yes | yes | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
+| `vx-underground-papers-terms` | UNKNOWN | unclear | unclear | unclear | no | From the 2026-11-21 licence check of an operator-supplied source list. |
 | `yara-forge-terms` | UNKNOWN | unclear | unclear | yes | no | Per-source terms from the feeds research pass. |

@@ -47,7 +47,7 @@ choices are in `heqkdata/windows.py`.
 
 | Path | What |
 |---|---|
-| `registry/sources.json` | 194 catalogued sources: datasets, feeds, knowledge bases, CERTs, programmes |
+| `registry/sources.json` | 205 catalogued sources: datasets, feeds, knowledge bases, CERTs, programmes |
 | `registry/licenses.json` | 118 licence decisions (`commercial_use`, `training_use`, `redistribution`, `derivatives`, share-alike) |
 | `registry/sealed.json` | holdouts the `windows` export refuses unless explicitly unsealed |
 | `registry/collections.json` | the six training collections (DNS, network, attack, malware, vulnerability, SOC reasoning) |
