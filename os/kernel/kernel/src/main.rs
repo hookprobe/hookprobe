@@ -15423,6 +15423,10 @@ impl wifiheal::Port for MetalHeal<'_> {
         kprint!(" [WIFI-HEAL] firmware reload: bring-up step {} (0 = ready), PMKID correction {:?}, BSS serve-ready={} | firmware reload {} ms (download bytes written by el0-wifi: {}; register ops in el0-wifi: {}, in-kernel: {}; power {} + probe {} + upload {} ms) + BSS start {} ms\n",
             r, arch_aarch64::cyw43::pmkid_patch(), ok, ms(t0, t1), bp().wrapping_sub(b0), rg_el0, rg_k,
             unsafe { arch_aarch64::cyw43::RELOAD_PHASE_MS[0] }, unsafe { arch_aarch64::cyw43::RELOAD_PHASE_MS[1] }, unsafe { arch_aarch64::cyw43::RELOAD_PHASE_MS[2] }, ms(t1, t2));
+        // gap-fix E5: the slowest control round trip of that reload (which request the ~150 ms outliers wait on)
+        let (sms, scmd, sname, sn) = unsafe { arch_aarch64::cyw43::CTL_SLOW };
+        let nl = sname.iter().position(|&b| b == 0).unwrap_or(sname.len());
+        kprint!(" [WIFI-HEAL] reload control requests: {} | slowest {} ms: cmd {} {}\n", sn, sms, scmd, core::str::from_utf8(&sname[..nl]).unwrap_or("?"));
         ok
     }
     fn reboot(&mut self, d: &wifiheal::Diag) {
