@@ -4286,6 +4286,23 @@ fn cm5_p10_probe() {
                                     &mut || crate::securechannel::InitiatorRandomness::from_entropy(&mut crate::entropy::MetalEntropy::new(crate::entropy::HwTrng::new())).ok(),
                                     &mut |f: &[u8]| uplink::wan_tx(&up, f));
                             }
+                            // autoheal H6 on metal (bench `swifi` image only): the fault-injection campaign once, 180 s into the
+                            // AP loop (after the trial commit), against el0-lansvc / el0-tlshost / el0-hsh — never the live
+                            // el0-wpa. The loop waits for it (the watchdog is petted inside); its result is the [P-swifi] line.
+                            #[cfg(all(feature = "swifi", feature = "mctls", feature = "cm5"))]
+                            {
+                                static mut SWIFI_DONE: bool = false;
+                                static mut SWIFI_AT: u64 = 0;
+                                if unsafe { SWIFI_AT } == 0 {
+                                    unsafe { SWIFI_AT = now() + 180 * freq };
+                                }
+                                if !unsafe { SWIFI_DONE } && now() > unsafe { SWIFI_AT } {
+                                    unsafe { SWIFI_DONE = true };
+                                    const N: u64 = 1_000;
+                                    kprint!(" [SWIFI-METAL] fault-injection campaign starting: {} injections into el0-lansvc, el0-tlshost, el0-hsh (bench image)\n", N);
+                                    let _ = superv::swifi_campaign_metal(N);
+                                }
+                            }
                             #[cfg(feature = "crashtest")]
                             if now() > crash_at && rtwdog::last_crash().is_none() { // once: the boot that reports it runs on
                                 panic!("crashtest: deliberate panic 120 s into the AP loop (bench build)");
