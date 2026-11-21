@@ -1,0 +1,1 @@
+/home/user/hookprobe/shared/wireless/dfs_capabilities.sh

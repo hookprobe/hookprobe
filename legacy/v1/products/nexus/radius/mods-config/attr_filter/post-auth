@@ -1,0 +1,11 @@
+# HookProbe FreeRADIUS - Post-Auth Attribute Filter
+# Ensures VLAN attributes are sent in Access-Accept
+# Version: 5.0.0
+
+DEFAULT
+    Tunnel-Type := ANY,
+    Tunnel-Medium-Type := ANY,
+    Tunnel-Private-Group-Id := ANY,
+    Session-Timeout := ANY,
+    Idle-Timeout := ANY,
+    Reply-Message := ANY

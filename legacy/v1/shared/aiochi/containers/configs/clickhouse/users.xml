@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<!--
+  AIOCHI ClickHouse User Configuration
+  Note: User 'aiochi' is created by container entrypoint via CLICKHOUSE_PASSWORD env var.
+  This file only extends the user with additional settings.
+-->
+<clickhouse>
+    <users>
+        <aiochi>
+            <!-- Enable full access management for DDL operations -->
+            <access_management>1</access_management>
+        </aiochi>
+
+        <!-- IDS application user for HYDRA/NAPSE containers -->
+        <!-- SECURITY: Password set via 00-create-users.sql at deploy time -->
+        <!-- SECURITY: Restricted to localhost only (CWE-284), no admin privileges (CWE-250) -->
+        <ids>
+            <networks>
+                <ip>::1</ip>
+                <ip>127.0.0.1</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <access_management>0</access_management>
+        </ids>
+    </users>
+</clickhouse>

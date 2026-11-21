@@ -1,0 +1,2591 @@
+#!/bin/bash
+#
+# wan-failover-pbr.sh - Policy-Based Routing WAN Failover for Fortress
+# Part of HookProbe Fortress - Small Business Security Gateway
+#
+# Implements mwan3-style intelligent failover using:
+#   - Multiple routing tables (one per WAN)
+#   - Firewall marks (fwmark) for traffic classification
+#   - ip rules to direct traffic to specific tables
+#   - Hysteresis to prevent route flapping
+#   - Sticky sessions (connections survive failover)
+#
+# Architecture:
+#   Table 100 (wan_primary):   Default route via primary WAN (wired)
+#   Table 200 (wan_backup):    Default route via backup WAN (LTE/modem)
+#   Main table:                Fallback routes with metrics (10=active, 100=standby)
+#
+# Multi-WAN Expansion (Future):
+#   Table 300 (wan_tertiary):  Third WAN (e.g., secondary LTE)
+#   Table 400 (wan_quaternary): Fourth WAN (e.g., satellite)
+#   Priority order: primary > backup > tertiary > quaternary
+#   Each WAN gets: routing table, fwmark, health check, failover logic
+#
+# Traffic Flow:
+#   1. New connection → Mark based on active WAN → Route via marked table
+#   2. Existing connection → Conntrack preserves mark → Same WAN
+#   3. Health check fails → Update rules → New connections use backup
+#   4. Old connections on failed WAN timeout naturally
+#
+# Usage:
+#   wan-failover-pbr.sh setup        # Initial setup (run once at boot)
+#   wan-failover-pbr.sh start        # Start monitoring daemon
+#   wan-failover-pbr.sh stop         # Stop monitoring
+#   wan-failover-pbr.sh status       # Show current status
+#   wan-failover-pbr.sh failover     # Force failover to backup
+#   wan-failover-pbr.sh failback     # Force failback to primary
+#   wan-failover-pbr.sh check        # Single health check (for cron)
+#
+# Configuration: /etc/hookprobe/wan-failover.conf
+#
+# Version: 2.0.0
+# License: AGPL-3.0
+
+set -u
+
+# ============================================================
+# Shared Library
+# ============================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source shared network library for common functions
+# Note: This script has its own get_gateway() function with additional
+# PBR-specific validation. We source lib for utility functions.
+if [ -f "$SCRIPT_DIR/lib-network.sh" ]; then
+    # shellcheck source=lib-network.sh
+    source "$SCRIPT_DIR/lib-network.sh"
+elif [ -f "/opt/hookprobe/fortress/devices/common/lib-network.sh" ]; then
+    source "/opt/hookprobe/fortress/devices/common/lib-network.sh"
+fi
+
+# ============================================================
+# Configuration
+# ============================================================
+
+CONFIG_FILE="/etc/hookprobe/wan-failover.conf"
+STATE_FILE="/run/fortress/wan-failover.state"
+PID_FILE="/run/fortress/wan-failover.pid"
+LOG_TAG="fts-wan-pbr"
+
+# Routing table IDs (must match /etc/iproute2/rt_tables)
+TABLE_PRIMARY=100
+TABLE_BACKUP=200
+TABLE_NAME_PRIMARY="wan_primary"
+TABLE_NAME_BACKUP="wan_backup"
+
+# Firewall marks
+FWMARK_PRIMARY=0x100
+FWMARK_BACKUP=0x200
+FWMARK_MASK=0xf00
+
+# Route metrics - normally fixed, but SLA AI can demote
+# Kernel uses lowest metric that exists in routing table
+#
+# Route States:
+#   HEALTHY: Normal metric (10, 20, 30, 40) - route added
+#   DEGRADED: Demoted metric (110, 120, 130, 140) - SLA AI predicted issues
+#   FAILED: Route removed entirely - ping check failed
+#
+METRIC_PRIMARY=10    # WAN1 - normal metric
+METRIC_BACKUP=20     # WAN2 - normal metric
+METRIC_TERTIARY=30   # WAN3 - normal metric (future)
+METRIC_QUATERNARY=40 # WAN4 - normal metric (future)
+
+# Demoted metrics - used when SLA AI predicts degradation
+# Route stays but at higher metric so healthy WANs are preferred
+METRIC_DEMOTED_OFFSET=100  # Add to normal metric when demoted
+METRIC_PRIMARY_DEMOTED=110
+METRIC_BACKUP_DEMOTED=120
+
+# Reserved for multi-WAN expansion (3-4 WANs)
+# TABLE_TERTIARY=300
+# TABLE_QUATERNARY=400
+# FWMARK_TERTIARY=0x300
+# FWMARK_QUATERNARY=0x400
+
+# Default health check settings (optimized for fast failover)
+PING_TARGETS="1.1.1.1 8.8.8.8 9.9.9.9"
+PING_COUNT=1        # Single ping per target (faster)
+PING_TIMEOUT=2      # 2 second timeout per ping
+CHECK_INTERVAL=3    # Check every 3 seconds
+
+# Hysteresis settings (prevent flapping)
+# Note: Config file may use FAIL_THRESHOLD/RECOVER_THRESHOLD - we map them below
+UP_THRESHOLD=3      # Require X consecutive successes to mark UP
+DOWN_THRESHOLD=2    # Require X consecutive failures to mark DOWN (faster failover)
+# With these settings, failover happens in: 2 failures × 3s interval = 6-9 seconds
+
+# DNS failover settings
+DNS_FAILOVER_ENABLED="${DNS_FAILOVER_ENABLED:-true}"
+PRIMARY_DNS="${PRIMARY_DNS:-}"
+BACKUP_DNS="${BACKUP_DNS:-}"
+
+# SLA AI Integration
+# shared/slaai writes recommendations to this file for predictive failover
+SLAAI_RECOMMENDATION_FILE="/run/fortress/slaai-recommendation.json"
+SLAAI_ENABLED="${SLAAI_ENABLED:-true}"
+SLAAI_MIN_CONFIDENCE="${SLAAI_MIN_CONFIDENCE:-0.7}"  # Minimum confidence to act on prediction
+
+# ============================================================
+# Logging
+# ============================================================
+
+log_info()  { logger -t "$LOG_TAG" "$1"; echo "[INFO] $1"; }
+log_warn()  { logger -t "$LOG_TAG" -p warning "$1"; echo "[WARN] $1"; }
+log_error() { logger -t "$LOG_TAG" -p err "$1"; echo "[ERROR] $1" >&2; }
+log_debug() { [ "${DEBUG:-0}" = "1" ] && logger -t "$LOG_TAG" -p debug "$1"; }
+
+# ============================================================
+# Load Configuration
+# ============================================================
+
+load_config() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        log_error "Configuration file not found: $CONFIG_FILE"
+        return 1
+    fi
+
+    # shellcheck source=/dev/null
+    . "$CONFIG_FILE"
+
+    # Validate required settings
+    if [ -z "${PRIMARY_IFACE:-}" ] || [ -z "${BACKUP_IFACE:-}" ]; then
+        log_error "PRIMARY_IFACE and BACKUP_IFACE must be set in $CONFIG_FILE"
+        return 1
+    fi
+
+    # Set defaults
+    PRIMARY_GATEWAY="${PRIMARY_GATEWAY:-}"
+    BACKUP_GATEWAY="${BACKUP_GATEWAY:-}"
+    PING_TARGETS="${PING_TARGETS:-${HEALTH_TARGETS:-1.1.1.1 8.8.8.8 9.9.9.9}}"
+    CHECK_INTERVAL="${CHECK_INTERVAL:-5}"
+
+    # Map config file variable names (FAIL_THRESHOLD/RECOVER_THRESHOLD) to script names
+    # This maintains backward compatibility with existing config files
+    UP_THRESHOLD="${UP_THRESHOLD:-${RECOVER_THRESHOLD:-3}}"
+    DOWN_THRESHOLD="${DOWN_THRESHOLD:-${FAIL_THRESHOLD:-3}}"
+
+    # DNS failover settings
+    DNS_FAILOVER_ENABLED="${DNS_FAILOVER_ENABLED:-true}"
+    PRIMARY_DNS="${PRIMARY_DNS:-}"
+    BACKUP_DNS="${BACKUP_DNS:-}"
+
+    return 0
+}
+
+# ============================================================
+# Gateway Discovery
+# ============================================================
+
+# Validate IPv4 address format and octet ranges (security: prevents command injection)
+is_valid_ipv4() {
+    local ip="$1"
+    # Quick format check - only allow digits and dots
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    # Validate each octet is in range 0-255
+    local IFS='.'
+    read -r o1 o2 o3 o4 <<< "$ip"
+    ((o1 >= 0 && o1 <= 255)) || return 1
+    ((o2 >= 0 && o2 <= 255)) || return 1
+    ((o3 >= 0 && o3 <= 255)) || return 1
+    ((o4 >= 0 && o4 <= 255)) || return 1
+    return 0
+}
+
+# Validate that a gateway actually provides internet connectivity
+# Returns 0 if gateway provides real internet access, 1 otherwise
+# CRITICAL: Don't add gateway to PBR if this fails - it will break routing
+validate_gateway_connectivity() {
+    local iface="$1"
+    local gateway="$2"
+    local test_target="${3:-1.1.1.1}"
+
+    [ -z "$iface" ] || [ -z "$gateway" ] && return 1
+
+    # Method 1: Check NetworkManager connectivity status (most reliable)
+    if command -v nmcli &>/dev/null; then
+        local connectivity
+        connectivity=$(nmcli -t -f GENERAL.IP4-CONNECTIVITY device show "$iface" 2>/dev/null | cut -d: -f2)
+        # 4 = full, 3 = limited, 2 = portal, 1 = none
+        if [ "$connectivity" = "4" ]; then
+            log_debug "Gateway $gateway validated: NM reports full connectivity"
+            return 0
+        elif [ "$connectivity" = "3" ]; then
+            log_debug "Gateway $gateway has LIMITED connectivity - will validate further"
+        fi
+    fi
+
+    # Method 2: Test actual internet connectivity through this gateway via a
+    # TEMPORARY host route. Required because WAN NICs use dhcp4-overrides
+    # use-routes:false — DHCP assigns an IP but installs NO default route, and
+    # we only add the default AFTER validation passes. Without a temp route,
+    # `ping -I $iface $test_target` has no route to the target and always
+    # fails, so the primary could never recover (circular deadlock: no
+    # internet without a route, no route without passing validation).
+    if is_valid_ipv4 "$gateway"; then
+        local probe_added=0
+        if ip route add "${test_target}/32" via "$gateway" dev "$iface" 2>/dev/null; then
+            probe_added=1
+        fi
+        local reached=1
+        if ping -c 2 -W 3 -I "$iface" "$test_target" &>/dev/null; then
+            reached=0
+        fi
+        [ "$probe_added" = 1 ] && ip route del "${test_target}/32" via "$gateway" dev "$iface" 2>/dev/null
+        if [ "$reached" = 0 ]; then
+            log_debug "Gateway $gateway validated: reached $test_target via temp route through $iface"
+            return 0
+        fi
+    fi
+
+    # Method 3: Try HTTP check (catches captive portals)
+    if command -v curl &>/dev/null; then
+        if curl -s -m 5 --interface "$iface" -o /dev/null -w "%{http_code}" "http://httpbin.org/ip" 2>/dev/null | grep -q "200"; then
+            log_debug "Gateway $gateway validated: HTTP check passed"
+            return 0
+        fi
+    fi
+
+    log_warn "Gateway $gateway on $iface FAILED connectivity validation"
+    return 1
+}
+
+# Get gateway for an interface - DEFENSIVE VERSION
+# Only returns gateway if:
+#   1. Explicitly configured in config file, OR
+#   2. Detected from existing routes/NM AND validated for connectivity
+#
+# This prevents pushing non-working gateways into PBR which breaks routing
+get_gateway() {
+    local iface="$1"
+    local validate="${2:-true}"  # Set to "false" to skip validation
+    local gw
+
+    # Method 1: Check if gateway is explicitly configured (highest priority)
+    # If user set PRIMARY_GATEWAY or BACKUP_GATEWAY in config, trust it
+    if [ "$iface" = "$PRIMARY_IFACE" ] && [ -n "${CONFIGURED_PRIMARY_GATEWAY:-}" ]; then
+        echo "$CONFIGURED_PRIMARY_GATEWAY"
+        return 0
+    fi
+    if [ "$iface" = "$BACKUP_IFACE" ] && [ -n "${CONFIGURED_BACKUP_GATEWAY:-}" ]; then
+        echo "$CONFIGURED_BACKUP_GATEWAY"
+        return 0
+    fi
+
+    # Method 2: Check existing default routes for this interface
+    # This is the most reliable - it's what the system is actually using
+    gw=$(ip route show default 2>/dev/null | grep "dev $iface" | awk '{print $3}' | head -1)
+    if [ -n "$gw" ] && is_valid_ipv4 "$gw"; then
+        if [ "$validate" = "true" ]; then
+            if validate_gateway_connectivity "$iface" "$gw"; then
+                echo "$gw"
+                return 0
+            else
+                log_warn "Gateway $gw from routes failed validation - not using"
+            fi
+        else
+            echo "$gw"
+            return 0
+        fi
+    fi
+
+    # Method 3: NetworkManager DHCP routers option (most reliable for DHCP)
+    # This gets the actual gateway from DHCP lease, even when:
+    #   - ipv4.never-default=yes is set (no default route added)
+    #   - ipv4.ignore-auto-routes=yes is set
+    # The DHCP4.OPTION routers field contains the real gateway from DHCP server
+    if command -v nmcli &>/dev/null; then
+        # First try DHCP routers option - this is the ACTUAL gateway from DHCP server
+        # NOTE: -t (terse mode) does NOT work with DHCP4.OPTION fields - outputs nothing!
+        # Must use non-terse mode and parse with grep/awk
+        # Exclude 'requested_routers' which is a different field (DHCP option request, not the actual value)
+        local dhcp_output
+        dhcp_output=$(nmcli -f DHCP4.OPTION device show "$iface" 2>/dev/null)
+        gw=$(echo "$dhcp_output" | grep "routers = " | grep -v "requested" | awk '{print $NF}')
+        if [ -n "$gw" ] && is_valid_ipv4 "$gw"; then
+            if [ "$validate" = "true" ]; then
+                if validate_gateway_connectivity "$iface" "$gw"; then
+                    log_debug "Gateway $gw from DHCP routers option validated"
+                    echo "$gw"
+                    return 0
+                else
+                    log_warn "Gateway $gw from DHCP routers option failed validation - trying fallbacks"
+                fi
+            else
+                echo "$gw"
+                return 0
+            fi
+        fi
+
+        # Fallback: IP4.GATEWAY (may differ from DHCP routers if statically configured)
+        gw=$(nmcli -t -f IP4.GATEWAY device show "$iface" 2>/dev/null | cut -d: -f2 | grep -v '^$' | head -1)
+        if [ -n "$gw" ] && [ "$gw" != "--" ] && is_valid_ipv4 "$gw"; then
+            if [ "$validate" = "true" ]; then
+                if validate_gateway_connectivity "$iface" "$gw"; then
+                    echo "$gw"
+                    return 0
+                else
+                    log_warn "Gateway $gw from IP4.GATEWAY failed validation - not using"
+                fi
+            else
+                echo "$gw"
+                return 0
+            fi
+        fi
+    fi
+
+    # Method 4: For LTE/WWAN interfaces, check ModemManager
+    # LTE gateways are more reliable since carrier provides them
+    case "$iface" in
+        wwan*|usb*|wwp*|cdc*|mbim*|qmi*|ww*|enp*s*u*)
+            if command -v mmcli &>/dev/null; then
+                local modem_idx
+                modem_idx=$(mmcli -L 2>/dev/null | grep -oP 'Modem/\K\d+' | head -1)
+                if [ -n "$modem_idx" ]; then
+                    local bearer_idx
+                    bearer_idx=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP 'Bearer/\K\d+' | head -1)
+                    if [ -n "$bearer_idx" ]; then
+                        gw=$(mmcli -b "$bearer_idx" 2>/dev/null | grep -oP 'gateway:\s*\K[\d.]+')
+                        if [ -n "$gw" ] && is_valid_ipv4 "$gw"; then
+                            # LTE gateways are generally reliable, but validate if requested
+                            if [ "$validate" = "true" ]; then
+                                if validate_gateway_connectivity "$iface" "$gw"; then
+                                    echo "$gw"
+                                    return 0
+                                fi
+                            else
+                                echo "$gw"
+                                return 0
+                            fi
+                        fi
+                    fi
+                fi
+            fi
+
+            # For LTE: Calculate gateway from point-to-point /30 or /31 network
+            local lte_info
+            lte_info=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d./]+')
+            if [ -n "$lte_info" ]; then
+                local lte_ip lte_mask
+                lte_ip=$(echo "$lte_info" | cut -d/ -f1)
+                lte_mask=$(echo "$lte_info" | cut -d/ -f2)
+
+                # For /30 subnet: calculate the other usable IP
+                if [ "$lte_mask" = "30" ]; then
+                    local last_octet base_ip other_ip
+                    last_octet=$(echo "$lte_ip" | awk -F. '{print $4}')
+                    base_ip=$(echo "$lte_ip" | awk -F. '{print $1"."$2"."$3"."}')
+                    local block_start=$((last_octet / 4 * 4))
+                    local offset=$((last_octet - block_start))
+                    if [ $offset -eq 1 ]; then
+                        other_ip="${base_ip}$((block_start + 2))"
+                    elif [ $offset -eq 2 ]; then
+                        other_ip="${base_ip}$((block_start + 1))"
+                    fi
+                    if [ -n "$other_ip" ] && is_valid_ipv4 "$other_ip"; then
+                        echo "$other_ip"
+                        return 0
+                    fi
+                fi
+
+                # For /31 point-to-point (RFC 3021): the other IP is gateway
+                if [ "$lte_mask" = "31" ]; then
+                    local last_octet base_ip candidate
+                    last_octet=$(echo "$lte_ip" | awk -F. '{print $4}')
+                    base_ip=$(echo "$lte_ip" | awk -F. '{print $1"."$2"."$3"."}')
+                    if [ $((last_octet % 2)) -eq 0 ]; then
+                        candidate="${base_ip}$((last_octet + 1))"
+                    else
+                        candidate="${base_ip}$((last_octet - 1))"
+                    fi
+                    if is_valid_ipv4 "$candidate"; then
+                        echo "$candidate"
+                        return 0
+                    fi
+                fi
+            fi
+            ;;
+    esac
+
+    # NO AUTO-PROBING of .1, .254, etc. for wired interfaces
+    # This was causing problems by detecting gateways that don't actually route traffic
+    # Let NetworkManager handle gateway discovery for wired interfaces
+
+    log_debug "No validated gateway found for $iface - letting NetworkManager handle routing"
+    return 1
+}
+
+discover_gateways() {
+    # Discover gateways for both interfaces
+    # DEFENSIVE: Only use gateways that have been validated for connectivity
+    # If validation fails, DON'T push gateway to PBR - let NetworkManager handle it
+
+    local old_primary="${PRIMARY_GATEWAY:-}"
+    local old_backup="${BACKUP_GATEWAY:-}"
+
+    # Save user-configured gateways for reference (from config file)
+    CONFIGURED_PRIMARY_GATEWAY="${PRIMARY_GATEWAY:-}"
+    CONFIGURED_BACKUP_GATEWAY="${BACKUP_GATEWAY:-}"
+
+    # Try to discover primary gateway (with validation)
+    local new_primary
+    new_primary=$(get_gateway "$PRIMARY_IFACE" "true")
+    if [ -n "$new_primary" ]; then
+        PRIMARY_GATEWAY="$new_primary"
+        if [ "$new_primary" != "$old_primary" ] && [ -n "$old_primary" ]; then
+            log_info "Primary gateway changed: $old_primary -> $new_primary (validated)"
+        else
+            log_info "Primary gateway: $new_primary (validated)"
+        fi
+    else
+        # Gateway discovery/validation failed
+        # IMPORTANT: Clear PRIMARY_GATEWAY so we don't add broken routes to PBR
+        PRIMARY_GATEWAY=""
+        if [ -n "$old_primary" ]; then
+            log_warn "Primary gateway $old_primary failed validation - NOT adding to PBR"
+            log_warn "NetworkManager will handle routing for $PRIMARY_IFACE"
+        else
+            log_info "No validated gateway for $PRIMARY_IFACE - NetworkManager handles routing"
+        fi
+    fi
+
+    # Try to discover backup gateway (with validation)
+    local new_backup
+    new_backup=$(get_gateway "$BACKUP_IFACE" "true")
+    if [ -n "$new_backup" ]; then
+        BACKUP_GATEWAY="$new_backup"
+        if [ "$new_backup" != "$old_backup" ] && [ -n "$old_backup" ]; then
+            log_info "Backup gateway changed: $old_backup -> $new_backup (validated)"
+        else
+            log_info "Backup gateway: $new_backup (validated)"
+        fi
+    else
+        # For backup (LTE), we're more lenient - it might just be disconnected
+        BACKUP_GATEWAY=""
+        log_debug "No validated gateway for $BACKUP_IFACE (may not be connected)"
+    fi
+
+    # Summary log
+    if [ -z "$PRIMARY_GATEWAY" ] && [ -z "$BACKUP_GATEWAY" ]; then
+        log_warn "No validated gateways available - PBR failover disabled"
+        log_warn "System will use NetworkManager's default routing"
+    elif [ -z "$PRIMARY_GATEWAY" ]; then
+        log_info "Only backup WAN ($BACKUP_IFACE) has validated gateway"
+    elif [ -z "$BACKUP_GATEWAY" ]; then
+        log_info "Only primary WAN ($PRIMARY_IFACE) has validated gateway"
+    fi
+}
+
+# ============================================================
+# Routing Table Setup
+# ============================================================
+
+setup_rt_tables() {
+    log_info "Setting up routing tables..."
+
+    # Add table names to /etc/iproute2/rt_tables if not present
+    if ! grep -q "^$TABLE_PRIMARY" /etc/iproute2/rt_tables 2>/dev/null; then
+        echo "$TABLE_PRIMARY $TABLE_NAME_PRIMARY" >> /etc/iproute2/rt_tables
+        log_info "Added table $TABLE_PRIMARY ($TABLE_NAME_PRIMARY)"
+    fi
+
+    if ! grep -q "^$TABLE_BACKUP" /etc/iproute2/rt_tables 2>/dev/null; then
+        echo "$TABLE_BACKUP $TABLE_NAME_BACKUP" >> /etc/iproute2/rt_tables
+        log_info "Added table $TABLE_BACKUP ($TABLE_NAME_BACKUP)"
+    fi
+}
+
+# Prevent NetworkManager from adding routes on WAN interfaces
+# This is critical - NM adds routes that override our PBR routes
+# We configure connections to never add default routes or auto-routes
+# NOTE: LTE/cellular interfaces are typically managed by ModemManager, not NM
+configure_networkmanager_no_default_route() {
+    log_info "Configuring NetworkManager to not add routes on WAN interfaces..."
+
+    # Skip if NetworkManager is not installed
+    if ! command -v nmcli &>/dev/null; then
+        log_debug "NetworkManager not installed, skipping"
+        return 0
+    fi
+
+    # For each WAN interface, find its connection and configure it
+    for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
+        # Check if this is a cellular/LTE interface (managed by ModemManager)
+        local is_cellular=false
+        case "$iface" in
+            wwan*|usb*|wwp*|cdc*|mbim*|qmi*)
+                is_cellular=true
+                ;;
+        esac
+
+        # Find the connection name for this interface
+        local conn_name
+        conn_name=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | grep ":${iface}$" | cut -d: -f1 | head -1)
+
+        if [ -z "$conn_name" ]; then
+            # Try inactive connections too
+            conn_name=$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${iface}$" | cut -d: -f1 | head -1)
+        fi
+
+        if [ -n "$conn_name" ]; then
+            log_info "Configuring connection '$conn_name' ($iface) to not add routes..."
+
+            # Prevent this connection from becoming the default gateway
+            nmcli connection modify "$conn_name" ipv4.never-default yes 2>/dev/null || true
+
+            # Prevent DHCP-provided routes (classless static routes) from being added
+            nmcli connection modify "$conn_name" ipv4.ignore-auto-routes yes 2>/dev/null || true
+
+            # Same for IPv6
+            nmcli connection modify "$conn_name" ipv6.never-default yes 2>/dev/null || true
+            nmcli connection modify "$conn_name" ipv6.ignore-auto-routes yes 2>/dev/null || true
+
+            # Reapply the connection to take effect immediately
+            nmcli connection up "$conn_name" 2>/dev/null || true
+
+            log_info "$iface ($conn_name): never-default=yes, ignore-auto-routes=yes"
+        else
+            # For cellular interfaces, no NM connection is expected (ModemManager handles it)
+            if [ "$is_cellular" = "true" ]; then
+                log_debug "$iface: No NM connection (expected - managed by ModemManager)"
+            else
+                log_warn "No NetworkManager connection found for $iface"
+            fi
+        fi
+    done
+
+    log_info "NetworkManager route suppression configured"
+}
+
+# Configure netplan to not add routes on WAN interfaces (Ubuntu/Debian with netplan)
+# NOTE: This only works for DHCP-based configs. For static routes defined in netplan,
+# we must either modify the existing config or rely on cleanup_stray_routes()
+configure_netplan_no_routes() {
+    log_info "Checking for netplan configuration..."
+
+    # Skip if netplan is not installed
+    if ! command -v netplan &>/dev/null; then
+        log_debug "Netplan not installed, skipping"
+        return 0
+    fi
+
+    # Check existing netplan files for static routes on our WAN interfaces
+    # If static routes exist, warn and skip - we can't override those with dhcp4-overrides
+    local has_static_routes=false
+    for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
+        if grep -r "routes:" /etc/netplan/*.yaml 2>/dev/null | grep -q "$iface" || \
+           grep -rA5 "$iface:" /etc/netplan/*.yaml 2>/dev/null | grep -q "to:.*default"; then
+            log_warn "Found static route for $iface in netplan - cannot override with dhcp4-overrides"
+            log_warn "To prevent automatic routes, remove the 'routes:' section from your netplan config"
+            log_warn "PBR failover will manage routes via cleanup_stray_routes() instead"
+            has_static_routes=true
+        fi
+    done
+
+    if [ "$has_static_routes" = "true" ]; then
+        log_info "Skipping netplan dhcp4-overrides (static routes detected)"
+        return 0
+    fi
+
+    # Check if interfaces use DHCP in netplan
+    local uses_dhcp=false
+    for iface in "$PRIMARY_IFACE" "$BACKUP_IFACE"; do
+        if grep -rA5 "$iface:" /etc/netplan/*.yaml 2>/dev/null | grep -q "dhcp4: true"; then
+            uses_dhcp=true
+            break
+        fi
+    done
+
+    if [ "$uses_dhcp" = "false" ]; then
+        log_debug "No DHCP-based WAN interfaces in netplan, skipping dhcp4-overrides"
+        return 0
+    fi
+
+    local netplan_dir="/etc/netplan"
+    local netplan_file="${netplan_dir}/99-fortress-wan-no-routes.yaml"
+
+    # Create netplan override to prevent DHCP WAN interfaces from adding routes
+    mkdir -p "$netplan_dir"
+
+    cat > "$netplan_file" << EOF
+# HookProbe Fortress - WAN interfaces managed by PBR failover
+# Generated: $(date -Iseconds)
+# This prevents DHCP WAN interfaces from adding default routes
+# NOTE: Only applies to DHCP configs, not static routes
+network:
+  version: 2
+  ethernets:
+    ${PRIMARY_IFACE}:
+      dhcp4-overrides:
+        use-routes: false
+        use-dns: false
+    ${BACKUP_IFACE}:
+      dhcp4-overrides:
+        use-routes: false
+        use-dns: false
+EOF
+
+    chmod 600 "$netplan_file"
+
+    # Apply netplan changes
+    if netplan apply 2>/dev/null; then
+        log_info "Netplan configured to not add routes on DHCP WAN interfaces"
+    else
+        log_warn "Failed to apply netplan configuration"
+    fi
+}
+
+# Configure ModemManager to not add default routes from carrier DHCP
+# This prevents the LTE carrier from pushing routes that interfere with PBR
+configure_modemmanager_no_routes() {
+    log_info "Configuring ModemManager to not add carrier routes..."
+
+    # Skip if ModemManager is not installed
+    if ! command -v mmcli &>/dev/null; then
+        log_debug "ModemManager not installed, skipping"
+        return 0
+    fi
+
+    # Find the modem
+    local modem_idx
+    modem_idx=$(mmcli -L 2>/dev/null | grep -oP 'Modem/\K\d+' | head -1)
+
+    if [ -z "$modem_idx" ]; then
+        log_debug "No modem found"
+        return 0
+    fi
+
+    # Check if there's an active bearer
+    local bearer_idx
+    bearer_idx=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP 'Bearer/\K\d+' | head -1)
+
+    if [ -n "$bearer_idx" ]; then
+        log_debug "Found bearer $bearer_idx on modem $modem_idx"
+        # Note: ModemManager doesn't directly support disabling routes,
+        # but we handle this by cleaning up routes in cleanup_stray_routes()
+    fi
+
+    # For NetworkManager-managed modems, configure the connection to not add routes
+    # This catches cases where NM is managing the cellular connection
+    local wwan_conn
+    for iface in "${BACKUP_IFACE:-wwan0}"; do
+        # Find NM connection for this interface (if any)
+        wwan_conn=$(nmcli -t -f NAME,DEVICE connection show 2>/dev/null | grep ":${iface}$" | cut -d: -f1 | head -1)
+        if [ -n "$wwan_conn" ]; then
+            log_info "Configuring NM connection '$wwan_conn' to not add default route"
+            nmcli connection modify "$wwan_conn" ipv4.never-default yes 2>/dev/null || true
+            nmcli connection modify "$wwan_conn" ipv6.never-default yes 2>/dev/null || true
+            nmcli connection modify "$wwan_conn" ipv4.route-metric 9999 2>/dev/null || true
+        fi
+    done
+
+    log_info "ModemManager/NM route suppression configured"
+}
+
+# Remove any stray default routes not managed by us
+# Called before updating routes to ensure clean state
+# This handles routes added by:
+#   - NetworkManager (no metric, or unexpected metrics)
+#   - ModemManager/carrier DHCP (proto static, often metric 200)
+#   - dhclient or other DHCP clients
+cleanup_stray_routes() {
+    # Clean up routes not managed by us - but ONLY if they would cause routing issues
+    #
+    # We use metrics 10 (active) and 100 (standby) exclusively.
+    # Stray routes are those that:
+    #   1. Have no metric (highest priority, overrides ours)
+    #   2. Have proto static (carrier-pushed via DHCP)
+    #   3. Have metric < 10 (would take precedence over active)
+    #
+    # IMPORTANT: Routes with metric > 100 are IGNORED - they don't affect us
+    # This prevents constant fighting with NetworkManager/ModemManager.
+
+    local dominated_by_stray=false
+    local route_info
+    local needs_cleanup=false
+
+    route_info=$(ip route show default 2>/dev/null)
+
+    # Only care about routes that would DOMINATE our routing:
+    # 1. Routes without metric (implicit metric 0, highest priority)
+    if echo "$route_info" | grep "^default" | grep -v "metric" | grep -qv "proto static"; then
+        # Has default route without metric AND without proto static
+        # This is typically a manually added route or broken NM config
+        needs_cleanup=true
+        log_debug "Found default route without metric"
+    fi
+
+    # 2. Routes with proto static AND no metric (carrier DHCP - highest priority)
+    if echo "$route_info" | grep "proto static" | grep -qv "metric"; then
+        needs_cleanup=true
+        log_debug "Found carrier route without metric"
+    fi
+
+    # 3. Routes with metric LESS than 10 (would override our active route)
+    if echo "$route_info" | grep -E "metric [0-9]( |$)" | grep -q .; then
+        needs_cleanup=true
+        log_debug "Found route with metric < 10"
+    fi
+
+    # Routes with higher metrics don't affect active routing, but we'll clean
+    # them up in remove_duplicate_routes() after our routes are established
+
+    if [ "$needs_cleanup" = "true" ]; then
+        # Rate limit: only cleanup once per 30 seconds
+        local now cleanup_file="/run/fortress/last_route_cleanup"
+        now=$(date +%s)
+        if [ -f "$cleanup_file" ]; then
+            local last_cleanup
+            last_cleanup=$(cat "$cleanup_file" 2>/dev/null || echo 0)
+            if [ $((now - last_cleanup)) -lt 30 ]; then
+                log_debug "Route cleanup rate-limited (last: ${last_cleanup})"
+                return 0
+            fi
+        fi
+        echo "$now" > "$cleanup_file"
+
+        log_info "Cleaning up dominating stray routes..."
+
+        # Remove proto static routes (carrier DHCP) - these are problematic
+        while ip route show default 2>/dev/null | grep "proto static" | grep -qv "metric"; do
+            local proto_route
+            proto_route=$(ip route show default 2>/dev/null | grep "proto static" | grep -v "metric" | head -1)
+            [ -z "$proto_route" ] && break
+            log_info "Removing carrier route: $proto_route"
+            ip route del $proto_route 2>/dev/null || break
+        done
+
+        # Remove routes without metric (excluding proto static which we handled)
+        local tries=5
+        while [ $tries -gt 0 ]; do
+            local bad_route
+            bad_route=$(ip route show default 2>/dev/null | grep "^default" | grep -v "metric" | grep -v "proto static" | head -1)
+            [ -z "$bad_route" ] && break
+            log_info "Removing stray route without metric: $bad_route"
+            ip route del $bad_route 2>/dev/null || break
+            tries=$((tries - 1))
+        done
+
+        # Ensure our routes exist with correct metrics
+        ensure_main_table_routes
+    fi
+}
+
+# Remove duplicate default routes on the same interface
+# Called after our routes are established to clean up NM/DHCP duplicates
+# This prevents route table clutter while avoiding the "fighting NM" problem
+remove_duplicate_routes() {
+    local cleaned=0
+
+    # For primary interface: remove routes with metrics other than our target
+    if [ -n "${PRIMARY_IFACE:-}" ] && [ -n "${PRIMARY_GATEWAY:-}" ]; then
+        # Check if we have our route (metric 10 or 110)
+        if ip route show default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" 2>/dev/null | \
+           grep -qE "metric ($METRIC_PRIMARY|$METRIC_PRIMARY_DEMOTED)"; then
+            # Remove any other routes via this interface/gateway with different metrics
+            local other_routes
+            other_routes=$(ip route show default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" 2>/dev/null | \
+                          grep -vE "metric ($METRIC_PRIMARY|$METRIC_PRIMARY_DEMOTED)( |$)")
+            while read -r route; do
+                [ -z "$route" ] && continue
+                log_info "Removing duplicate route: $route"
+                ip route del $route 2>/dev/null && cleaned=$((cleaned + 1))
+            done <<< "$other_routes"
+        fi
+    fi
+
+    # For backup interface: DO NOT touch - let NM/carrier manage it
+    # We only manage primary interface routes
+
+    if [ $cleaned -gt 0 ]; then
+        log_info "Removed $cleaned duplicate route(s)"
+    fi
+}
+
+setup_routing_tables() {
+    log_info "Configuring routing tables..."
+
+    discover_gateways
+
+    # Flush existing table routes
+    ip route flush table $TABLE_PRIMARY 2>/dev/null || true
+    ip route flush table $TABLE_BACKUP 2>/dev/null || true
+
+    # Primary table (wired)
+    if [ -n "$PRIMARY_GATEWAY" ]; then
+        # Add default route via primary
+        ip route add default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" table $TABLE_PRIMARY
+        # Copy local routes (for source address selection)
+        ip route show dev "$PRIMARY_IFACE" scope link 2>/dev/null | while read -r route; do
+            ip route add $route dev "$PRIMARY_IFACE" table $TABLE_PRIMARY 2>/dev/null || true
+        done
+        log_info "Primary table configured: default via $PRIMARY_GATEWAY dev $PRIMARY_IFACE"
+    fi
+
+    # Backup table (modem)
+    if [ -n "$BACKUP_GATEWAY" ]; then
+        ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" table $TABLE_BACKUP
+        ip route show dev "$BACKUP_IFACE" scope link 2>/dev/null | while read -r route; do
+            ip route add $route dev "$BACKUP_IFACE" table $TABLE_BACKUP 2>/dev/null || true
+        done
+        log_info "Backup table configured: default via $BACKUP_GATEWAY dev $BACKUP_IFACE"
+    fi
+
+    # CRITICAL: Add LAN/local routes to both WAN tables
+    # Without these, reply packets marked with fwmark get routed via WAN default
+    # instead of being delivered locally to LAN clients (FTS, FTS, etc.)
+    add_local_routes_to_pbr_tables
+
+    # IMPORTANT: Keep a default route in main table as fallback
+    # This ensures connectivity even if PBR marking fails
+    update_main_table_route
+}
+
+# Add local routes (LAN, VLAN, container networks) to PBR tables
+# This ensures reply packets can be delivered to local clients even when
+# they are marked with a fwmark for policy-based routing
+add_local_routes_to_pbr_tables() {
+    log_info "Adding local routes to PBR tables..."
+
+    # Get all local routes (scope link) that are NOT on WAN interfaces
+    local local_routes
+    local_routes=$(ip route show scope link 2>/dev/null | grep -v "dev $PRIMARY_IFACE" | grep -v "dev $BACKUP_IFACE")
+
+    while read -r route; do
+        [ -z "$route" ] && continue
+        # Add to primary table
+        ip route add $route table $TABLE_PRIMARY 2>/dev/null || true
+        # Add to backup table
+        ip route add $route table $TABLE_BACKUP 2>/dev/null || true
+        log_debug "Added local route to PBR tables: $route"
+    done <<< "$local_routes"
+
+    log_info "Local routes added to PBR tables"
+}
+
+ensure_main_table_routes() {
+    # FIXED METRIC route check - ensure routes exist for healthy interfaces
+    # Each WAN has a FIXED metric:
+    #   - Primary: METRIC_PRIMARY (10) or METRIC_PRIMARY_DEMOTED (110) if SLA AI demoted
+    #   - Backup:  METRIC_BACKUP (20) or METRIC_BACKUP_DEMOTED (120) if SLA AI demoted
+    #
+    # Route removal policy:
+    #   - Primary (physical WAN): Removed when unhealthy - forces traffic to backup
+    #   - Backup (LTE/modem): NEVER removed - always kept as last-resort failsafe
+    #
+    # The LTE route is preserved even if health checks fail because:
+    #   1. LTE modems can have intermittent connectivity that still works
+    #   2. Health check failures don't mean the modem is completely dead
+    #   3. Having a route to a "degraded" modem is better than no route at all
+    #   4. When primary is healthy, traffic uses primary anyway (lower metric)
+
+    local route_info
+    route_info=$(ip route show default 2>/dev/null)
+
+    # Count current default routes (needed for last-resort logic)
+    local route_count
+    route_count=$(echo "$route_info" | grep -c "^default" 2>/dev/null || echo "0")
+
+    # Primary WAN - check if route exists with correct metric
+    if [ -n "${PRIMARY_GATEWAY:-}" ] && [ -n "${PRIMARY_IFACE:-}" ]; then
+        # Determine target metric based on demoted state
+        local primary_target_metric=$METRIC_PRIMARY
+        local primary_wrong_metric=$METRIC_PRIMARY_DEMOTED
+        if [ "${PRIMARY_DEMOTED:-false}" = "true" ]; then
+            primary_target_metric=$METRIC_PRIMARY_DEMOTED
+            primary_wrong_metric=$METRIC_PRIMARY
+        fi
+
+        local primary_route_ok=false
+        if echo "$route_info" | grep -q "via $PRIMARY_GATEWAY dev $PRIMARY_IFACE.*metric $primary_target_metric"; then
+            primary_route_ok=true
+        fi
+
+        if [ "${PRIMARY_STATUS:-unknown}" = "up" ]; then
+            # Should have route - add if missing or wrong metric
+            if [ "$primary_route_ok" = "false" ]; then
+                ip route replace default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $primary_target_metric 2>/dev/null || true
+                # Remove route with wrong metric if it exists
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $primary_wrong_metric 2>/dev/null || true
+                log_info "Added primary route: via $PRIMARY_GATEWAY metric $primary_target_metric"
+            fi
+        else
+            # Primary is down - only remove if backup is up (don't leave no routes)
+            if [ "${BACKUP_STATUS:-unknown}" = "up" ]; then
+                log_info "Removing ALL default routes via $PRIMARY_IFACE (internet unreachable)"
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
+                while ip route del default dev "$PRIMARY_IFACE" 2>/dev/null; do
+                    log_debug "Removed additional default route via $PRIMARY_IFACE"
+                done
+            else
+                log_warn "Keeping primary route as last resort (backup also down)"
+            fi
+        fi
+    fi
+
+    # Backup WAN (LTE/modem) - DO NOT add/modify routes, use NM/carrier managed routes
+    # NetworkManager/ModemManager manages the backup route with their own metrics
+    if [ -n "${BACKUP_GATEWAY:-}" ] && [ -n "${BACKUP_IFACE:-}" ]; then
+        if ip route show default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" 2>/dev/null | grep -q .; then
+            log_debug "Backup route exists (managed by NM/carrier)"
+        else
+            log_warn "No backup route found from NM/carrier"
+        fi
+    fi
+}
+
+update_main_table_route() {
+    # FIXED METRIC route management
+    # Each WAN has a FIXED metric that NEVER changes:
+    #   - Primary (WAN1): metric 10 (or 110 if demoted by SLA AI)
+    #   - Backup (WAN2):  metric 20 (or 120 if demoted by SLA AI)
+    #   - Tertiary:       metric 30 (future)
+    #   - Quaternary:     metric 40 (future)
+    #
+    # Route removal policy:
+    #   - Primary (physical WAN): Removed when unhealthy - forces traffic to backup
+    #   - Backup (LTE/modem): NEVER removed - always kept as last-resort failsafe
+    #
+    # Kernel automatically uses the lowest-metric route that exists.
+    # SLA AI demotion: Metric temporarily increased when degradation is predicted.
+
+    log_info "Updating main table routes (fixed metrics)..."
+
+    # Primary WAN - use demoted metric if SLA AI says degraded
+    if [ -n "${PRIMARY_GATEWAY:-}" ] && [ -n "${PRIMARY_IFACE:-}" ]; then
+        local primary_metric=$METRIC_PRIMARY
+        if [ "${PRIMARY_DEMOTED:-false}" = "true" ]; then
+            primary_metric=$METRIC_PRIMARY_DEMOTED
+        fi
+
+        if [ "${PRIMARY_STATUS:-unknown}" = "up" ]; then
+            # Interface healthy - ensure route exists with correct metric
+            ip route replace default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $primary_metric 2>/dev/null || \
+                ip route add default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $primary_metric 2>/dev/null || true
+            # Remove route with wrong metric if it exists
+            if [ "$primary_metric" = "$METRIC_PRIMARY" ]; then
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
+            else
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+            fi
+            log_debug "Primary route: via $PRIMARY_GATEWAY dev $PRIMARY_IFACE metric $primary_metric"
+        else
+            # Primary down - only remove if backup is up (never leave no routes)
+            if [ "${BACKUP_STATUS:-unknown}" = "up" ]; then
+                log_info "Primary route removed (internet unreachable via $PRIMARY_IFACE)"
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
+                while ip route del default dev "$PRIMARY_IFACE" 2>/dev/null; do :; done
+            else
+                log_warn "Keeping primary route (backup also down)"
+            fi
+        fi
+    fi
+
+    # Backup WAN (LTE/modem) - DO NOT add routes, use existing NM/carrier routes
+    # NetworkManager/ModemManager manages the backup route with their own metrics (e.g., 200)
+    # We just verify the route exists and use it as-is for failover
+    if [ -n "${BACKUP_GATEWAY:-}" ] && [ -n "${BACKUP_IFACE:-}" ]; then
+        # Check if NM/carrier route exists (any metric)
+        if ip route show default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" 2>/dev/null | grep -q .; then
+            log_debug "Backup route exists (managed by NM/carrier): via $BACKUP_GATEWAY dev $BACKUP_IFACE"
+        else
+            # Only add route if NM/carrier hasn't provided one (shouldn't happen normally)
+            log_warn "No backup route found - NM/carrier may not have configured it yet"
+        fi
+    fi
+
+    # Log current effective metrics
+    local eff_primary="${METRIC_PRIMARY}"
+    local eff_backup="${METRIC_BACKUP}"
+    [ "${PRIMARY_DEMOTED:-false}" = "true" ] && eff_primary="${METRIC_PRIMARY_DEMOTED}"
+    [ "${BACKUP_DEMOTED:-false}" = "true" ] && eff_backup="${METRIC_BACKUP_DEMOTED}"
+    log_info "Main table routes updated (effective metrics: primary=$eff_primary, backup=$eff_backup)"
+
+    # Remove duplicate routes added by NetworkManager/DHCP after our routes are established
+    remove_duplicate_routes
+}
+
+setup_ip_rules() {
+    log_info "Setting up IP rules..."
+
+    # Get interface IP addresses for source-based routing
+    local primary_ip backup_ip
+    primary_ip=$(ip -4 addr show "$PRIMARY_IFACE" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+    backup_ip=$(ip -4 addr show "$BACKUP_IFACE" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+
+    # Remove old rules (clean slate)
+    ip rule del fwmark $FWMARK_PRIMARY/$FWMARK_MASK table $TABLE_PRIMARY 2>/dev/null || true
+    ip rule del fwmark $FWMARK_BACKUP/$FWMARK_MASK table $TABLE_BACKUP 2>/dev/null || true
+    # Remove legacy fallback rule if it exists (from older versions)
+    ip rule del table $TABLE_PRIMARY priority 1000 2>/dev/null || true
+    [ -n "$primary_ip" ] && ip rule del from "$primary_ip" table $TABLE_PRIMARY 2>/dev/null || true
+    [ -n "$backup_ip" ] && ip rule del from "$backup_ip" table $TABLE_BACKUP 2>/dev/null || true
+
+    # Source-based routing rules (priority 50-60) - IMPORTANT for asymmetric routing prevention
+    # Traffic originating FROM an interface's IP must route back via that interface
+    if [ -n "$primary_ip" ]; then
+        ip rule add from "$primary_ip" table $TABLE_PRIMARY priority 50
+        log_info "Source rule: from $primary_ip → table wan_primary (priority 50)"
+    fi
+
+    if [ -n "$backup_ip" ]; then
+        ip rule add from "$backup_ip" table $TABLE_BACKUP priority 60
+        log_info "Source rule: from $backup_ip → table wan_backup (priority 60)"
+    fi
+
+    # Fwmark-based routing rules (priority 100-200) - for PBR packet marking
+    ip rule add fwmark $FWMARK_PRIMARY/$FWMARK_MASK table $TABLE_PRIMARY priority 100
+    ip rule add fwmark $FWMARK_BACKUP/$FWMARK_MASK table $TABLE_BACKUP priority 200
+
+    # NOTE: We intentionally do NOT add a "fallback" rule like:
+    #   ip rule add table $TABLE_PRIMARY priority 1000
+    # This would catch ALL traffic and break LAN routing because the WAN tables
+    # only have default routes, not LAN routes (10.200.0.0/X).
+    # Unmarked packets correctly fall through to main table (priority 32766)
+    # which has proper routes for both LAN and WAN.
+
+    log_info "IP rules configured"
+}
+
+# ============================================================
+# nftables Packet Marking
+# ============================================================
+
+setup_nftables() {
+    log_info "Setting up nftables packet marking..."
+
+    # Create nftables rules for WAN failover
+    # Architecture:
+    #   1. prerouting: Restore marks from conntrack (for incoming return traffic)
+    #   2. forward: Mark and restore for forwarded traffic (LAN/containers)
+    #   3. output: Mark host-originated traffic
+    #   4. postrouting: Save marks to conntrack
+    nft -f - << 'NFTEOF'
+# Fortress WAN Failover - Packet Marking
+# Ensures sticky sessions: connections stay on their original WAN during failover
+
+table inet fts_wan_failover {
+    # Prerouting: Restore marks for incoming traffic (return packets)
+    chain prerouting {
+        type filter hook prerouting priority mangle - 1; policy accept;
+
+        # Restore mark from conntrack (sticky sessions for return traffic)
+        ct mark != 0 meta mark set ct mark
+    }
+
+    # Forward: Handle forwarded traffic (LAN clients, containers)
+    # This runs AFTER prerouting, so conntrack marks are already restored
+    chain forward {
+        type filter hook forward priority mangle; policy accept;
+
+        # Skip if already marked (from conntrack or previous rules)
+        meta mark & 0xf00 != 0 return
+
+        # Skip local/private destination traffic
+        ip daddr 10.0.0.0/8 return
+        ip daddr 172.16.0.0/12 return
+        ip daddr 192.168.0.0/16 return
+
+        # New forwarded connections will be marked in the dynamic section
+        # This chain is updated by set_active_wan()
+    }
+
+    # Output: Mark host-originated traffic
+    chain output {
+        type route hook output priority mangle; policy accept;
+
+        # Skip if already marked (from conntrack)
+        meta mark & 0xf00 != 0 return
+
+        # Mark new connections based on active WAN
+        # This chain is updated dynamically by the monitor
+    }
+
+    # Postrouting: Save marks to conntrack (for return traffic matching)
+    chain postrouting {
+        type filter hook postrouting priority mangle; policy accept;
+
+        # Save mark to conntrack (for return traffic)
+        meta mark != 0 ct mark set meta mark
+    }
+}
+NFTEOF
+
+    # Set initial mark to primary
+    set_active_wan primary
+
+    log_info "nftables packet marking configured"
+}
+
+set_active_wan() {
+    local wan="$1"
+    local mark
+
+    case "$wan" in
+        primary)
+            mark=$FWMARK_PRIMARY
+            ;;
+        backup)
+            mark=$FWMARK_BACKUP
+            ;;
+        *)
+            log_error "Invalid WAN: $wan"
+            return 1
+            ;;
+    esac
+
+    # Ensure nftables table exists before trying to update chains
+    # This handles the case where setup_nftables hasn't run or failed
+    if ! nft list table inet fts_wan_failover &>/dev/null; then
+        log_warn "nftables table fts_wan_failover missing, creating..."
+        nft -f - << 'NFTCREATE'
+table inet fts_wan_failover {
+    chain prerouting {
+        type filter hook prerouting priority mangle - 1; policy accept;
+        ct mark != 0 meta mark set ct mark
+    }
+    chain forward {
+        type filter hook forward priority mangle; policy accept;
+    }
+    chain output {
+        type route hook output priority mangle; policy accept;
+    }
+    chain postrouting {
+        type filter hook postrouting priority mangle; policy accept;
+        meta mark != 0 ct mark set meta mark
+    }
+}
+NFTCREATE
+    fi
+
+    # Update nftables to mark new connections
+    # We update BOTH the output chain (host traffic) and forward chain (LAN/container traffic)
+    nft -f - << NFTEOF
+# Update OUTPUT chain for host-originated traffic
+flush chain inet fts_wan_failover output
+table inet fts_wan_failover {
+    chain output {
+        type route hook output priority mangle; policy accept;
+
+        # Skip if already marked (conntrack restored)
+        meta mark & 0xf00 != 0 return
+
+        # Skip local/multicast traffic
+        ip daddr 127.0.0.0/8 return
+        ip daddr 10.0.0.0/8 return
+        ip daddr 172.16.0.0/12 return
+        ip daddr 192.168.0.0/16 return
+        ip daddr 224.0.0.0/4 return
+
+        # Mark all outbound traffic for active WAN
+        meta mark set $mark
+    }
+}
+
+# Update FORWARD chain for forwarded traffic (LAN clients, containers)
+flush chain inet fts_wan_failover forward
+table inet fts_wan_failover {
+    chain forward {
+        type filter hook forward priority mangle; policy accept;
+
+        # Skip if already marked (from conntrack or previous rules)
+        meta mark & 0xf00 != 0 return
+
+        # Skip local/private destination traffic
+        ip daddr 10.0.0.0/8 return
+        ip daddr 172.16.0.0/12 return
+        ip daddr 192.168.0.0/16 return
+
+        # Mark all forwarded internet-bound traffic
+        # LAN clients (10.200.0.0/23)
+        ip saddr 10.200.0.0/23 meta mark set $mark
+
+        # Container services tier (172.20.201.0/24) - internet-allowed containers
+        ip saddr 172.20.201.0/24 meta mark set $mark
+    }
+}
+NFTEOF
+
+    # Also update legacy fts_forward_mark table if it exists (backward compatibility)
+    if nft list table inet fts_forward_mark &>/dev/null; then
+        nft -f - << NFTEOF
+flush chain inet fts_forward_mark forward
+table inet fts_forward_mark {
+    chain forward {
+        type filter hook forward priority mangle; policy accept;
+
+        # Skip if already marked
+        meta mark & 0xf00 != 0 return
+
+        # Skip local traffic
+        ip daddr 10.0.0.0/8 return
+        ip daddr 172.16.0.0/12 return
+        ip daddr 192.168.0.0/16 return
+
+        # Mark container traffic from services tier (internet-allowed)
+        ip saddr 172.20.201.0/24 meta mark set $mark
+
+        # Mark LAN client traffic
+        ip saddr 10.200.0.0/23 meta mark set $mark
+    }
+}
+NFTEOF
+        log_debug "Legacy forward chain (fts_forward_mark) updated with mark $mark"
+    fi
+
+    # Update the main table default route to reflect the active WAN
+    # This ensures traffic flows correctly even if PBR marking fails
+    ACTIVE_WAN="$wan"
+    update_main_table_route
+
+    # Update NAT rules to masquerade via active WAN
+    update_nat_for_wan "$wan"
+
+    log_info "Active WAN set to: $wan (mark $mark)"
+}
+
+cleanup_nftables() {
+    nft delete table inet fts_wan_failover 2>/dev/null || true
+}
+
+# ============================================================
+# DNS Failover
+# ============================================================
+
+get_dns_for_interface() {
+    # Get DNS servers for an interface from various sources
+    local iface="$1"
+    local dns=""
+
+    # Try NetworkManager
+    if command -v nmcli &>/dev/null; then
+        dns=$(nmcli -t -f IP4.DNS device show "$iface" 2>/dev/null | cut -d: -f2 | head -1)
+        [ -n "$dns" ] && echo "$dns" && return 0
+    fi
+
+    # Try systemd-resolved
+    if [ -f "/run/systemd/resolve/resolv.conf" ]; then
+        dns=$(grep "^nameserver" /run/systemd/resolve/resolv.conf 2>/dev/null | head -1 | awk '{print $2}')
+        [ -n "$dns" ] && echo "$dns" && return 0
+    fi
+
+    # Try DHCP lease
+    if [ -f "/var/lib/NetworkManager/dhclient-$iface.lease" ]; then
+        dns=$(grep 'option domain-name-servers' "/var/lib/NetworkManager/dhclient-$iface.lease" 2>/dev/null | tail -1 | awk '{print $3}' | tr -d ';,' | head -1)
+        [ -n "$dns" ] && echo "$dns" && return 0
+    fi
+
+    # Fallback to public DNS
+    echo "1.1.1.1"
+}
+
+update_dns_for_wan() {
+    # Update DNS configuration when WAN changes
+    # This ensures DNS queries use the active WAN's DNS servers
+    local active_wan="$1"
+    local dns_server
+
+    [ "$DNS_FAILOVER_ENABLED" != "true" ] && return 0
+
+    if [ "$active_wan" = "primary" ]; then
+        dns_server="${PRIMARY_DNS:-$(get_dns_for_interface "$PRIMARY_IFACE")}"
+    else
+        dns_server="${BACKUP_DNS:-$(get_dns_for_interface "$BACKUP_IFACE")}"
+    fi
+
+    [ -z "$dns_server" ] && return 0
+
+    log_info "Updating DNS to $dns_server for $active_wan WAN"
+
+    # Update dnsmasq if it's the DNS server
+    if [ -d "/etc/dnsmasq.d" ]; then
+        # Check if dnsXai is running (it handles its own upstream DNS)
+        if podman ps --format "{{.Names}}" 2>/dev/null | grep -q "fts-dnsxai"; then
+            # dnsXai handles upstream DNS, just update its config
+            log_debug "dnsXai running, skipping dnsmasq DNS update"
+        else
+            # Update dnsmasq upstream server
+            cat > /etc/dnsmasq.d/fts-wan-failover-dns.conf << EOF
+# HookProbe Fortress - DNS Failover
+# Auto-generated by wan-failover-pbr.sh
+# Active WAN: $active_wan
+
+server=$dns_server
+server=1.1.1.1
+server=8.8.8.8
+EOF
+            # Reload dnsmasq
+            if systemctl is-active dnsmasq &>/dev/null; then
+                systemctl reload dnsmasq 2>/dev/null || true
+            fi
+        fi
+    fi
+
+    # Update resolv.conf if it's not managed by systemd-resolved
+    if [ ! -L /etc/resolv.conf ] || [ "$(readlink /etc/resolv.conf)" != "/run/systemd/resolve/stub-resolv.conf" ]; then
+        # Only update if it looks like a static file
+        if grep -q "# HookProbe Fortress" /etc/resolv.conf 2>/dev/null; then
+            cat > /etc/resolv.conf << EOF
+# HookProbe Fortress - DNS Failover
+# Auto-generated by wan-failover-pbr.sh
+# Active WAN: $active_wan
+
+nameserver $dns_server
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+EOF
+        fi
+    fi
+}
+
+# ============================================================
+# NAT/MASQUERADE Management
+# ============================================================
+
+# LAN subnets that need NAT (space-separated)
+LAN_SUBNETS="${LAN_SUBNETS:-10.200.0.0/24 172.20.200.0/24 172.20.201.0/24}"
+
+setup_nat_rules() {
+    log_info "Setting up NAT rules..."
+
+    # Delete existing table if any (clean slate)
+    nft delete table inet fts_wan_nat 2>/dev/null || true
+
+    # Use nftables for NAT (consistent with our other rules)
+    nft -f - << 'NFTEOF'
+# Fortress WAN Failover - NAT/Masquerade Rules
+table inet fts_wan_nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        # Rules are added dynamically by update_nat_for_wan()
+    }
+}
+NFTEOF
+
+    if ! nft list table inet fts_wan_nat &>/dev/null; then
+        log_error "Failed to create nftables NAT table!"
+        return 1
+    fi
+
+    log_info "nftables NAT table created successfully"
+
+    # Set initial NAT based on active WAN
+    update_nat_for_wan "${ACTIVE_WAN:-primary}"
+}
+
+update_nat_for_wan() {
+    local active_wan="$1"
+    local wan_iface
+
+    if [ "$active_wan" = "primary" ]; then
+        wan_iface="${PRIMARY_IFACE:-}"
+    else
+        wan_iface="${BACKUP_IFACE:-}"
+    fi
+
+    [ -z "$wan_iface" ] && return 0
+
+    log_info "Updating NAT rules for $active_wan WAN ($wan_iface)..."
+
+    # Ensure nftables NAT table exists (create if missing)
+    if ! nft list table inet fts_wan_nat &>/dev/null; then
+        log_warn "NAT table missing, recreating..."
+        nft -f - << 'NFTEOF'
+table inet fts_wan_nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+    }
+}
+NFTEOF
+    fi
+
+    # Rebuild NAT chain with correct output interface
+    nft flush chain inet fts_wan_nat postrouting 2>/dev/null || true
+
+    # Add masquerade rules for all LAN subnets
+    for subnet in $LAN_SUBNETS; do
+        if nft add rule inet fts_wan_nat postrouting ip saddr "$subnet" oifname "$wan_iface" masquerade 2>/dev/null; then
+            log_debug "NAT: $subnet -> $wan_iface (masquerade)"
+        else
+            log_warn "Failed to add nftables NAT rule for $subnet"
+        fi
+    done
+
+    # Always add iptables rules as primary fallback (more reliable on some systems)
+    for subnet in $LAN_SUBNETS; do
+        # Remove old rules for this subnet (both interfaces)
+        iptables -t nat -D POSTROUTING -s "$subnet" -o "${PRIMARY_IFACE:-eth0}" -j MASQUERADE 2>/dev/null || true
+        iptables -t nat -D POSTROUTING -s "$subnet" -o "${BACKUP_IFACE:-wwan0}" -j MASQUERADE 2>/dev/null || true
+
+        # Add rule for active interface
+        if iptables -t nat -A POSTROUTING -s "$subnet" -o "$wan_iface" -j MASQUERADE 2>/dev/null; then
+            log_debug "iptables NAT: $subnet -> $wan_iface (masquerade)"
+        else
+            log_warn "Failed to add iptables NAT rule for $subnet"
+        fi
+    done
+
+    log_info "NAT rules updated for $wan_iface"
+}
+
+cleanup_nat_rules() {
+    log_info "Cleaning up NAT rules..."
+
+    # Remove nftables NAT table
+    nft delete table inet fts_wan_nat 2>/dev/null || true
+
+    # Remove iptables NAT rules
+    for subnet in $LAN_SUBNETS; do
+        iptables -t nat -D POSTROUTING -s "$subnet" -o "${PRIMARY_IFACE:-eth0}" -j MASQUERADE 2>/dev/null || true
+        iptables -t nat -D POSTROUTING -s "$subnet" -o "${BACKUP_IFACE:-wwan0}" -j MASQUERADE 2>/dev/null || true
+    done
+}
+
+# Restore NetworkManager default route settings (called during cleanup)
+# NOTE: This function is intentionally minimal to avoid disrupting active connections.
+# Previously, aggressive nmcli modifications and netplan apply would cause NM to
+# restart or lose connections during service restart.
+restore_networkmanager_management() {
+    log_info "Preserving NetworkManager settings (no changes during cleanup)..."
+
+    # IMPORTANT: Do NOT modify NM connections during cleanup!
+    # - nmcli connection modify on active connections can trigger reconnection
+    # - netplan apply can restart networkd/NM and drop connections
+    # - nmcli general reload can cause NM to re-evaluate all connections
+    #
+    # The never-default and ignore-auto-routes settings we applied during setup
+    # are harmless to leave in place. They only affect route handling, not
+    # basic connectivity. If user wants to fully restore, they can:
+    #   nmcli connection modify <conn> ipv4.never-default no
+    #   nmcli connection modify <conn> ipv4.ignore-auto-routes no
+
+    # Only remove the netplan override file (doesn't require netplan apply)
+    if [ -f /etc/netplan/99-fortress-wan-no-routes.yaml ]; then
+        rm -f /etc/netplan/99-fortress-wan-no-routes.yaml
+        log_info "Removed netplan override file (apply manually with 'netplan apply' if needed)"
+    fi
+
+    log_info "NetworkManager connections preserved"
+}
+
+# ============================================================
+# Health Checking
+# ============================================================
+
+# IP SLA target - if ping to this responds, WAN is UP
+HEALTH_CHECK_TARGET="${HEALTH_CHECK_TARGET:-1.1.1.1}"
+
+check_interface_health() {
+    # IP SLA health check - ping targets through specific interface
+    # Uses configured PING_TARGETS, PING_COUNT, and PING_TIMEOUT
+    # Returns: 0 if healthy (any target responds), 1 if unhealthy (all fail)
+
+    local iface="$1"
+    local iface_ip
+    local gateway
+    local temp_route_added=false
+
+    # Get interface IP (needed to bind ping to specific interface)
+    iface_ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+    if [ -z "$iface_ip" ]; then
+        log_debug "[$iface] No IP address"
+        return 1
+    fi
+
+    # Get gateway for this interface
+    gateway=$(get_gateway "$iface")
+    if [ -z "$gateway" ]; then
+        log_debug "[$iface] No gateway discovered"
+        return 1
+    fi
+
+    # Ensure a route exists for testing (ping needs a route to work)
+    # Check if any default route exists via this interface
+    if ! ip route show default 2>/dev/null | grep -q "dev $iface"; then
+        # No default route via this interface - add temporary one for testing
+        log_debug "[$iface] Adding temporary route via $gateway for health check"
+        ip route add default via "$gateway" dev "$iface" metric 9999 2>/dev/null || true
+        temp_route_added=true
+    fi
+
+    # IP SLA check: ping targets via this interface
+    # Success if ANY target responds
+    local ping_result=1
+    local target
+    for target in $PING_TARGETS; do
+        # Use configured PING_COUNT and PING_TIMEOUT (defaults: 1 ping, 2s timeout)
+        if ping -c "${PING_COUNT:-1}" -W "${PING_TIMEOUT:-2}" -I "$iface" "$target" >/dev/null 2>&1; then
+            log_debug "[$iface] UP - ping $target OK"
+            ping_result=0
+            break  # One success is enough
+        fi
+    done
+
+    # If interface bind fails, try with source IP
+    if [ $ping_result -ne 0 ]; then
+        for target in $PING_TARGETS; do
+            if ping -c "${PING_COUNT:-1}" -W "${PING_TIMEOUT:-2}" -I "$iface_ip" "$target" >/dev/null 2>&1; then
+                log_debug "[$iface] UP - ping $target OK (via source IP)"
+                ping_result=0
+                break
+            fi
+        done
+    fi
+
+    if [ $ping_result -ne 0 ]; then
+        log_debug "[$iface] DOWN - all ping targets failed"
+    fi
+
+    # Remove temporary route if we added one
+    if [ "$temp_route_added" = "true" ]; then
+        ip route del default via "$gateway" dev "$iface" metric 9999 2>/dev/null || true
+    fi
+
+    return $ping_result
+}
+
+check_interface_quick() {
+    # Same as check_interface_health - just ping 1.1.1.1
+    check_interface_health "$1"
+}
+
+# ============================================================
+# State Management
+# ============================================================
+
+init_state() {
+    mkdir -p "$(dirname "$STATE_FILE")"
+
+    # Determine initial ACTIVE_WAN based on actual interface state
+    # This prevents unnecessary failover on first health check
+    local initial_active="primary"
+    local primary_has_route=false
+    local backup_has_route=false
+
+    # Check if interfaces have usable gateways
+    if [ -n "${PRIMARY_GATEWAY:-}" ] || get_gateway "${PRIMARY_IFACE:-}" >/dev/null 2>&1; then
+        primary_has_route=true
+    fi
+    if [ -n "${BACKUP_GATEWAY:-}" ] || get_gateway "${BACKUP_IFACE:-}" >/dev/null 2>&1; then
+        backup_has_route=true
+    fi
+
+    # Set initial active based on which interface actually works
+    if [ "$primary_has_route" = "true" ]; then
+        initial_active="primary"
+        log_info "Initial state: primary WAN has gateway"
+    elif [ "$backup_has_route" = "true" ]; then
+        initial_active="backup"
+        log_info "Initial state: primary down, using backup WAN"
+    else
+        initial_active="primary"  # Default, will be corrected by health check
+        log_warn "Initial state: no WAN gateway detected"
+    fi
+
+    cat > "$STATE_FILE" << EOF
+PRIMARY_STATUS=unknown
+BACKUP_STATUS=unknown
+PRIMARY_COUNT=0
+BACKUP_COUNT=0
+PRIMARY_FAIL_STREAK=0
+BACKUP_FAIL_STREAK=0
+ACTIVE_WAN=$initial_active
+LAST_CHECK=$(date +%s)
+FAILOVER_COUNT=0
+BOTH_DOWN_SINCE=0
+LAST_ALTERNATE_TIME=0
+LAST_RECOVERY_TIME=0
+EOF
+}
+
+load_state() {
+    if [ -f "$STATE_FILE" ]; then
+        # shellcheck source=/dev/null
+        . "$STATE_FILE"
+    else
+        init_state
+        # shellcheck source=/dev/null
+        . "$STATE_FILE"
+    fi
+}
+
+save_state() {
+    cat > "$STATE_FILE" << EOF
+PRIMARY_STATUS=$PRIMARY_STATUS
+BACKUP_STATUS=$BACKUP_STATUS
+PRIMARY_COUNT=$PRIMARY_COUNT
+BACKUP_COUNT=$BACKUP_COUNT
+PRIMARY_FAIL_STREAK=${PRIMARY_FAIL_STREAK:-0}
+BACKUP_FAIL_STREAK=${BACKUP_FAIL_STREAK:-0}
+ACTIVE_WAN=$ACTIVE_WAN
+LAST_CHECK=$(date +%s)
+FAILOVER_COUNT=$FAILOVER_COUNT
+BOTH_DOWN_SINCE=${BOTH_DOWN_SINCE:-0}
+LAST_ALTERNATE_TIME=${LAST_ALTERNATE_TIME:-0}
+LAST_RECOVERY_TIME=${LAST_RECOVERY_TIME:-0}
+LAST_ROUTE_CHECK=${LAST_ROUTE_CHECK:-0}
+LAST_ROUTE_CLEANUP=${LAST_ROUTE_CLEANUP:-0}
+PRIMARY_DEMOTED=${PRIMARY_DEMOTED:-false}
+BACKUP_DEMOTED=${BACKUP_DEMOTED:-false}
+EOF
+}
+
+# ============================================================
+# SLA AI Integration
+# ============================================================
+
+# Read SLA AI recommendation for predictive failover
+# SLA AI (shared/slaai) uses LSTM to predict failures before they happen
+read_slaai_recommendation() {
+    # Returns: failover, failback, hold, or empty if not available
+    local rec_file="$SLAAI_RECOMMENDATION_FILE"
+
+    if [ "$SLAAI_ENABLED" != "true" ]; then
+        echo ""
+        return 0
+    fi
+
+    if [ ! -f "$rec_file" ]; then
+        log_debug "SLA AI recommendation file not found"
+        echo ""
+        return 0
+    fi
+
+    # Check if file is recent (less than 30 seconds old)
+    local file_age
+    file_age=$(( $(date +%s) - $(stat -c %Y "$rec_file" 2>/dev/null || echo 0) ))
+    if [ "$file_age" -gt 30 ]; then
+        log_debug "SLA AI recommendation stale (${file_age}s old)"
+        echo ""
+        return 0
+    fi
+
+    # Parse JSON recommendation
+    # Expected format: {"recommendation": "failover|failback|hold", "confidence": 0.85, ...}
+    local recommendation confidence
+    recommendation=$(grep -oP '"recommendation"\s*:\s*"\K[^"]+' "$rec_file" 2>/dev/null || echo "")
+    confidence=$(grep -oP '"confidence"\s*:\s*\K[0-9.]+' "$rec_file" 2>/dev/null || echo "0")
+
+    if [ -z "$recommendation" ]; then
+        echo ""
+        return 0
+    fi
+
+    # Check confidence threshold
+    # Use awk for float comparison
+    local meets_threshold
+    meets_threshold=$(awk -v conf="$confidence" -v thresh="$SLAAI_MIN_CONFIDENCE" \
+        'BEGIN { print (conf >= thresh) ? "yes" : "no" }')
+
+    if [ "$meets_threshold" = "no" ]; then
+        log_debug "SLA AI confidence $confidence below threshold $SLAAI_MIN_CONFIDENCE"
+        echo ""
+        return 0
+    fi
+
+    log_debug "SLA AI recommends: $recommendation (confidence: $confidence)"
+    echo "$recommendation"
+}
+
+# Apply SLA AI recommendation if applicable
+# Returns 0 if action was taken, 1 if no action needed
+apply_slaai_recommendation() {
+    local recommendation
+    recommendation=$(read_slaai_recommendation)
+
+    if [ -z "$recommendation" ]; then
+        # No recommendation - clear any demoted state
+        PRIMARY_DEMOTED="false"
+        BACKUP_DEMOTED="false"
+        return 1
+    fi
+
+    case "$recommendation" in
+        demote_primary)
+            # SLA AI predicts primary degradation - demote metric but keep route
+            if [ "${PRIMARY_DEMOTED:-false}" != "true" ] && [ "$PRIMARY_STATUS" = "up" ]; then
+                log_info "SLA AI: Demoting primary (degradation predicted)"
+                PRIMARY_DEMOTED="true"
+                # Replace route with demoted metric
+                ip route replace default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+                return 0
+            fi
+            ;;
+        demote_backup)
+            # SLA AI predicts backup degradation - demote metric but keep route
+            if [ "${BACKUP_DEMOTED:-false}" != "true" ] && [ "$BACKUP_STATUS" = "up" ]; then
+                log_info "SLA AI: Demoting backup (degradation predicted)"
+                BACKUP_DEMOTED="true"
+                ip route replace default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP_DEMOTED 2>/dev/null || true
+                ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
+                return 0
+            fi
+            ;;
+        promote_primary)
+            # SLA AI says primary is healthy again - restore normal metric
+            if [ "${PRIMARY_DEMOTED:-false}" = "true" ] && [ "$PRIMARY_STATUS" = "up" ]; then
+                log_info "SLA AI: Promoting primary (healthy again)"
+                PRIMARY_DEMOTED="false"
+                ip route replace default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY 2>/dev/null || true
+                ip route del default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" metric $METRIC_PRIMARY_DEMOTED 2>/dev/null || true
+                return 0
+            fi
+            ;;
+        promote_backup)
+            # SLA AI says backup is healthy again
+            if [ "${BACKUP_DEMOTED:-false}" = "true" ] && [ "$BACKUP_STATUS" = "up" ]; then
+                log_info "SLA AI: Promoting backup (healthy again)"
+                BACKUP_DEMOTED="false"
+                ip route replace default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP 2>/dev/null || true
+                ip route del default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric $METRIC_BACKUP_DEMOTED 2>/dev/null || true
+                return 0
+            fi
+            ;;
+        hold)
+            log_debug "SLA AI: Hold current state"
+            ;;
+    esac
+
+    return 1
+}
+
+# ============================================================
+# Failover Logic
+# ============================================================
+
+# Both-down recovery settings
+BOTH_DOWN_ALTERNATE_INTERVAL="${BOTH_DOWN_ALTERNATE_INTERVAL:-30}"  # Try other WAN every 30s
+BOTH_DOWN_RECOVERY_INTERVAL="${BOTH_DOWN_RECOVERY_INTERVAL:-60}"    # Attempt recovery every 60s
+
+attempt_interface_recovery() {
+    # Attempt to recover a failed interface
+    # This is called when both WANs are down to try to restore connectivity
+    local iface="$1"
+    local iface_type="$2"  # primary or backup
+
+    log_info "Attempting recovery for $iface ($iface_type)..."
+
+    # Check if interface has link but no IP (DHCP expired)
+    if ip link show "$iface" 2>/dev/null | grep -q "state UP"; then
+        local iface_ip
+        iface_ip=$(ip -4 addr show "$iface" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
+
+        if [ -z "$iface_ip" ]; then
+            log_info "[$iface] Link UP but no IP - attempting DHCP renewal"
+
+            # Try dhclient
+            if command -v dhclient &>/dev/null; then
+                dhclient -1 -timeout 10 "$iface" 2>/dev/null &
+                sleep 2
+            fi
+
+            # Try NetworkManager
+            if command -v nmcli &>/dev/null; then
+                nmcli device reapply "$iface" 2>/dev/null || true
+            fi
+        fi
+    fi
+
+    # For LTE/WWAN interfaces, try to reconnect the modem
+    if [[ "$iface" =~ ^wwan|^wwp ]] && command -v mmcli &>/dev/null; then
+        log_info "[$iface] Attempting LTE modem reconnection..."
+
+        local modem_idx
+        modem_idx=$(mmcli -L 2>/dev/null | grep -oP 'Modem/\K\d+' | head -1)
+
+        if [ -n "$modem_idx" ]; then
+            # Check if modem is connected
+            local modem_state
+            modem_state=$(mmcli -m "$modem_idx" 2>/dev/null | grep -oP 'state:\s+\K\w+' | head -1)
+
+            if [ "$modem_state" != "connected" ]; then
+                log_info "[$iface] Modem state: $modem_state - attempting simple connect"
+                mmcli -m "$modem_idx" --simple-connect="apn=internet" 2>/dev/null &
+                sleep 3
+            fi
+        fi
+    fi
+
+    # Rediscover gateway after recovery attempt
+    discover_gateways
+}
+
+verify_nat_rules() {
+    # Verify NAT rules exist and are correct
+    # Called during health check to ensure NAT persists
+    local active="${ACTIVE_WAN:-primary}"
+    local wan_iface
+
+    if [ "$active" = "primary" ]; then
+        wan_iface="${PRIMARY_IFACE:-}"
+    else
+        wan_iface="${BACKUP_IFACE:-}"
+    fi
+
+    [ -z "$wan_iface" ] && return 0
+
+    # Check if iptables NAT rules exist for the active interface
+    local nat_ok=false
+    for subnet in $LAN_SUBNETS; do
+        if iptables -t nat -C POSTROUTING -s "$subnet" -o "$wan_iface" -j MASQUERADE 2>/dev/null; then
+            nat_ok=true
+            break
+        fi
+    done
+
+    if [ "$nat_ok" = "false" ]; then
+        log_warn "NAT rules missing for $wan_iface - recreating..."
+        update_nat_for_wan "$active"
+    fi
+}
+
+# ============================================================
+# OVS/OpenFlow Health Verification
+# ============================================================
+# WAN failover operates at L3/L4 (routing, NAT, packet marking)
+# OVS/OpenFlow operates at L2 (switching, VLAN tagging)
+# These SHOULD be independent, but network stack events can
+# sometimes disrupt OVS state. This function ensures OVS is
+# healthy after any WAN failover event.
+
+verify_ovs_health() {
+    # Skip if OVS is not installed
+    command -v ovs-vsctl &>/dev/null || return 0
+    command -v ovs-ofctl &>/dev/null || return 0
+
+    local OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
+    local needs_repair=false
+
+    # Check 1: Verify OVS bridge exists
+    if ! ovs-vsctl br-exists "$OVS_BRIDGE" 2>/dev/null; then
+        log_debug "OVS bridge $OVS_BRIDGE not found - skipping verification"
+        return 0
+    fi
+
+    # Check 2: Verify essential OpenFlow rules exist
+    # These are the minimum rules needed for network connectivity
+    local flow_count
+    flow_count=$(ovs-ofctl dump-flows "$OVS_BRIDGE" 2>/dev/null | wc -l)
+
+    if [ "$flow_count" -lt 4 ]; then
+        log_warn "OVS: Only $flow_count flows found (expected 4+) - OpenFlow rules missing"
+        needs_repair=true
+    fi
+
+    # Check 3: Verify ARP flow exists (critical for L2)
+    if ! ovs-ofctl dump-flows "$OVS_BRIDGE" 2>/dev/null | grep -q "arp"; then
+        log_warn "OVS: ARP flow missing - network will be broken"
+        needs_repair=true
+    fi
+
+    # Check 4: Verify DHCP flow exists
+    if ! ovs-ofctl dump-flows "$OVS_BRIDGE" 2>/dev/null | grep -q "tp_dst=67\|tp_dst=68"; then
+        log_warn "OVS: DHCP flows missing - clients won't get IP addresses"
+        needs_repair=true
+    fi
+
+    # Check 5: Verify bridge is in standalone mode (not stuck)
+    local fail_mode
+    fail_mode=$(ovs-vsctl get-fail-mode "$OVS_BRIDGE" 2>/dev/null || echo "unknown")
+    if [ "$fail_mode" != "standalone" ]; then
+        log_warn "OVS: Unexpected fail-mode '$fail_mode' (expected 'standalone')"
+        needs_repair=true
+    fi
+
+    # Repair if needed
+    if [ "$needs_repair" = "true" ]; then
+        repair_ovs_openflow
+    fi
+}
+
+# Restore NAC (Network Access Control) policies after OVS repair
+# This ensures device policies persist across WAN failover events
+restore_nac_policies() {
+    local NAC_SYNC_SCRIPT="/opt/hookprobe/fortress/devices/common/nac-policy-sync.sh"
+
+    # Skip if script doesn't exist (NAC not installed)
+    if [ ! -x "$NAC_SYNC_SCRIPT" ]; then
+        log_debug "NAC policy sync script not found - skipping policy restore"
+        return 0
+    fi
+
+    log_info "Restoring NAC device policies after OVS repair..."
+
+    # Use --trigger for fast sync (only restrictive policies: quarantine, internet_only, lan_only)
+    if "$NAC_SYNC_SCRIPT" --trigger 2>/dev/null; then
+        log_info "NAC policies restored successfully"
+        return 0
+    else
+        # If trigger fails, try full sync as fallback
+        log_warn "NAC trigger sync failed, attempting full sync..."
+        if "$NAC_SYNC_SCRIPT" 2>/dev/null; then
+            log_info "NAC policies restored via full sync"
+            return 0
+        else
+            log_error "Failed to restore NAC policies - device restrictions may be lost"
+            logger -t "$LOG_TAG" -p err "NAC policy restore failed after OVS repair"
+            return 1
+        fi
+    fi
+}
+
+repair_ovs_openflow() {
+    local OVS_BRIDGE="${OVS_BRIDGE:-FTS}"
+    local OVS_POST_SETUP="/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh"
+
+    log_warn "OVS: Attempting automatic repair..."
+
+    # Method 1: Try running ovs-post-setup.sh if it exists
+    if [ -x "$OVS_POST_SETUP" ]; then
+        log_info "OVS: Running ovs-post-setup.sh to restore OpenFlow rules..."
+        if "$OVS_POST_SETUP" setup 2>/dev/null; then
+            log_info "OVS: OpenFlow rules restored via ovs-post-setup.sh"
+            # CRITICAL: Also restore per-device NAC policies
+            restore_nac_policies
+            return 0
+        else
+            log_warn "OVS: ovs-post-setup.sh failed, trying manual repair..."
+        fi
+    fi
+
+    # Method 2: Manual minimal repair - restore essential flows
+    log_info "OVS: Applying minimal OpenFlow rules..."
+
+    # Ensure standalone mode
+    ovs-vsctl set-fail-mode "$OVS_BRIDGE" standalone 2>/dev/null || true
+
+    # Clear and re-add essential flows
+    ovs-ofctl del-flows "$OVS_BRIDGE" 2>/dev/null || true
+
+    # Priority 1000: ARP (essential for L2)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=1000,arp,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 900: DHCP (essential for IP assignment)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=900,udp,tp_dst=67,actions=NORMAL" 2>/dev/null || true
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=900,udp,tp_dst=68,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 800: DNS
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,tp_dst=53,actions=NORMAL" 2>/dev/null || true
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,tcp,tp_dst=53,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 800: mDNS/Bonjour (essential for Apple ecosystem, Chromecast, etc.)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,tp_dst=5353,actions=NORMAL" 2>/dev/null || true
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=800,udp,tp_src=5353,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 700: Multicast (SSDP, IGMP for AirPlay, HomeKit, smart home)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,ip,nw_dst=224.0.0.0/4,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 700: IPv6 multicast (essential for HomeKit, HomePod, AirPlay)
+    # 33:33:xx:xx:xx:xx = IPv6 multicast MAC addresses
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,dl_dst=33:33:00:00:00:00/ff:ff:00:00:00:00,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 700: All IPv6 traffic (HomeKit, AirPlay heavily use IPv6)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=700,ipv6,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 600: ICMPv6 (Neighbor Discovery Protocol)
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=600,icmp6,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 500: LAN traffic
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_src=10.200.0.0/16,actions=NORMAL" 2>/dev/null || true
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_dst=10.200.0.0/16,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 500: Container traffic
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_src=172.20.0.0/16,actions=NORMAL" 2>/dev/null || true
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=500,ip,nw_dst=172.20.0.0/16,actions=NORMAL" 2>/dev/null || true
+
+    # Priority 0: Default normal switching
+    ovs-ofctl add-flow "$OVS_BRIDGE" "priority=0,actions=NORMAL" 2>/dev/null || true
+
+    log_info "OVS: Minimal OpenFlow rules restored"
+    logger -t "$LOG_TAG" -p notice "OVS OpenFlow rules repaired after WAN failover event"
+
+    # CRITICAL: Restore per-device NAC policies that were cleared
+    # Without this, devices lose their policy restrictions (quarantine, internet_only, etc.)
+    restore_nac_policies
+}
+
+do_health_check() {
+    load_state
+
+    local now
+    now=$(date +%s)
+
+    # Route maintenance - run periodically, not every check
+    # Only cleanup stray routes every 60 seconds (rate-limited inside function too)
+    local last_route_check="${LAST_ROUTE_CHECK:-0}"
+    if [ $((now - last_route_check)) -ge 60 ]; then
+        cleanup_stray_routes
+        LAST_ROUTE_CHECK=$now
+    fi
+
+    # Verify NAT rules are in place (lightweight check)
+    verify_nat_rules
+
+    local primary_now backup_now
+    local old_active="$ACTIVE_WAN"
+
+    # Check primary (wired)
+    if check_interface_health "$PRIMARY_IFACE"; then
+        primary_now="up"
+        PRIMARY_COUNT=$((PRIMARY_COUNT + 1))
+        [ $PRIMARY_COUNT -gt $UP_THRESHOLD ] && PRIMARY_COUNT=$UP_THRESHOLD
+        PRIMARY_FAIL_STREAK=0  # Reset consecutive failure counter on success
+    else
+        primary_now="down"
+        PRIMARY_COUNT=$((PRIMARY_COUNT - 1))
+        [ $PRIMARY_COUNT -lt 0 ] && PRIMARY_COUNT=0
+        PRIMARY_FAIL_STREAK=$((${PRIMARY_FAIL_STREAK:-0} + 1))  # Track consecutive failures
+    fi
+
+    # Check backup (modem)
+    if check_interface_health "$BACKUP_IFACE"; then
+        backup_now="up"
+        BACKUP_COUNT=$((BACKUP_COUNT + 1))
+        [ $BACKUP_COUNT -gt $UP_THRESHOLD ] && BACKUP_COUNT=$UP_THRESHOLD
+        BACKUP_FAIL_STREAK=0  # Reset consecutive failure counter on success
+    else
+        backup_now="down"
+        BACKUP_COUNT=$((BACKUP_COUNT - 1))
+        [ $BACKUP_COUNT -lt 0 ] && BACKUP_COUNT=0
+        BACKUP_FAIL_STREAK=$((${BACKUP_FAIL_STREAK:-0} + 1))  # Track consecutive failures
+    fi
+
+    # Track previous status for change detection
+    local old_primary_status="${PRIMARY_STATUS:-down}"
+    local old_backup_status="${BACKUP_STATUS:-down}"
+
+    # Apply hysteresis: only change status when threshold reached
+    # UP: need UP_THRESHOLD consecutive successes (slow recovery, prevents flapping)
+    # DOWN: need DOWN_THRESHOLD consecutive failures (fast failover)
+    if [ $PRIMARY_COUNT -ge $UP_THRESHOLD ]; then
+        PRIMARY_STATUS="up"
+        PRIMARY_FAIL_STREAK=0  # Reset fail streak on recovery
+    fi
+    # Use DOWN_THRESHOLD for faster failover detection
+    # When fail streak reaches DOWN_THRESHOLD, mark as down immediately
+    if [ ${PRIMARY_FAIL_STREAK:-0} -ge $DOWN_THRESHOLD ]; then
+        if [ "${PRIMARY_STATUS:-up}" != "down" ]; then
+            log_warn "PRIMARY WAN FAILED: ${PRIMARY_FAIL_STREAK} consecutive failures (threshold: $DOWN_THRESHOLD)"
+        fi
+        PRIMARY_STATUS="down"
+        PRIMARY_COUNT=0  # Reset health count
+    fi
+
+    if [ $BACKUP_COUNT -ge $UP_THRESHOLD ]; then
+        BACKUP_STATUS="up"
+        BACKUP_FAIL_STREAK=0  # Reset fail streak on recovery
+    fi
+    if [ ${BACKUP_FAIL_STREAK:-0} -ge $DOWN_THRESHOLD ]; then
+        if [ "${BACKUP_STATUS:-up}" != "down" ]; then
+            log_warn "BACKUP WAN FAILED: ${BACKUP_FAIL_STREAK} consecutive failures (threshold: $DOWN_THRESHOLD)"
+        fi
+        BACKUP_STATUS="down"
+        BACKUP_COUNT=0  # Reset health count
+    fi
+
+    # Detect interface recovery (down -> up transition)
+    # When an interface comes back up, we need to:
+    # 1. Re-discover its gateway (DHCP may have assigned new one)
+    # 2. Update routing tables
+    # 3. Clean up any stray routes added by DHCP/NM
+    local needs_reconfigure=false
+
+    if [ "$old_primary_status" = "down" ] && [ "$PRIMARY_STATUS" = "up" ]; then
+        log_info "Primary WAN ($PRIMARY_IFACE) recovered - reconfiguring..."
+        needs_reconfigure=true
+    fi
+
+    if [ "$old_backup_status" = "down" ] && [ "$BACKUP_STATUS" = "up" ]; then
+        log_info "Backup WAN ($BACKUP_IFACE) recovered - reconfiguring..."
+        needs_reconfigure=true
+    fi
+
+    if [ "$needs_reconfigure" = "true" ]; then
+        # Force route cleanup to remove any auto-added routes
+        cleanup_stray_routes
+
+        # Re-discover gateways (IP may have changed)
+        discover_gateways
+
+        # Update routing tables with new gateways
+        setup_routing_tables
+
+        # Update IP rules (source IPs may have changed)
+        setup_ip_rules
+
+        log_info "Interface recovery reconfiguration complete"
+    fi
+
+    # Check SLA AI recommendations FIRST (predictive failover)
+    # This allows switching before actual failure occurs
+    if apply_slaai_recommendation; then
+        # SLA AI took action - skip reactive failover logic
+        save_state
+        log_debug "Health: primary=$PRIMARY_STATUS($PRIMARY_COUNT) backup=$BACKUP_STATUS($BACKUP_COUNT) active=$ACTIVE_WAN (SLA AI)"
+        return 0
+    fi
+
+    # Determine active WAN (reactive failover)
+    if [ "$PRIMARY_STATUS" = "up" ]; then
+        ACTIVE_WAN="primary"
+        BOTH_DOWN_SINCE=0  # Reset both-down timer
+    elif [ "$BACKUP_STATUS" = "up" ]; then
+        ACTIVE_WAN="backup"
+        BOTH_DOWN_SINCE=0  # Reset both-down timer
+    else
+        # ============================================================
+        # BOTH WANS DOWN - Enhanced Recovery Logic
+        # ============================================================
+
+        # Track how long both have been down
+        if [ "${BOTH_DOWN_SINCE:-0}" -eq 0 ]; then
+            BOTH_DOWN_SINCE=$now
+            log_warn "ALERT: Both WANs are DOWN - starting recovery mode"
+            logger -t "$LOG_TAG" -p crit "Both WAN connections lost - entering recovery mode"
+        fi
+
+        local down_duration=$((now - BOTH_DOWN_SINCE))
+
+        # Strategy 1: If one interface shows ANY sign of life, prefer it
+        # (even if below threshold - faster recovery)
+        if [ "$primary_now" = "up" ] && [ "$backup_now" = "down" ]; then
+            log_info "Primary showing signs of recovery - switching immediately"
+            ACTIVE_WAN="primary"
+            PRIMARY_COUNT=$UP_THRESHOLD  # Boost to prevent immediate re-failover
+        elif [ "$backup_now" = "up" ] && [ "$primary_now" = "down" ]; then
+            log_info "Backup showing signs of recovery - switching immediately"
+            ACTIVE_WAN="backup"
+            BACKUP_COUNT=$UP_THRESHOLD  # Boost to prevent immediate re-failover
+        else
+            # Both still down - try alternating and recovery
+
+            # Strategy 2: Alternate between WANs periodically
+            # This gives each WAN a chance to be tested as active
+            local last_alternate="${LAST_ALTERNATE_TIME:-0}"
+            if [ $((now - last_alternate)) -ge "$BOTH_DOWN_ALTERNATE_INTERVAL" ]; then
+                if [ "$ACTIVE_WAN" = "primary" ]; then
+                    log_info "Both down for ${down_duration}s - trying backup WAN"
+                    ACTIVE_WAN="backup"
+                else
+                    log_info "Both down for ${down_duration}s - trying primary WAN"
+                    ACTIVE_WAN="primary"
+                fi
+                LAST_ALTERNATE_TIME=$now
+
+                # Update routing to use the new active WAN
+                set_active_wan "$ACTIVE_WAN"
+            fi
+
+            # Strategy 3: Attempt interface recovery periodically
+            local last_recovery="${LAST_RECOVERY_TIME:-0}"
+            if [ $((now - last_recovery)) -ge "$BOTH_DOWN_RECOVERY_INTERVAL" ]; then
+                log_info "Attempting interface recovery (both down for ${down_duration}s)..."
+
+                # Try to recover the non-active interface first
+                if [ "$ACTIVE_WAN" = "primary" ]; then
+                    attempt_interface_recovery "$BACKUP_IFACE" "backup"
+                else
+                    attempt_interface_recovery "$PRIMARY_IFACE" "primary"
+                fi
+
+                LAST_RECOVERY_TIME=$now
+            fi
+
+            log_warn "Both WANs DOWN for ${down_duration}s - active=$ACTIVE_WAN (alternating)"
+        fi
+    fi
+
+    # FIXED METRIC APPROACH: Just update routes based on interface status
+    # Routes are ADDED when healthy, REMOVED when unhealthy
+    # Kernel uses lowest-metric available route automatically
+    ensure_main_table_routes
+
+    # Update ACTIVE_WAN for NAT and logging (based on which interface is UP)
+    if [ "$PRIMARY_STATUS" = "up" ]; then
+        ACTIVE_WAN="primary"
+    elif [ "$BACKUP_STATUS" = "up" ]; then
+        ACTIVE_WAN="backup"
+    fi
+    # If both down, keep current ACTIVE_WAN for NAT (best effort)
+
+    # Only do full reconfiguration on actual ACTIVE_WAN change
+    if [ "$ACTIVE_WAN" != "$old_active" ]; then
+        FAILOVER_COUNT=$((FAILOVER_COUNT + 1))
+        log_info "WAN failover: $old_active -> $ACTIVE_WAN (event #$FAILOVER_COUNT)"
+
+        # Update packet marking for new connections
+        set_active_wan "$ACTIVE_WAN"
+
+        # Update NAT rules
+        update_nat_for_wan "$ACTIVE_WAN"
+
+        # Update DNS
+        update_dns_for_wan "$ACTIVE_WAN"
+
+        # Verify OVS/OpenFlow health after failover
+        # WAN failover operates at L3/L4, OVS at L2 - they should be independent
+        # but we check as a safety net in case something disrupted OVS
+        verify_ovs_health
+
+        # Refresh WAN traffic mirroring for AIOCHI IDS/NSM
+        # TC mirrors need to track the active WAN interface for threat detection
+        local ovs_script="${INSTALL_DIR:-/opt/hookprobe/fortress}/devices/common/ovs-post-setup.sh"
+        if [ -x "$ovs_script" ] && [ -e /run/fortress/wan-mirror.state ]; then
+            log_debug "Refreshing WAN mirror for AIOCHI..."
+            "$ovs_script" wan-mirror-refresh &>/dev/null &
+        fi
+
+        logger -t "$LOG_TAG" -p notice "WAN failover completed: $old_active -> $ACTIVE_WAN"
+    fi
+
+    save_state
+
+    log_debug "Health: primary=$PRIMARY_STATUS($PRIMARY_COUNT) backup=$BACKUP_STATUS($BACKUP_COUNT) active=$ACTIVE_WAN"
+}
+
+# ============================================================
+# Commands
+# ============================================================
+
+cmd_setup() {
+    log_info "Setting up PBR WAN failover..."
+
+    # Create runtime directory first (needed for state and PID files)
+    mkdir -p /run/fortress
+    chmod 755 /run/fortress
+
+    load_config || exit 1
+
+    # =========================================================================
+    # PERSISTENT CONFIGURATION (only run once, during initial installation)
+    # These operations can disrupt OVS/OpenFlow and should NOT run on every
+    # service restart. They modify netplan/NetworkManager which can trigger
+    # network stack reconfiguration that clears OpenFlow flows.
+    # =========================================================================
+    local SETUP_DONE_FILE="/var/lib/fortress/wan-failover-setup-done"
+
+    if [ ! -f "$SETUP_DONE_FILE" ]; then
+        log_info "First-time setup: configuring network managers..."
+
+        # Prevent NetworkManager from adding routes
+        configure_networkmanager_no_default_route
+
+        # Prevent netplan/systemd-networkd from adding routes
+        # WARNING: This calls 'netplan apply' which can reset OVS bridges!
+        # Only run once during initial installation, not on service restarts.
+        configure_netplan_no_routes
+
+        # Prevent ModemManager/carrier from pushing routes
+        configure_modemmanager_no_routes
+
+        # Mark first-time setup as complete
+        mkdir -p "$(dirname "$SETUP_DONE_FILE")"
+        date -Iseconds > "$SETUP_DONE_FILE"
+        log_info "First-time network configuration complete"
+    else
+        log_debug "Skipping network manager configuration (already done on $(cat "$SETUP_DONE_FILE"))"
+    fi
+
+    # =========================================================================
+    # RUNTIME CONFIGURATION (safe to run on every service restart)
+    # These operations only affect routing tables and nftables, which don't
+    # interfere with OVS/OpenFlow at Layer 2.
+    # =========================================================================
+    setup_rt_tables
+    setup_routing_tables
+    setup_ip_rules
+    setup_nftables
+    setup_nat_rules
+    init_state
+
+    log_info "PBR WAN failover setup complete"
+}
+
+cmd_start() {
+    log_info "Starting WAN failover monitor..."
+
+    load_config || exit 1
+
+    # Check if already running
+    if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        log_error "Monitor already running (PID $(cat "$PID_FILE"))"
+        exit 1
+    fi
+
+    # Ensure setup is done
+    if ! ip rule show | grep -q "fwmark.*table $TABLE_PRIMARY"; then
+        cmd_setup
+    fi
+
+    # Write PID
+    echo $$ > "$PID_FILE"
+
+    # Trap signals
+    trap 'log_info "Received signal, shutting down..."; rm -f "$PID_FILE"; exit 0' INT TERM
+
+    log_info "Monitor started (PID $$), checking every ${CHECK_INTERVAL}s"
+
+    # Main loop
+    while true; do
+        do_health_check
+        sleep "$CHECK_INTERVAL"
+    done
+}
+
+cmd_stop() {
+    if [ -f "$PID_FILE" ]; then
+        local pid
+        pid=$(cat "$PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            log_info "Stopping monitor (PID $pid)..."
+            kill "$pid"
+            rm -f "$PID_FILE"
+        else
+            log_warn "Monitor not running (stale PID file)"
+            rm -f "$PID_FILE"
+        fi
+    else
+        log_warn "Monitor not running (no PID file)"
+    fi
+}
+
+cmd_status() {
+    load_config 2>/dev/null || true
+    load_state 2>/dev/null || true
+
+    echo "════════════════════════════════════════════════════════════════"
+    echo "  HookProbe Fortress - WAN Failover Status (PBR)"
+    echo "════════════════════════════════════════════════════════════════"
+    echo ""
+
+    # Monitor status
+    if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        echo "Monitor:        RUNNING (PID $(cat "$PID_FILE"))"
+    else
+        echo "Monitor:        STOPPED"
+    fi
+    echo ""
+
+    # Interface status
+    local primary_demote_indicator=""
+    local backup_demote_indicator=""
+    [ "${PRIMARY_DEMOTED:-false}" = "true" ] && primary_demote_indicator=" [DEMOTED by SLA AI]"
+    [ "${BACKUP_DEMOTED:-false}" = "true" ] && backup_demote_indicator=" [DEMOTED by SLA AI]"
+
+    echo "Primary WAN:    ${PRIMARY_IFACE:-unknown}"
+    echo "  Gateway:      ${PRIMARY_GATEWAY:-unknown}"
+    echo "  Status:       ${PRIMARY_STATUS:-unknown} (score: ${PRIMARY_COUNT:-0}/$UP_THRESHOLD)${primary_demote_indicator}"
+    if [ "${PRIMARY_DEMOTED:-false}" = "true" ]; then
+        echo "  Metric:       $METRIC_PRIMARY_DEMOTED (demoted)"
+    else
+        echo "  Metric:       $METRIC_PRIMARY (normal)"
+    fi
+    echo ""
+
+    echo "Backup WAN:     ${BACKUP_IFACE:-unknown}"
+    echo "  Gateway:      ${BACKUP_GATEWAY:-unknown}"
+    echo "  Status:       ${BACKUP_STATUS:-unknown} (score: ${BACKUP_COUNT:-0}/$UP_THRESHOLD)${backup_demote_indicator}"
+    if [ "${BACKUP_DEMOTED:-false}" = "true" ]; then
+        echo "  Metric:       $METRIC_BACKUP_DEMOTED (demoted)"
+    else
+        echo "  Metric:       $METRIC_BACKUP (normal)"
+    fi
+    echo ""
+
+    echo "Active WAN:     ${ACTIVE_WAN:-unknown}"
+    echo "Failover Count: ${FAILOVER_COUNT:-0}"
+    echo ""
+
+    # SLA AI Status
+    echo "SLA AI:         ${SLAAI_ENABLED:-true}"
+    if [ "$SLAAI_ENABLED" = "true" ] && [ -f "$SLAAI_RECOMMENDATION_FILE" ]; then
+        local slaai_rec slaai_conf slaai_reason
+        slaai_rec=$(grep -oP '"recommendation"\s*:\s*"\K[^"]+' "$SLAAI_RECOMMENDATION_FILE" 2>/dev/null || echo "none")
+        slaai_conf=$(grep -oP '"confidence"\s*:\s*\K[0-9.]+' "$SLAAI_RECOMMENDATION_FILE" 2>/dev/null || echo "0")
+        slaai_reason=$(grep -oP '"reason"\s*:\s*"\K[^"]+' "$SLAAI_RECOMMENDATION_FILE" 2>/dev/null || echo "-")
+        echo "  Recommendation: $slaai_rec (confidence: $slaai_conf)"
+        echo "  Reason:         $slaai_reason"
+    else
+        echo "  Recommendation: (not available)"
+    fi
+
+    # Show both-down recovery status if applicable
+    if [ "${BOTH_DOWN_SINCE:-0}" -gt 0 ]; then
+        local now down_duration
+        now=$(date +%s)
+        down_duration=$((now - BOTH_DOWN_SINCE))
+        echo ""
+        echo "⚠️  RECOVERY MODE:"
+        echo "  Both WANs down for: ${down_duration}s"
+        echo "  Last alternate:     ${LAST_ALTERNATE_TIME:-0}"
+        echo "  Last recovery try:  ${LAST_RECOVERY_TIME:-0}"
+    fi
+    echo ""
+
+    # Main table default routes (critical for failover)
+    echo "Main Table (fallback routes):"
+    ip route show default 2>/dev/null | sed 's/^/    /' || echo "    (none - PROBLEM!)"
+    echo ""
+
+    # Routing tables
+    echo "PBR Routing Tables:"
+    echo "  Table $TABLE_PRIMARY ($TABLE_NAME_PRIMARY):"
+    ip route show table $TABLE_PRIMARY 2>/dev/null | sed 's/^/    /' || echo "    (empty)"
+    echo ""
+    echo "  Table $TABLE_BACKUP ($TABLE_NAME_BACKUP):"
+    ip route show table $TABLE_BACKUP 2>/dev/null | sed 's/^/    /' || echo "    (empty)"
+    echo ""
+
+    # IP rules
+    echo "IP Rules (fwmark):"
+    ip rule show | grep -E "fwmark|table (wan_|$TABLE_PRIMARY|$TABLE_BACKUP)" | sed 's/^/    /'
+    echo ""
+
+    # nftables
+    echo "nftables marks:"
+    nft list chain inet fts_wan_failover output 2>/dev/null | grep -E "mark set" | sed 's/^/    /' || echo "    (not configured)"
+    echo ""
+}
+
+cmd_failover() {
+    log_info "Forcing failover to backup..."
+    load_state
+    ACTIVE_WAN="backup"
+    PRIMARY_STATUS="down"
+    PRIMARY_COUNT=0
+    save_state
+    set_active_wan backup
+    log_info "Forced failover complete"
+}
+
+cmd_failback() {
+    log_info "Forcing failback to primary..."
+    load_state
+    ACTIVE_WAN="primary"
+    PRIMARY_STATUS="up"
+    PRIMARY_COUNT=$UP_THRESHOLD
+    save_state
+    set_active_wan primary
+    log_info "Forced failback complete"
+}
+
+cmd_check() {
+    load_config || exit 1
+    do_health_check
+}
+
+cmd_cleanup() {
+    log_info "Cleaning up PBR configuration..."
+
+    # Load config for interface names (needed for route restoration)
+    load_config 2>/dev/null || true
+
+    # Stop monitor
+    cmd_stop 2>/dev/null || true
+
+    # Restore NetworkManager management of WAN interfaces
+    restore_networkmanager_management
+
+    # Remove nftables rules
+    cleanup_nftables
+
+    # Remove NAT rules
+    cleanup_nat_rules
+
+    # Remove IP rules
+    ip rule del fwmark $FWMARK_PRIMARY/$FWMARK_MASK table $TABLE_PRIMARY 2>/dev/null || true
+    ip rule del fwmark $FWMARK_BACKUP/$FWMARK_MASK table $TABLE_BACKUP 2>/dev/null || true
+    ip rule del table $TABLE_PRIMARY priority 1000 2>/dev/null || true
+
+    # Flush tables
+    ip route flush table $TABLE_PRIMARY 2>/dev/null || true
+    ip route flush table $TABLE_BACKUP 2>/dev/null || true
+
+    # Restore default route (use primary gateway if available)
+    if [ -n "${PRIMARY_IFACE:-}" ]; then
+        discover_gateways
+        if [ -n "${PRIMARY_GATEWAY:-}" ]; then
+            ip route add default via "$PRIMARY_GATEWAY" dev "$PRIMARY_IFACE" 2>/dev/null || true
+        elif [ -n "${BACKUP_GATEWAY:-}" ]; then
+            ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" 2>/dev/null || true
+        fi
+    fi
+
+    # Remove state
+    rm -f "$STATE_FILE" "$PID_FILE"
+
+    # Remove setup-done marker to allow full re-setup
+    rm -f /var/lib/fortress/wan-failover-setup-done
+
+    log_info "Cleanup complete"
+}
+
+cmd_force_setup() {
+    log_info "Force re-running full setup (including netplan/NetworkManager)..."
+
+    # Remove the setup-done marker to force full reconfiguration
+    rm -f /var/lib/fortress/wan-failover-setup-done
+
+    # WARNING: This will run netplan apply which can disrupt OVS!
+    # Make sure to restart fortress-vlan.service afterward to restore OpenFlow rules.
+    log_warn "This will run 'netplan apply' which may reset OVS OpenFlow rules!"
+    log_warn "After completion, run: systemctl restart fortress-vlan.service"
+
+    # Run the normal setup (which will now do full configuration)
+    cmd_setup
+
+    log_info "Full setup complete. Remember to restart fortress-vlan.service if OVS is affected."
+}
+
+# ============================================================
+# Main
+# ============================================================
+
+case "${1:-}" in
+    setup)
+        cmd_setup
+        ;;
+    force-setup)
+        cmd_force_setup
+        ;;
+    start)
+        cmd_start
+        ;;
+    stop)
+        cmd_stop
+        ;;
+    status)
+        cmd_status
+        ;;
+    failover)
+        cmd_failover
+        ;;
+    failback)
+        cmd_failback
+        ;;
+    check)
+        cmd_check
+        ;;
+    cleanup)
+        cmd_cleanup
+        ;;
+    *)
+        echo "Usage: $0 {setup|force-setup|start|stop|status|failover|failback|check|cleanup}"
+        echo ""
+        echo "Commands:"
+        echo "  setup       - PBR setup (safe: skips netplan on repeat runs)"
+        echo "  force-setup - Full setup including netplan (WARNING: may reset OVS!)"
+        echo "  start       - Start the health monitoring daemon"
+        echo "  stop        - Stop the monitoring daemon"
+        echo "  status      - Show current failover status"
+        echo "  failover    - Force immediate failover to backup"
+        echo "  failback    - Force immediate failback to primary"
+        echo "  check       - Run single health check (for cron)"
+        echo "  cleanup     - Remove all PBR configuration"
+        exit 1
+        ;;
+esac

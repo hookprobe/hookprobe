@@ -1,0 +1,231 @@
+{
+  "name": "AIOCHI: Bubble Sync Gateway",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "bubble-events",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-bubble-events",
+      "name": "Bubble Events Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "notes": "Receives events from Fortress n8n_webhook.py"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.event_type }}",
+              "operation": "equals",
+              "value2": "device_join"
+            }
+          ]
+        }
+      },
+      "id": "if-device-join",
+      "name": "Device Join?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.event_type }}",
+              "operation": "equals",
+              "value2": "bubble_change"
+            }
+          ]
+        }
+      },
+      "id": "if-bubble-change",
+      "name": "Bubble Change?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 350]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.event_type }}",
+              "operation": "equals",
+              "value2": "manual_correction"
+            }
+          ]
+        }
+      },
+      "id": "if-manual-correction",
+      "name": "Manual Correction?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 500]
+    },
+    {
+      "parameters": {
+        "url": "http://aiochi-identity:8060/api/presence",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.data) }}",
+        "options": {}
+      },
+      "id": "report-presence",
+      "name": "Report Device to AIOCHI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 100]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://aiochi-identity:8060/api/device/' + $json.data.mac + '/assign' }}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ bubble_id: $json.data.bubble_id || $json.data.new_bubble_id, confidence: $json.data.confidence || 0.5, reason: 'Device join event from Fortress' }) }}",
+        "options": {}
+      },
+      "id": "assign-bubble",
+      "name": "Assign Bubble in AIOCHI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [850, 100]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://aiochi-identity:8060/api/device/' + $json.data.mac + '/assign' }}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ bubble_id: $json.data.new_bubble_id, confidence: $json.data.confidence || 0.8, reason: 'Bubble change: ' + ($json.data.reason || 'User action') }) }}",
+        "options": {}
+      },
+      "id": "update-bubble-assignment",
+      "name": "Update Bubble Assignment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 350]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://aiochi-identity:8060/api/device/' + $json.data.mac + '/assign' }}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ bubble_id: $json.data.new_bubble_id, confidence: 1.0, reason: 'Manual correction: ' + ($json.data.correction_reason || 'User override') }) }}",
+        "options": {}
+      },
+      "id": "apply-correction",
+      "name": "Apply Manual Correction",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [650, 500]
+    },
+    {
+      "parameters": {
+        "url": "http://aiochi-identity:8060/api/feed",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ narrative: { id: 'correction-' + Date.now(), type: 'bubble_correction', device: $json.data.mac, from_bubble: $json.data.old_bubble_id, to_bubble: $json.data.new_bubble_id, reason: $json.data.correction_reason, timestamp: new Date().toISOString() } }) }}",
+        "options": {}
+      },
+      "id": "log-correction-narrative",
+      "name": "Log Correction Narrative",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [850, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log the sync event for debugging\nconst data = $input.item.json;\nconsole.log('AIOCHI Bubble Sync:', data.event_type, data.data?.mac || 'no-mac');\nreturn [{ json: { status: 'synced', event: data.event_type, timestamp: new Date().toISOString() } }];"
+      },
+      "id": "log-completion",
+      "name": "Log Sync Completion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {},
+      "id": "no-op-other",
+      "name": "Other Event (No Action)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [650, 650]
+    }
+  ],
+  "connections": {
+    "Bubble Events Webhook": {
+      "main": [
+        [
+          { "node": "Device Join?", "type": "main", "index": 0 },
+          { "node": "Bubble Change?", "type": "main", "index": 0 },
+          { "node": "Manual Correction?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Device Join?": {
+      "main": [
+        [{ "node": "Report Device to AIOCHI", "type": "main", "index": 0 }],
+        [{ "node": "Other Event (No Action)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Bubble Change?": {
+      "main": [
+        [{ "node": "Update Bubble Assignment", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Manual Correction?": {
+      "main": [
+        [{ "node": "Apply Manual Correction", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Report Device to AIOCHI": {
+      "main": [
+        [{ "node": "Assign Bubble in AIOCHI", "type": "main", "index": 0 }]
+      ]
+    },
+    "Assign Bubble in AIOCHI": {
+      "main": [
+        [{ "node": "Log Sync Completion", "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Bubble Assignment": {
+      "main": [
+        [{ "node": "Log Sync Completion", "type": "main", "index": 0 }]
+      ]
+    },
+    "Apply Manual Correction": {
+      "main": [
+        [{ "node": "Log Correction Narrative", "type": "main", "index": 0 }]
+      ]
+    },
+    "Log Correction Narrative": {
+      "main": [
+        [{ "node": "Log Sync Completion", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "AIOCHI", "id": "aiochi" },
+    { "name": "Bubble", "id": "bubble" },
+    { "name": "Sync", "id": "sync" }
+  ],
+  "pinData": {},
+  "versionId": "1.0.0"
+}

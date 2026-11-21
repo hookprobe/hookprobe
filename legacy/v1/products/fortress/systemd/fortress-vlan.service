@@ -1,0 +1,58 @@
+#!/usr/bin/env systemd
+#
+# fortress-vlan.service - Fortress OVS Post-Netplan Configuration
+#
+# This service runs AFTER netplan/systemd-networkd has created:
+#   - OVS bridge (FTS)
+#   - VLAN interfaces (FTS, FTS)
+#   - IP addressing
+#
+# This service only configures what netplan cannot:
+#   - OpenFlow rules for traffic flow
+#   - Port access modes
+#   - Container network bridge connectivity
+#
+# The bridge and VLAN interfaces are created by netplan, which is
+# faster and more reliable than bash scripts.
+#
+# Install:
+#   sudo cp fortress-vlan.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable fortress-vlan.service
+#
+
+[Unit]
+Description=HookProbe Fortress OVS Post-Setup
+Documentation=https://hookprobe.com/docs/fortress
+
+# Run after network is configured by netplan/networkd
+After=network-online.target systemd-networkd.service openvswitch-switch.service
+Wants=network-online.target
+Requires=openvswitch-switch.service
+
+# Run after hostapd so WiFi interfaces are on the OVS bridge
+After=fts-hostapd-24ghz.service fts-hostapd-5ghz.service
+Wants=fts-hostapd-24ghz.service fts-hostapd-5ghz.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# No sleep needed - systemd-networkd handles timing via netlink events
+# The script waits for bridge to exist (max 15s) if needed
+
+# Run OVS post-setup (brings up VLANs, OpenFlow rules, port VLANs, container veth)
+ExecStart=/opt/hookprobe/fortress/devices/common/ovs-post-setup.sh setup
+
+# NOTE: dnsmasq restart is NOT needed here anymore.
+# The fix for DHCP race conditions is now handled by:
+# 1. dnsmasq uses bind-dynamic (not bind-interfaces) for late interface binding
+# 2. dnsmasq drop-in has After=fortress-vlan.service (starts AFTER this completes)
+# 3. dnsmasq ExecStartPre waits for FTS IP + 3s stabilization delay
+# This ensures OpenFlow rules are in place before dnsmasq binds the DHCP socket.
+
+# On stop, don't cleanup (keep config for debugging)
+# Use 'systemctl restart fortress-vlan' to reapply
+
+[Install]
+WantedBy=multi-user.target

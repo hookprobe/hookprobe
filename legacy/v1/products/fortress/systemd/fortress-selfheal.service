@@ -1,0 +1,11 @@
+[Unit]
+Description=HookProbe Fortress Organism Self-Heal (watchdog)
+After=fortress.service fortress-ids.service aiochi.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/hookprobe/fortress/scripts/organism_selfheal.py
+# exit 0 = healthy, 1 = healed (action taken) — both are success.
+# exit 2 = critical (needs human) — left as failed so it surfaces in systemctl.
+SuccessExitStatus=0 1
+Nice=10

@@ -1,0 +1,72 @@
+<?xml version="1.0"?>
+<!--
+  HookProbe IDS ClickHouse Users Configuration
+  Replaces the stock /etc/clickhouse-server/users.xml
+  CLICKHOUSE_SKIP_USER_SETUP=1 prevents entrypoint interference
+-->
+<clickhouse>
+    <profiles>
+        <default>
+            <max_memory_usage>1000000000</max_memory_usage>
+            <max_execution_time>60</max_execution_time>
+            <load_balancing>random</load_balancing>
+        </default>
+        <readonly>
+            <readonly>1</readonly>
+            <max_memory_usage>1000000000</max_memory_usage>
+            <max_execution_time>60</max_execution_time>
+        </readonly>
+    </profiles>
+
+    <users>
+        <!-- Default user for entrypoint DB creation (empty password, localhost only) -->
+        <default>
+            <password></password>
+            <networks>
+                <ip>::1</ip>
+                <ip>127.0.0.1</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <access_management>1</access_management>
+        </default>
+
+        <!-- IDS application user (used by HYDRA/NAPSE containers) -->
+        <!-- SECURITY: Password is set via 00-create-users.sql at deploy time -->
+        <!-- This XML entry provides network/profile/quota defaults only -->
+        <ids>
+            <networks>
+                <ip>::1</ip>
+                <ip>127.0.0.1</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <access_management>0</access_management>
+        </ids>
+
+        <!-- Read-only dashboard user -->
+        <readonly>
+            <password_sha256_hex>05b1ee6d42cf8563df59d880657a299b35d59e6be071f157bafcb030faf6988a</password_sha256_hex>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+            </networks>
+            <profile>readonly</profile>
+            <quota>default</quota>
+            <access_management>0</access_management>
+        </readonly>
+    </users>
+
+    <quotas>
+        <default>
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+            </interval>
+        </default>
+    </quotas>
+</clickhouse>

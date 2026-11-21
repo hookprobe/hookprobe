@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Fortress Organism Self-Heal every 5 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30
+Persistent=true
+
+[Install]
+WantedBy=timers.target
