@@ -13,6 +13,12 @@ import random
 from . import VERSION, canon
 
 BUILDER = {"name": "heqk-intel-builders", "version": VERSION}
+# Collections whose examples restate lookup-table facts (agreed with the Neuro session, 2026-11-21): kept in
+# the general build, but a small model should look these facts up (heqk_data.py lookup), not memorise them.
+USAGE_NOTES = {
+    "vulnerability_intelligence": "lookup-backed, not for small-model fine-tuning: templated CVE/KEV facts that "
+                                  "mirror lookup cve.jsonl; Neuro excludes this collection and uses the lookup table.",
+}
 PREFIX = {"dns_intelligence": "dns", "network_intelligence": "net", "attack_intelligence": "atk",
           "malware_intelligence": "mal", "vulnerability_intelligence": "vuln", "soc_reasoning": "soc"}
 
