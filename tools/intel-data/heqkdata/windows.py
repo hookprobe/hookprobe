@@ -35,6 +35,19 @@ Choices (agreed with the Neuro session, 2026-11-20):
   2020-01-01, no baseline. Used for the acceptance test only.
 Sealed sources/scenarios (registry/sealed.json) are refused unless unsealed explicitly; every unseal is
 written to the audit log.
+
+CTU-13 (Argus binetflow; agreed with the Neuro session, 2026-11-21):
+- Scenario names for the split are the MEGA mirror directory names, "CTU-13.Dataset-<capture>" (scenario n =
+  capture 41 + n), frozen before any window was exported: dev = 1, 5, 8; test = the other nine; 10 missing.
+- The university network uses public addresses, so "LAN" does not identify the host. The host is taken from the
+  dataset's own labels: "From-Botnet/Normal-..." -> the originator, "To-..." -> the responder, an undirected
+  "Normal-..." -> the originator. Only those labelled hosts are local (H pseudonyms); every other address,
+  including the rest of 147.32.0.0/16, is remote.
+- Background flows (label null: unknown, NOT benign) that touch a labelled host stay in that host's window as
+  unlabelled context, counted in "background_events"; "labels" counts only Botnet/Normal flows. A host-hour
+  with no labelled flow gets no window (counted in the export's file entry).
+- Argus StartTime carries no zone and is used as written, so hour_utc is the capture's clock hour, not
+  verified UTC.
 """
 import collections
 import datetime
@@ -51,8 +64,16 @@ from .adapters import Ctx, Reject
 
 # Bump when the window content changes for the same inputs (host rule, pseudonyms, fields, drops), so a new
 # export gets a new version directory instead of overwriting one a consumer may already be reading.
-# 1 = #1402; 2 = IPv6 local hosts, drops counted by kind.
+# 1 = #1402; 2 = IPv6 local hosts, drops counted by kind. Adding the CTU-13 path left IoT-23 output unchanged,
+# so FORMAT stays 2 (CTU-13 exports get their own ids from their acquisition ids).
 FORMAT = 2
+# Split / file names per source, from the store's "<scenario>__<file>" prefix. Sources not listed use the prefix.
+SCENARIO_NAMES = {"ctu-13": lambda s: f"CTU-13.Dataset-{int(s) + 41}" if s.isdigit() else s}
+
+
+def scenario_name(source_id, filename):
+    s = filename.split("__", 1)[0]
+    return SCENARIO_NAMES.get(source_id, lambda x: x)(s)
 RST = {"REJ", "RSTO", "RSTR", "RSTOS0", "RSTRH", "S0", "SH"}
 SPLIT_RULES = {
     # tools/neuro-research/replay_iot23.py split_of(): dev = sha256(scenario name) % 3 == 0, else test.
@@ -100,7 +121,8 @@ def _alloc(i, pools):
 class Pseudonyms:
     """Per-capture, first-appearance allocation. Injective; deterministic for a given time-ordered stream."""
 
-    def __init__(self):
+    def __init__(self, local=None):
+        self.local = local or lan  # which addresses are the site's own hosts (H pseudonyms)
         self.ip = {}
         self.n_lan = self.n_remote = self.n_v6 = 0
         self.dom = {}
@@ -118,10 +140,10 @@ class Pseudonyms:
             return ip
         if a.is_multicast or a.is_unspecified or ip == "255.255.255.255" or (a.version == 4 and ip.endswith(".255") and lan(ip)):
             out = ip  # no identity in these
-        elif a.version == 6 and not lan(ip):
+        elif a.version == 6 and not self.local(ip):
             self.n_v6 += 1
             out = str(ipaddress.IPv6Address(int(ipaddress.IPv6Address("2001:db8::")) + self.n_v6))
-        elif lan(ip):
+        elif self.local(ip):
             out = _alloc(self.n_lan, [LAN_POOL])
             self.n_lan += 1
         else:
@@ -289,9 +311,9 @@ def _write_window(out, head, n_events, make_events, chunk_events):
     return n
 
 
-def host_windows(store, registry, acq, out, split, chunk_events=0, workdir=None):
+def host_windows(store, registry, acq, out, split, chunk_events=0, workdir=None, scenario=None):
     """Write every host-hour window of one acquisition to `out`. Returns counts."""
-    scenario = acq["filename"].split("__", 1)[0]
+    scenario = scenario or acq["filename"].split("__", 1)[0]
     P = Pseudonyms()
     tmp = tempfile.mkdtemp(prefix=".windows-", dir=workdir or store.root)
     counts = collections.Counter()
@@ -347,6 +369,101 @@ def host_windows(store, registry, acq, out, split, chunk_events=0, workdir=None)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return counts
+
+
+def _binet_host(rec):
+    """The labelled host of a CTU-13 flow, from the label's direction; None for Background."""
+    lab = rec["labels"]
+    if lab["label"] not in ("malicious", "benign"):
+        return None
+    ol = lab["original_label"] or ""
+    return rec["body"]["resp_ip"] if ol.startswith("To-") else rec["body"]["orig_ip"]
+
+
+def _binet_tuple(rec):
+    t = _flow_tuple(rec)
+    coarse = {"malicious": "Botnet", "benign": "Normal"}.get(rec["labels"]["label"], "Background")
+    return t[:14] + (coarse, rec["labels"]["original_label"] or "-")
+
+
+def binetflow_host_windows(store, registry, acq, out, split, chunk_events=0, workdir=None, scenario=None):
+    """CTU-13 host-hour windows: hosts from the labels, Background kept as unlabelled context (module docstring)."""
+    scenario = scenario or acq["filename"].split("__", 1)[0]
+    counts = collections.Counter()
+    hosts = set()
+    for rec in _flows(store, registry, acq):  # pass 1: which addresses the dataset labels as hosts
+        h = _binet_host(rec)
+        if h:
+            hosts.add(h)
+    P = Pseudonyms(local=lambda ip: ip in hosts)
+    tmp = tempfile.mkdtemp(prefix=".windows-", dir=workdir or store.root)
+    try:
+        sp = _Spill(tmp)
+        for rec in _flows(store, registry, acq):  # pass 2: assign every flow touching a labelled host
+            t = _binet_tuple(rec)
+            counts["flows"] += 1
+            host = _binet_host(rec)
+            if host is None:
+                o, r = t[1], t[3]
+                host = o if o in hosts else r if r in hosts else None
+                if host is None:
+                    counts["dropped_background_without_labelled_host"] += 1
+                    continue
+            sp.add(int(t[0] // 3600), (host,) + t)
+        sp.close()
+        counts["rejects"] = getattr(_flows, "rejects", 0)
+        counts["labelled_hosts"] = len(hosts)
+        hist = _PairHistory(os.path.join(tmp, "pairs.sqlite"))
+        last_prune = None
+        for hour in sorted(sp.hours):
+            if last_prune is None or hour - last_prune >= 24:
+                hist.prune(hour - 24)
+                last_prune = hour
+            rows = sp.read(hour)
+            rows.sort(key=lambda x: (x[1], x[0]))
+            by_host = collections.OrderedDict()
+            for x in rows:
+                by_host.setdefault(x[0], []).append(x[1:])
+            for host, flows in by_host.items():
+                labels = collections.Counter(f"{t[14]}/{t[15]}" for t in flows if t[14] != "Background")
+                if not labels:
+                    counts["host_hours_background_only_skipped"] += 1
+                    counts["events_in_skipped_host_hours"] += len(flows)
+                    continue
+                pairs = {}
+                for t in flows:
+                    k = (t[1], t[3])
+                    if k not in pairs:
+                        pairs[k] = (P.addr(t[1]), P.addr(t[3]))
+                known = hist.seen_since(host, pairs, hour - 24, hour)
+                base = {pairs[k] for k in known}
+                hist.mark(host, pairs, hour)
+                hour_utc = _iso(hour * 3600)[:13] + ":00Z"
+                n_bg = sum(1 for t in flows if t[14] == "Background")
+                head = {"window_id": f"{scenario}|{P.addr(host)}|{hour_utc}", "dataset": acq["source_id"],
+                        "acq_id": acq["acquisition_id"], "source": scenario, "host": P.addr(host), "hour_utc": hour_utc,
+                        "split": split, "labels": dict(sorted(labels.items())), "background_events": n_bg,
+                        "baseline": {"pairs": sorted([list(p) for p in base]), "suffixes": []}}
+                counts["lines"] += _write_window(out, head, len(flows),
+                                                 lambda lo, hi, f=flows: [_binet_event(t, _iso(t[0]), P) for t in f[lo:hi]],
+                                                 chunk_events)
+                counts["windows"] += 1
+                counts["events"] += len(flows)
+                counts["background_events"] += n_bg
+                counts["max_window_events"] = max(counts["max_window_events"], len(flows))
+        counts.update({f"pseudonyms_{k}": v for k, v in P.stats().items()})
+        hist.close()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return counts
+
+
+def _binet_event(t, ts, P):
+    e = _event(t, ts, P)
+    e["state"] = None  # Argus State is not a Zeek conn_state; no rst/est mapping is claimed
+    if t[14] == "Background":
+        e["label"] = None  # unknown, never benign
+    return e
 
 
 def scenario_hour_windows(store, registry, acq, out, split, max_rows=1_500_000):
@@ -413,7 +530,7 @@ def export(store, registry, source_id, purpose, split_rule, out_root=None, windo
                 "max_rows": max_rows if window == "scenario-hour" else None, "files": [], "skipped": {}, "unsealed": []}
     for fn in sorted(acqs):
         a = acqs[fn]
-        scenario = fn.split("__", 1)[0]
+        scenario = scenario_name(source_id, fn)
         s = rule(scenario)
         if splits and s not in splits:
             manifest["skipped"][scenario] = f"split {s} not requested"
@@ -427,8 +544,12 @@ def export(store, registry, source_id, purpose, split_rule, out_root=None, windo
             manifest["unsealed"].append(scenario)
         path = os.path.join(out_dir, f"{scenario}.jsonl")
         with open(path + ".partial", "w", encoding="utf-8") as out:
-            if window == "host-hour":
-                c = host_windows(store, registry, a, out, s, chunk_events)
+            adapter = (registry.source(source_id).get("adapter")
+                       or (registry.source(source_id)["acquisition"] or {}).get("adapter"))
+            if window == "host-hour" and adapter == "argus_binetflow":
+                c = binetflow_host_windows(store, registry, a, out, s, chunk_events, scenario=scenario)
+            elif window == "host-hour":
+                c = host_windows(store, registry, a, out, s, chunk_events, scenario=scenario)
             else:
                 c = scenario_hour_windows(store, registry, a, out, s, max_rows)
         os.chmod(path + ".partial", 0o444)

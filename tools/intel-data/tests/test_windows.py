@@ -193,5 +193,65 @@ class ExportRules(unittest.TestCase):
         self.assertNotIn("superseded_acquisition:f-iot23", bman["excluded"])
 
 
+BINET_HEAD = "StartTime,Dur,Proto,SrcAddr,Sport,Dir,DstAddr,Dport,State,sTos,dTos,TotPkts,TotBytes,SrcBytes,Label\n"
+
+
+def brow(sec, src, dst, dport, label):
+    t = H0 + sec
+    import datetime as _dt
+    ts = _dt.datetime.fromtimestamp(t, tz=_dt.timezone.utc).strftime("%Y/%m/%d %H:%M:%S.%f")
+    return f"{ts},0.5,tcp,{src},40000,   ->,{dst},{dport},FSPA_FSPA,0,0,4,400,100,flow={label}\n"
+
+
+class BinetflowWindows(unittest.TestCase):
+    """CTU-13 path. SYNTHETIC rows (RFC 5737 addresses) in the binetflow layout."""
+
+    def setUp(self):
+        self.sb = Sandbox()
+        self.addCleanup(self.sb.close)
+        self.reg = registry.Registry(self.sb.reg)
+        self.st = Store(self.sb.data)
+
+    def _capture(self, rows):
+        d = os.path.join(self.sb.dir, "cap", "1")
+        os.makedirs(d)
+        p = os.path.join(d, "capture-synthetic.binetflow")
+        with open(p, "w") as f:
+            f.write(BINET_HEAD + "".join(rows))
+        return self.st.register(self.reg, "f-ctu13", p, "commercial_training")
+
+    def test_hosts_from_labels_background_as_context(self):
+        bot, normal, other, remote = "192.0.2.165", "192.0.2.20", "192.0.2.99", "198.51.100.10"
+        acq = self._capture([
+            brow(1, bot, remote, 80, "From-Botnet-V42-TCP-CC6"),
+            brow(2, remote, normal, 22, "To-Normal-V42-SSH"),           # 'To-': the responder is the host
+            brow(3, bot, "203.0.113.5", 53, "Background-UDP-Established"),  # touches the botnet host: context
+            brow(4, other, remote, 443, "Background-TCP-Established"),  # touches no labelled host: dropped
+            brow(3600 + 5, normal, remote, 443, "Background-TCP-Attempt"),  # background-only host-hour: no window
+        ])
+        buf = io.StringIO()
+        c = windows.binetflow_host_windows(self.st, self.reg, acq, buf, "dev")
+        lines = [json.loads(l) for l in buf.getvalue().splitlines()]
+        self.assertEqual(len(lines), 2)
+        by = {l["labels"] and next(iter(l["labels"])).split("/")[0]: l for l in lines}
+        b, n = by["Botnet"], by["Normal"]
+        self.assertEqual((b["labels"], b["background_events"], len(b["events"])), ({"Botnet/From-Botnet-V42-TCP-CC6": 1}, 1, 2))
+        self.assertIsNone(b["events"][1]["label"])           # background: unknown, never benign
+        self.assertIsNone(b["events"][0]["state"])           # Argus State is not mapped to rst/est
+        self.assertEqual(n["events"][0]["dst_ip"], n["host"])  # oriented by initiator, kept in the host's window
+        self.assertTrue(b["host"].startswith("192.168.") and n["host"].startswith("192.168."))
+        self.assertTrue(b["events"][0]["dst_ip"].startswith(("198.51.100.", "203.0.113.")))  # unlabelled = remote
+        self.assertEqual((c["dropped_background_without_labelled_host"], c["host_hours_background_only_skipped"],
+                          c["labelled_hosts"]), (1, 1, 2))
+
+    def test_ctu13_split_names_are_the_frozen_mirror_names(self):
+        rule = windows.SPLIT_RULES["neuro-sha256-mod3"]
+        got = {n: rule(windows.scenario_name("ctu-13", f"{n}__x.binetflow")) for n in range(1, 14)}
+        self.assertEqual(sorted(n for n, s in got.items() if s == "dev"), [1, 5, 8])
+        self.assertEqual(windows.scenario_name("ctu-13", "1__capture20110810.binetflow"), "CTU-13.Dataset-42")
+        self.assertEqual(windows.scenario_name("iot-23", "CTU-IoT-Malware-Capture-1-1__conn.log.labeled"),
+                         "CTU-IoT-Malware-Capture-1-1")
+
+
 if __name__ == "__main__":
     unittest.main()
