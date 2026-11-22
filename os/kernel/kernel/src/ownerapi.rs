@@ -876,6 +876,11 @@ pub fn wifi_inject(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resu
         sta = Some(m);
     }
     arch_aarch64::_print(format_args!(" [OWNER] BENCH wifi-inject {} requested ({})\n", kind, reason.trim()));
+    // HookProbe Neuro (bench, with `neuro`): fault el0-neuro through its real supervised call path
+    #[cfg(feature = "neuro")]
+    if kind == "neuro-fault" {
+        return crate::neuro::bench_fault();
+    }
     crate::el0srv::keyer::inject(kind, sta)
 }
 
