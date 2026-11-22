@@ -1,0 +1,30 @@
+{
+ "verdict_agreement": 1.0,
+ "next_step": [
+  63,
+  63
+ ],
+ "tool": [
+  5,
+  6
+ ],
+ "copilot": [
+  6,
+  6
+ ],
+ "disagreements": [
+  {
+   "id": "tool-016",
+   "on": "tool",
+   "annotator": {
+    "id": "tool-016",
+    "tool": "propose_policy_change",
+    "args": {
+     "entity": "H1",
+     "policy": "isolated"
+    },
+    "note": "Assistant cannot delete malware; proposing isolation is the closest permitted action."
+   }
+  }
+ ]
+}
