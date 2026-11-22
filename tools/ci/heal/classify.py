@@ -58,7 +58,10 @@ RULES = [
         r"The operation was canceled"]),
     ("qemu_budget", "rerun", "g2", [r"TIMEOUT after \d+s", r"qemu.*timed out"]),
     ("build_error", "autofix", None, [
-        r"error\[E\d{4}\]", r"error: could not compile", r"GAP: build broken", r"UI build failed"]),
+        r"error\[E\d{4}\]", r"error: could not compile", r"GAP: build broken", r"UI build failed",
+        # npm dependency resolution (a peer conflict, e.g. solid-js 2 vs @astrojs/solid-js, #1481 / #1486): the
+        # install never starts, so the QEMU gate's embedded UI build used to triage as "unknown"
+        r"npm (?:ERR!|error) code ERESOLVE", r"npm (?:ERR!|error) Could not resolve dependency"]),
     ("test_failure", "autofix", "g1", [r"test result: FAILED", r"panicked at "]),
     ("qemu_phase_regression", "autofix", "g2", [r"VERDICT: REGRESSION", r"FAIL — (?:verifier|WiFi crypto KAT)"]),
     ("e2e_failure", "autofix", "g3", [r"MC-E2E: FAIL", r"^\s+FAIL\s{2}\S"]),
