@@ -20,6 +20,9 @@ wpa3 = ["dep:sae"]
 # ADR 0065 step 4g S3d (with `wpa3`): every Wi-Fi key lives in el0-wpa; the in-kernel keyer / SAE / group-key fallback
 # is compiled out (cfg `el0_keys`, build.rs). Enabled by the kernel's `apmc` (the images that load el0-wpa).
 el0-keys = []
+# BENCH ONLY (with the kernel's `wifi-inject`): driver-side fault points for the metal proofs (gap-fix R7: a dropped
+# authorize ioctl must fall back to the authorize iovar). Never in a shipping image.
+wifi-inject = []
 # REL-08 (soak 2026-11-11): work around the CYW43455 7.45.265 PMKID-cache expiry use-after-free (raspberrypi/linux
 # #7528) by patching ONE instruction of the downloaded firmware in chip RAM (the cache lifetime 3600 -> 0x7f000000
 # ticks, i.e. never expires). The shipped firmware file stays byte-exact. OFF until the operator rules on the
