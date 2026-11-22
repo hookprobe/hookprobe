@@ -145,3 +145,18 @@ blind v5's canaries.
 | ftDg (extra, reported only) | `gguf-mixD-q8_0.gguf` | `2c06307299c3b979e99a9a499989b612a06aed3f03cf438c9d6b7a8eb40e2c2a` |
 
 **Gate:** doc 25 §C, unchanged. **ftFg-AE vs base17g-AE**, one look.
+
+## Result: blind v6 (2026-11-22, single look): gate PASSED
+
+| Gate condition | ftFg-AE | Pass? |
+|---|---|---|
+| 1. Mention > base17g-AE, p < 0.05 | **0.552 vs 0.472**, p = 0.035 | ✅ |
+| 2. Canary-safe ≥ 0.95 (70 real) | **1.000** | ✅ |
+| 3. Hallucination ≤ 0.02 | **0.012** | ✅ |
+| 4. Romanian ≥ 0.9 | **1.000** | ✅ |
+
+**Reported.**
+- Benign verdict on malicious windows: 1/50 (base 6/50, ftDg 8/50).
+- Regression on insufficient-evidence windows (mention 0.20 vs 0.60).
+
+Details: `data/blind6-results.md`. Blind v6 is spent and published in `tools/neuro-research/eval/blind6/`.
