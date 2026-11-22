@@ -265,6 +265,60 @@ def f_contrast(w, r, ro):
     return (v, [f], [H.split("=")[0], R.split("=")[0]], mm + m, nx, "contrast-" + k)
 
 
+# ---- thin evidence (doc 33): ONE weak signal, no corroboration, gold is never malicious ----------------------------
+THIN = ["insufficient", "not enough", "inconclusive", "single", "cannot confirm", "more data", "too little",
+        "insuficient", "insuficiente", "neconcludent", "neconcludentă", "nu ajunge", "nu este suficient"]
+
+
+def f_thin(w, r, ro):
+    H, R = w.ref("H", g.ip_lan(r)), w.ref("R", g.ip_wan(r))
+    k = r.choice(["small_upload", "dns_only", "blocked_once", "short_periodic", "two_failed_logins", "shared_cdn_ioc",
+                  "new_device", "few_ports"])
+    ents = [H.split("=")[0], R.split("=")[0]]
+    if k == "small_upload":
+        m = role(w, H, r.choice(DEVICES), ro)
+        f = w.card("%s->%s:443 n=1 out=%dKB novel det=exfiltration[T1048,sev1,PASS, observe]" % (H, R, r.randrange(3, 60)))
+        v, mm, nx = ["insufficient_evidence", "suspicious"], ["upload", "small"], ["observe", "investigate"]
+    elif k == "dns_only":
+        m = role(w, H, r.choice(DEVICES), ro)
+        D = w.ref("D", "%s.example" % r.choice(["cdn-stat", "img-load", "track-px", "upd-chk", "metrics-io"]))
+        f = w.card("%s dns %s n=1 novel det=ioc_match[-,sev3,PASS, observe]" % (H, D))
+        w.ctx_lines.append("CONTEXT no connection to %s followed the lookup" % D.split("=")[0])
+        v, mm, nx, ents = ["insufficient_evidence"], ["lookup", "dns", "no connection"], ["observe", "investigate"], [H.split("=")[0], D.split("=")[0]]
+    elif k == "blocked_once":
+        m = role(w, H, r.choice(DEVICES), ro)
+        f = w.card("%s->%s:%d n=1 novel det=ioc_match[-,sev3,DROP, framedrop]" % (H, R, r.choice([443, 80, 8080])))
+        w.ctx_lines.append("CONTEXT the attempt was blocked and %s did not retry" % H.split("=")[0])
+        v, mm, nx = ["insufficient_evidence", "suspicious"], ["blocked", "once", "no retry"], ["observe", "investigate"]
+    elif k == "short_periodic":
+        m = role(w, H, r.choice(DEVICES), ro)
+        f = w.card("%s->%s:443 n=%d periodic=%ds cv=0.0%d novel det=beaconing[T1071,sev1,PASS, observe]" % (H, R, r.randrange(3, 6), r.choice([60, 300, 600]), r.randrange(2, 9)))
+        v, mm, nx = ["insufficient_evidence", "suspicious"], ["periodic", "few", "short"], ["observe", "investigate"]
+    elif k == "two_failed_logins":
+        m = role(w, H, r.choice(["NAS", "home server", "office desktop", "Raspberry Pi"]), ro)
+        N = w.ref("H", g.ip_lan(r))
+        svc, port = r.choice([("SSH", 22), ("RDP", 3389)])
+        f = w.card("%s->%s:%d n=2 fail=100%% det=bruteforce[T1110,sev1,PASS, observe]" % (N, H, port))
+        v, mm, nx, ents = ["insufficient_evidence"], ["failed", "login", "two", svc.lower()], ["observe", "investigate"], [N.split("=")[0], H.split("=")[0]]
+    elif k == "shared_cdn_ioc":
+        m = role(w, H, r.choice(["smart TV", "phone", "media box", "kids' tablet", "work laptop"]), ro)
+        f = w.card("%s->%s:443 n=%d in=%dMB det=ioc_match[-,sev2,PASS, observe]" % (H, R, r.randrange(5, 60), r.randrange(5, 400)))
+        w.ctx_lines.append("CONTEXT %s is inside a shared CDN range used by many unrelated sites" % R.split("=")[0])
+        v, mm, nx = ["insufficient_evidence", "benign"], ["cdn", "shared"], ["observe"]
+    elif k == "new_device":
+        m = role(w, H, r.choice(DEVICES), ro)
+        f = w.card("%s->%s:443 n=%d out=%dKB novel det=behaviour_change[-,sev1,PASS, observe]" % (H, R, r.randrange(3, 15), r.randrange(10, 300)))
+        w.ctx_lines.append("CONTEXT %s joined the network this hour; there is no baseline yet" % H.split("=")[0])
+        v, mm, nx = ["insufficient_evidence", "benign"], ["new", "baseline"], ["observe"]
+    else:
+        m = role(w, H, r.choice(DEVICES), ro)
+        N = w.ref("H", g.ip_lan(r))
+        ports = sorted(r.sample([22, 80, 139, 443, 445, 554, 631, 1900, 5000, 8080], r.randrange(2, 5)))
+        f = w.card("%s->%s:%s n=%d novel det=port_scan[T1046,sev1,PASS, observe]" % (H, N, ",".join(map(str, ports)), len(ports)))
+        v, mm, nx, ents = ["insufficient_evidence", "benign"], ["ports", "few"], ["observe", "investigate"], [H.split("=")[0], N.split("=")[0]]
+    return (v, [f], ents, THIN + mm + m, nx, "thin-" + k)
+
+
 # ---- owner context that is WRONG (evidence wins) and severity decoys ---------------------------------------------
 def f_misleading(w, r, ro):
     v, ev, en, mm, nx, k = r.choice([f_c2_beacon, f_infostealer_exfil, f_cryptominer])(w, r, ro)
@@ -354,7 +408,7 @@ def f_injection(w, r, ro):
 CANARY_STYLE = {"style": "sentence"}
 
 FAMS = [(f_mirai, 6), (f_cryptominer, 6), (f_bruteforce_lateral, 7), (f_c2_beacon, 7), (f_infostealer_exfil, 6), (f_dga, 4),
-        (f_ransomware_pre, 4), (f_proxyware, 4), (f_fp, 30), (f_misleading, 8), (f_insufficient, 8), (f_injection, 0), (f_contrast, 0)]
+        (f_ransomware_pre, 4), (f_proxyware, 4), (f_fp, 30), (f_misleading, 8), (f_insufficient, 8), (f_injection, 0), (f_contrast, 0), (f_thin, 0)]
 
 
 def norm(s):
