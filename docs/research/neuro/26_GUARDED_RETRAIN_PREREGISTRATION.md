@@ -94,3 +94,54 @@ student never sees the hint, and the hint-leak filter applies.
 
 **A failure:** the evidence then favours shipping the guard with the base model, or with ftDg as it stands, and
 moving to field data (P7).
+
+## Addendum: dev selection result (2026-11-22)
+
+Applying §B as written selected **ftFg-AE**. Mention was 0.590 against 0.489 for base17g-AE (p = 1e-09).
+Canary-safe was 211/211 and hallucination 0. On malicious cases ftFg gives a benign verdict 0.6% of the time, against
+12.9% for ftDg. Details: `data/mixF-dev-results.md`. Blind v6 therefore proceeds per §C.
+
+## SEAL: blind v6 (2026-11-22, before any model is evaluated on it)
+
+**File:** `blind_cases.jsonl`. **SHA-256 `8988df3aaeedf9b5c2f64cb4f9c0aef00bf9e73272744ed0d9e24f324f119e5a`.**
+
+**Counts and mix.**
+- 300 cases: mal 50, sus 35, ben 45, ins 20, cor 20, inj 80, cop 25, tool 25.
+- 35 Romanian (11.7%).
+- Triage and injection: 250. 97 of them accept two verdicts; none accepts more than two.
+
+**Injection cases: 70 real, each with a unique canary, plus 10 look-alikes.**
+- Canary forms: 36 identifier-style, 34 sentence-style.
+- **42** sit on lines without the marker.
+- Every canary is inside a quoted value, none is in an owner note, and there are no duplicate contexts.
+
+**Brief.** The blind v5 brief, unchanged except that the banned canary list also includes the 142 words used in
+blind v5's canaries.
+
+**Validator.** The author's validator passes; its self-test catches 40/40 deliberate breaks.
+
+**Seal checks (`blind6_seal.py`): PASS.**
+- 0 marker-rule violations.
+- 0 collisions with any earlier set, including blind v5 and the T0 v3 contrast set.
+- 0 of the 70 canaries in any training file, including mixF.
+- **Self-test:** run on blind v5, the checks correctly fail with 300 collisions and 70 canaries found.
+
+**Second annotator** (fresh agent, sample only, no gold): 75 stratified cases.
+- **Before adjudication:** verdict 60/63, `next_step` 61/63, tool 6/6, copilot 5/6.
+- **The author adjudicated:**
+  - inj-063: (a) kept, as the case already accepts two verdicts;
+  - inj-007: (b) widened to suspicious;
+  - inj-027: (b) widened to malicious;
+  - cop-012: (b) synonyms added.
+- **After adjudication:** verdict 62/63, `next_step` 63/63, tool 6/6, copilot 6/6.
+- The pre-adjudication file (`e56d9d6e…`) also passed every seal check.
+
+**Frozen models (SHA-256), checked by `blind6_eval.sh` before it runs:**
+
+| Model | File | SHA-256 |
+|---|---|---|
+| base17g | `base17-q8_0.gguf` | `b42e5551df9518eaf144220fe36beb1cdd557d4d9e2052c11ff30a6e92a19101` |
+| ftFg | `gguf-mixF-q8_0.gguf` | `0b0d276ed5a9f0a5b6597830c3f751411db6d62f3d962ec58e1f12d19f3161ed` |
+| ftDg (extra, reported only) | `gguf-mixD-q8_0.gguf` | `2c06307299c3b979e99a9a499989b612a06aed3f03cf438c9d6b7a8eb40e2c2a` |
+
+**Gate:** doc 25 §C, unchanged. **ftFg-AE vs base17g-AE**, one look.
