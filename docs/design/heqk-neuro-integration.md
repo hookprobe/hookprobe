@@ -43,7 +43,7 @@ In concrete terms:
 | Data-plane adapter (doc 20 §2) + AP-loop taps + hourly close | **QEMU PASS; parity with the reference converter** | `os/neuro/neuro-dp` (host parity test), `[P-neuro-dp]`; AP taps compile for CM5 behind `neuro` |
 | CM5 metal (timing, loop-gap impact) | **not run** | §9 P3 |
 | Sealed snapshots of the behavioural memory | **proposed** (doc 14 P5) | not designed; privacy review needed (§10 D4) |
-| Protection model (DNA v1 f16 baseline, policy compiler, HQPROP1) | **proposed** | docs 27–31; M3 not run |
+| Protection model (DNA v1 f16 baseline, policy compiler, HQPROP1) | **proposed**; M3 (doc 31) **approved for unsealing and in progress** — gates P5; no L1 threshold before it | docs 27–31, 32 §3 |
 | HNX model package, model region, FP/SIMD lease (L1+) | **proposed** | docs 06, 12 (R2–R9) |
 | SMP (ADR 0060), memory budgets (ADR 0061) | **proposed ADRs**; single core today | ADR 0060/0061 status lines |
 
@@ -215,7 +215,7 @@ On any failure nothing is kept, a complaint is journaled (`WHY_BAD_LENGTH`) and 
 | Level | What | Where | Gate to start |
 |---|---|---|---|
 | **L0** | Integer temporal engine (N0): per-device behavioural memory, evidence only | el0-neuro, EL0 excursion | **implemented, QEMU**; CM5 evidence (§9 P3) |
-| **L1** | Small learned classifiers (e.g. logistic regression, doc 30: 0.031 false alerts per device-day on dev) confirming an L0 detector | EL0, integer or under the FP lease | M3 sealed result (doc 31); §5.4 lease or integer quantisation; signed package (§6.1) |
+| **L1** | Small learned classifiers confirming an L0 detector — the pre-registered candidate is doc 31 S1 (logistic regression, 28 features, 0.002 false alerts per device-day on dev; the 0.031 figure was the 32-feature variant) | EL0, **integer-only** (doc 32 §1: i16 weights / i32 accumulator make the same decisions as float on dev: 1 of 544 and 0 of 15,521 windows differ; ~288 B model) | M3 sealed result (doc 31); §5.4 lease or integer quantisation; signed package (§6.1) |
 | **L2** | Larger models (gradient boosting, small CNN) | companion / PoP until the model region exists | doc 12 R3–R6; ADR 0061 admission |
 | **L3** | Language tier: explainer only, never a judge (Phase 0: as a judge 0.37–0.50 vs L0 0.59) | off-device (ADR 0025 BYO endpoint); on-device only on SKUs with ≥ 4 GB, leased and paced | R2–R8; never on the protection path |
 
@@ -243,7 +243,7 @@ Neuro evidence ─┐
 L0 verdict ─────┼─► deterministic policy compiler (pure function, signed rule table; never sees model text/weights)
 classifier ─────┘        │
                          ▼
-                 HQPROP1 proposal (signed, TTL ≤ 30 min, nonce, evidence references, tightening only)
+                 HQPROP1 proposal (signed, `expires_at` 30 min if unapproved, `ttl_s` of the applied action 60 s–24 h session / ≤ 7 days durable, nonce, evidence refs, tightening only)
                          │
                          ▼
                  OWNER authorisation (K_own, HQMGMT1 envelope, journaled)  ◄── the only authority
@@ -297,6 +297,15 @@ The other 24 boot self-tests in the same boot passed.
 **Not in scope until the soak and release gates are done:** any change to the shipping AP image. The `neuro` feature
 is off everywhere and adds nothing to the AP payload.
 
+## 9b. Neuro-side alignment (doc 32, 2026-11-22)
+
+The research track agreed §1, §4, §6 and §7 in full and corrected §6 L1, §7 HQPROP1 and the M3 status (applied above).
+The connection rule stays doc 20's (TCP SYN / UDP idle ≥ 120 s) for N0; the Zeek-style 300/60 s rule of the DNA v1
+benchmark is Neuro's own mismatch to re-measure before any L1 threshold reaches the device — no kernel change. The L0
+beacon rule (22.4% of home device-hours) waits for M3 S2 before any kernel change (R-D1). Next joint steps: M3 result →
+fixed-point DNA v1 extractor + integer S1 scorer with golden tests (Neuro, `os/neuro`) → an EL0 L1 behind a `caps` bit
+(kernel), after D1–D3.
+
 ## 9a. Data-plane adapter (P2)
 
 `os/neuro/neuro-dp` is EL1 code: it sees addresses so the engine never does. It is a no_std, allocation-free,
@@ -325,7 +334,7 @@ host. This integration consumes its outputs only as signed packages (§6.1), onc
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
 | D1 | Accept the el0-neuro window `0x1_4026_0000` (CM5) / `0xBE00_0000` (QEMU) and ABI v1 as permanent | accept / reassign | accept (reversible; pinned by asserts) |
-| D2 | FP/SIMD for EL0 (L1+) | (a) never: integer-only engines; (b) per-server lease with save/restore/scrub (doc 12 R2); (c) global enable | (b), and only after R0 readouts on CM5. **(c) is unsafe** (cross-server V-register leak) |
+| D2 | FP/SIMD for EL0 (L2+) | (a) never: integer-only engines; (b) per-server lease with save/restore/scrub (doc 12 R2); (c) global enable | (a) through L1 — doc 32 §1 shows the L1 scorer runs integer-only with the same decisions (its DNA v1 extractor still needs fixed-point log1p/entropy/CV with golden tests); (b) only if an L2 model needs it, after R0 readouts on CM5. **(c) is unsafe** (cross-server V-register leak) |
 | D3 | Who signs model packages | (a) the image key (models ride OTA); (b) a separate model key under the same root; (c) the owner | decide before any L1; a new signing identity is an irreversible trust commitment |
 | D4 | Persist the behavioural memory (sealed) across reboot/OTA | (a) no (relearn, current); (b) sealed snapshot, device-bound key, owner-erasable | (a) until a privacy review (per-device behaviour profiles are personal data) |
 | D5 | Owner "this is normal" feedback | (a) none; (b) per-device acknowledgement journaled, used only for display ranking | (a) for N0 (doc 20: undesigned) |
