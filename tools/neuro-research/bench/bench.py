@@ -19,11 +19,35 @@ sys.path.insert(0, __file__.rsplit("/", 1)[0])
 from dna_features import FEATURES  # noqa: E402
 
 F = {n: i for i, n in enumerate(FEATURES)}
+DEVIATION = "--device-deviation" in sys.argv
+
+
+DEV_MIN_HISTORY = 6
+
+
+def add_device_deviation(rows):
+    """Doc 27 §4 per-device baseline, time-ordered with NO look-ahead: for each window, robust deviation of every
+    feature from the median/IQR of the SAME host's earlier windows (same capture). Zero until DEV_MIN_HISTORY
+    windows exist (new devices are not judged against a thin baseline)."""
+    by = {}
+    for r in sorted(rows, key=lambda r: (r["capture"], r["host"], r["hour"])):
+        hist = by.setdefault((r["capture"], r["host"]), [])
+        if len(hist) >= DEV_MIN_HISTORY:
+            H = np.array(hist)
+            med, iqr = np.median(H, 0), np.maximum(np.percentile(H, 75, 0) - np.percentile(H, 25, 0), 0.05)
+            r["dev"] = list(np.clip((np.array(r["x"]) - med) / iqr, -8, 8))
+        else:
+            r["dev"] = [0.0] * len(r["x"])
+        hist.append(r["x"])
 
 
 def load(paths):
     rows = [json.loads(l) for p in paths for l in open(p)]
     rows = [r for r in rows if r["n_events"] >= 3]
+    if DEVIATION:
+        add_device_deviation(rows)
+        for r in rows:
+            r["x"] = r["x"] + r["dev"]
     X = np.array([r["x"] for r in rows], dtype=np.float64)
     y = np.array([r["label"] for r in rows])
     g = np.array([r["capture"] for r in rows])
@@ -104,6 +128,15 @@ def optional():
     return m
 
 
+def hnum(t):
+    """Hour as an integer: ISO 'YYYY-MM-DDTHH...' (window exports) or an hour index (UNSW converter)."""
+    t = str(t)
+    if t.isdigit():
+        return int(t)
+    import datetime
+    return int(datetime.datetime.fromisoformat(t[:13] + ":00:00").timestamp() // 3600)
+
+
 def auc(s, y):
     o = np.argsort(s, kind="mergesort"); r = np.empty(len(s)); r[o] = np.arange(1, len(s) + 1)
     p, n = y.sum(), len(y) - y.sum()
@@ -111,7 +144,10 @@ def auc(s, y):
 
 
 def main():
-    rows, X, y, g = load(sys.argv[1:])
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    held = [a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--benign-test=")]
+    rows, X, y, g = load(args)
+    hosts = np.array(["%s|%s" % (r["capture"], r["host"]) for r in rows]); hours = np.array([r["hour"] for r in rows])
     caps = sorted(set(g))
     print("windows %d (malicious %d) in %d captures: %s" % (len(y), y.sum(), len(caps),
           ", ".join("%s %d/%d" % (c.replace("CTU-IoT-Malware-Capture-", "IoT-").replace("CTU-13.Dataset-", "CTU13-"), y[g == c].sum(), (g == c).sum()) for c in caps)))
@@ -120,8 +156,8 @@ def main():
     if "lightgbm" in methods:                             # doc 29 §5 shape: a learned score only counts with an L0 detector
         lgbf = methods["lightgbm"]
         methods["rules AND lightgbm"] = lambda Xtr, ytr, X: lgbf(Xtr, ytr, X) * (rules(Xtr, ytr, X) > 0)
-    print("\n| method | precision | recall | FPR | false alerts / device-day | AUC | folds with malicious: recall per held-out capture |")
-    print("|---|---|---|---|---|---|---|")
+    print("\n| method | precision | recall | FPR | false alerts / device-day | false incidents / device-day | home-IoT false alerts / device-day | AUC | folds with malicious: recall per held-out capture |")
+    print("|---|---|---|---|---|---|---|---|---|")
     for name, fn in methods.items():
         S = np.zeros(len(y)); P = np.zeros(len(y), dtype=bool); per = []
         for c in caps:
@@ -137,12 +173,50 @@ def main():
         if name == "rules":                                   # the kernel alerts when ANY detector fires
             A = S > 0
             tpa, fpa = (A & (y == 1)).sum(), (A & (y == 0)).sum()
-            print("| rules@any-detector (kernel behaviour) | %.3f | %.3f | %.4f | %.2f | — | operating point: score > 0 |" % (
-                tpa / max(1, tpa + fpa), tpa / max(1, y.sum()), fpa / max(1, (y == 0).sum()), 24 * fpa / max(1, (y == 0).sum())))
+            homeA = np.array([c.startswith("UNSW-") for c in g])
+            print("| rules@any-detector (kernel behaviour) | %.3f | %.3f | %.4f | %.2f | — | %.3f | — | operating point: score > 0 |" % (
+                tpa / max(1, tpa + fpa), tpa / max(1, y.sum()), fpa / max(1, (y == 0).sum()), 24 * fpa / max(1, (y == 0).sum()),
+                24 * (A & (y == 0) & homeA).sum() / max(1, ((y == 0) & homeA).sum()) if homeA.any() else float("nan")))
         tp, fp = (P & (y == 1)).sum(), (P & (y == 0)).sum()
         fpr = fp / max(1, (y == 0).sum())
-        print("| %s | %.3f | %.3f | %.4f | %.2f | %.3f | %s |" % (name, tp / max(1, tp + fp), tp / max(1, y.sum()),
-              fpr, 24 * fpr, auc(S, y), "; ".join(per)))
+        inc = 0
+        for h in set(hosts[(P) & (y == 0)]):
+            hs = sorted(hnum(t) for t in hours[(hosts == h) & P & (y == 0)])
+            prev = None
+            for t in hs:
+                if prev is None or t != prev + 1:
+                    inc += 1
+                prev = t
+        inc_rate = 24 * inc / max(1, (y == 0).sum())
+        home = np.array([c.startswith("UNSW-") for c in g])
+        home_rate = 24 * (P & (y == 0) & home).sum() / max(1, ((y == 0) & home).sum()) if home.any() else float("nan")
+        print("| %s | %.3f | %.3f | %.4f | %.2f | %.2f | %.3f | %.3f | %s |" % (name, tp / max(1, tp + fp), tp / max(1, y.sum()),
+              fpr, 24 * fpr, inc_rate, home_rate, auc(S, y), "; ".join(per)))
+    if held:
+        transfer_fpr(methods, X, y, g, held)
+
+
+def transfer_fpr(methods, X, y, g, held_paths):
+    """Doc 28 v1.2: train each method on ALL labelled captures, threshold at training-benign FPR <= 1%, then score a
+    benign-only source the models NEVER saw (e.g. UNSW home IoT). Measures false alarms on unseen homes without
+    letting any model learn the source."""
+    hr, hX, hy, hg = load(held_paths)
+    assert hy.sum() == 0, "held-out set must be benign-only"
+    print("\n### False alarms on an unseen benign source (%d windows, %d devices; never in training)\n" % (len(hy), len(set(hg))))
+    print("| method | false alerts / device-day | devices with any false alert | worst device (alerts/day) |")
+    print("|---|---|---|---|")
+    for name, fn in methods.items():
+        s_tr, s_h = fn(X, y, X), fn(X, y, hX)
+        ben = np.sort(s_tr[y == 0]); thr = ben[min(len(ben) - 1, int(math.ceil(0.99 * len(ben))) - 1)]
+        P = s_h > thr
+        per = {d: 24 * P[hg == d].mean() for d in set(hg)}
+        worst = max(per, key=per.get)
+        print("| %s | %.3f | %d / %d | %s %.2f |" % (name, 24 * P.mean(), sum(v > 0 for v in per.values()), len(per), worst.replace("UNSW-", ""), per[worst]))
+        if name == "rules":
+            A = s_h > 0
+            pa = {d: 24 * A[hg == d].mean() for d in set(hg)}
+            w = max(pa, key=pa.get)
+            print("| rules@any-detector (kernel behaviour) | %.3f | %d / %d | %s %.2f |" % (24 * A.mean(), sum(v > 0 for v in pa.values()), len(pa), w.replace("UNSW-", ""), pa[w]))
 
 
 if __name__ == "__main__":

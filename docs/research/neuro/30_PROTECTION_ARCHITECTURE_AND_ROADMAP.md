@@ -38,7 +38,7 @@ packets ──> heqk L0 (EL1, Rust; existing)  ──> detector events + inciden
 LLM explainer (guard A+E) ── describes proposals and incidents to the owner; never ranks, creates or applies anything
 ```
 
-**Decision rule (doc 29 §5):** **an L0 detector AND a confirming classifier.** Either signal alone never acts. DNA
+**Decision rule (doc 29 §5):** **an L0 detector AND a confirming classifier.** Doc 28 v1.2 shows that the classifier must be one that **transfers to unseen homes**. On dev that is logistic regression, not LightGBM, so the M3 pre-registration will fix the classifier and its threshold. Either signal alone never acts. DNA
 deviation only raises confidence. Doc 28 shows this combination is the best measured balance.
 
 **Deliberately not built now** (literature review §6, doc 28):
@@ -70,7 +70,8 @@ fixed-point tree port possible later.
 | # | Milestone | Done when | Owner |
 |---|---|---|---|
 | **M1** | **Measure real L0 on public data.** Replay IoT-23 and CTU-13 dev captures through heqk's detectors (QEMU or host harness) and score kernel output with the doc 28 protocol. | A kernel-measured row replaces the "kernel-style" approximation. | Neuro + HomePods (harness only) |
-| **M2** | **DNA v1 per-device baseline** (doc 27 §4) in the reference, and alert aggregation per incident. | Doc 28 re-run gives ≤ 0.14 false alerts per device-day (about one a week) at recall ≥ 0.9 on dev. | Neuro |
+| **M2** | **Home-IoT false-alarm rate on dev.** **Met on dev (doc 28 v1.2):** logistic regression gives 0.031 false alerts per device-day at recall 0.983, on 27 home devices it never saw. Per-device deviation features and incident aggregation did not help. | ≤ 0.14 false alerts per device-day at recall ≥ 0.9 on dev. | Neuro (done; M3 next) |
+| **R-D1** | **Request to HomePods: gate the beacon detector** (novel peer AND not a known service). On dev it cuts home-IoT false alarms from 5.43 to 0.071 per device-day at recall 0.955 → 0.876. | Confirmed on the M3 sealed test first. | HomePods (after M3) |
 | **M3** | **Sealed confirmation.** Pre-register thresholds and decision rule, then run once on the IoT-23 + CTU-13 test splits (sealed in intel-data) and Deakin IoT v2 (sealed holdout). | Pre-registered precision / FPR / per-device-day targets met or reported failed. | Neuro + intel-data |
 | **M4** | **Policy compiler integration.** HQPROP1 proposals rendered in the owner app; approval through HQMGMT1 → ADR 0053 actions. No kernel change. | End-to-end on QEMU: incident → proposal → owner approve → TTL action → expiry. | Neuro + app |
 | **M5** | **Kernel requests R-P1…R-P4** (doc 29 §7). | HomePods decision recorded. | HomePods |
