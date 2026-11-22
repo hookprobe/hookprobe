@@ -1,0 +1,29 @@
+# Doc 29 §5 evidence-combination table, rules_ver = 1. Data, not code; changing it requires a new rules_ver and a
+# new benchmark run (doc 28). Loosening actions are not representable here by design.
+rules_ver = 1
+proposal_validity_s = 1800
+durable_ttl_max_s = 604800
+
+[[rule]]
+reason_code = "scan.confirmed"
+requires = { l0 = ["port_scan"], l0_confirmed = true }
+confidence = "high"
+action = "isolate_device"
+scope = "session"
+ttl_s = 3600
+
+[[rule]]
+reason_code = "exfil.volume+novel+cls"
+requires = { l0 = ["exfiltration"], cls_high = true, dna_novel = true }
+confidence = "high"
+action = "hold_ip"
+scope = "session"
+ttl_s = 14400
+
+[[rule]]
+reason_code = "beacon.periodic+cls"
+requires = { l0 = ["beaconing"], cls_high = true }
+confidence = "medium"
+action = "hold_ip"
+scope = "session"
+ttl_s = 3600
