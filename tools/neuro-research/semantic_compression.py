@@ -179,8 +179,10 @@ INSTRUCTION_LIKE = re.compile(r"(ignore|disregard|previous|instruction|system pr
 
 
 def quote_untrusted(s, cap=64):
-    s = s[:cap] + ("~" if len(s) > cap else "")
+    # The flag is decided on the FULL value, before truncation: a keyword placed after `cap` must still mark the
+    # value (doc 24 marker rule; the intel-data export applies the same rule to the full value).
     flag = " !instr-like" if INSTRUCTION_LIKE.search(s) else ""
+    s = s[:cap] + ("~" if len(s) > cap else "")
     return json.dumps(s) + flag
 
 
