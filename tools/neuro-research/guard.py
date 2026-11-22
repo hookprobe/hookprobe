@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Doc 24 injection guard (model-independent), the Python reference.
 
+A: default-deny (doc 25). EVERY quoted value is replaced by "<untrusted text withheld: N chars, K words,
+   instruction-like: yes|no>", independent of the !instr-like marker.
 R: render-side redaction. On every context line carrying `!instr-like`, each quoted value becomes
    "<instruction-like text, N chars, withheld>". The carrier field name and the marker stay; unmarked lines are
    untouched.
@@ -8,7 +10,12 @@ E: output echo filter. If a triage/injection `summary` (or a copilot `text`) con
    of any quoted value in the ORIGINAL context (case-insensitive), it is replaced by the deterministic template
    explanation. The verdict, evidence, entities and next step are kept, and `_guard_fallback` is set.
 """
+import os
 import re
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from semantic_compression import INSTRUCTION_LIKE  # noqa: E402  (the one detector)
 
 QUOTED = re.compile(r'"([^"\n]*)"')
 N = 8
@@ -21,6 +28,18 @@ def redact(context):
             line = QUOTED.sub(lambda m: '"<instruction-like text, %d chars, withheld>"' % len(m.group(1)), line)
         out.append(line)
     return "\n".join(out)
+
+
+def describe(value):
+    """Doc 25 guard A: a structured description of an untrusted value, never its content."""
+    words = len(re.findall(r"[A-Za-z]{2,}", value))
+    return "<untrusted text withheld: %d chars, %d words, instruction-like: %s>" % (
+        len(value), words, "yes" if INSTRUCTION_LIKE.search(value) else "no")
+
+
+def redact_all(context):
+    """Doc 25 guard A (default-deny): every quoted value on every line is replaced by its description."""
+    return QUOTED.sub(lambda m: '"%s"' % describe(m.group(1)), context)
 
 
 def quoted_values(context):
