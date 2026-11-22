@@ -290,7 +290,7 @@ The other 24 boot self-tests in the same boot passed.
 | **P0** | Repository-truth baseline, permanent ABI v1 in hal, kernel host behind `neuro`, QEMU tests, this design + register | **done (this change)** |
 | **P1** | Operator review of §10 and of the ABI; ADR 0048 drafted from §1, §4 and §7 (operator-merged) | needs operator |
 | **P2** | Data-plane adapter `os/neuro/neuro-dp` (doc 20 §2: DNS / new-connection / bytes rules, `peer_fp` V2/24, `NameTable<4096>`), bounded (UDP idle table 1,024, 256 pending DNS, 10 s DNS wait); AP-loop taps at the Wi-Fi boundary (station RX, `wifi_send!`, NAT-inbound send) + `ap_tick()` in the heartbeat, UTC only once NTP-synced; `[NEURO beat]` counters | **done in QEMU**: host parity test (16/16 device-hours, 762 connections, 349 DNS incl. 58 NX, every rule) + `[P-neuro-dp]` (same in the kernel, 1,127 engine events, 4 hours closed, 0 dropped). `/api` evidence fields: still open |
-| **P3** | CM5 metal: bench image with `neuro`; excursion cost and **worst loop gap** vs baseline; `[IDS-BENCH]` ns/packet unchanged; fault injection on metal; 24 h bench run (not the REL-05 soak) | needs bench slot |
+| **P3** | CM5 metal: bench image with `neuro`; excursion cost and **worst loop gap** vs baseline; `[IDS-BENCH]` ns/packet unchanged; fault injection on metal; 24 h bench run (not the REL-05 soak) | **first A/B done** (`metal-evidence/20261122-neuro-p3-cm5.md`): no measurable loop cost, 0 dropped; open: per-excursion timing, IDS ns/pkt, metal fault injection, long run |
 | **P4** | Sealed snapshot of the behavioural memory (survives reboot/OTA) — privacy review first (§10 D4) | proposed |
 | **P5** | L1 behind M3 + the FP lease or integer quantisation; HNX verify in kernel | proposed, gated |
 
