@@ -881,6 +881,20 @@ pub fn wifi_inject(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resu
     if kind == "neuro-fault" {
         return crate::neuro::bench_fault();
     }
+    // Pre-soak item 2 (bench only): `evlog-burst-N` pushes N synthetic detections into the event ring in one go
+    // (rule 199, sources 192.0.2.x TEST-NET-1) so the evidence log's paced full-batch write + `dropped` accounting
+    // is exercised on the real eMMC path. N <= 60 (the event ring holds 64).
+    #[cfg(feature = "appersist")]
+    if let Some(n) = kind.strip_prefix("evlog-burst-").and_then(|v| v.parse::<u32>().ok()) {
+        if n == 0 || n > 60 {
+            return Err("evlog-burst-N: 1 <= N <= 60");
+        }
+        for i in 0..n {
+            crate::events::push_hit(199, crate::rules::SEV_LOW as u8, crate::packet::PASS as u8, crate::verdict::CLASS_OBSERVE, 0xC000_0200 | (1 + i % 254));
+        }
+        arch_aarch64::_print(format_args!(" [BENCH] evlog-burst: {} synthetic detections pushed (rule 199)\n", n));
+        return Ok("evlog-burst pushed");
+    }
     crate::el0srv::keyer::inject(kind, sta)
 }
 
