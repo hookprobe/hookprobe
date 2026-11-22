@@ -43,6 +43,11 @@ REAL = {
     "infra_transient#gitleaks": DTOLNAY_STEP + "\ncurl: (22) The requested URL returned error: 504",
     "infra_transient#syft": "[error] received HTTP status=504 for url='https://github.com/anchore/syft/releases/x'",
     # #1240 (2026-11-16): a partial apt index on the runner was triaged `unknown` with only post-job git noise
+    # #1486 (2026-11-22): the QEMU gate's embedded UI build hit an npm peer conflict and was triaged `unknown`
+    "build_error#npm": "heqk QEMU gate\tRun\t2026-11-22T18:30:01.0Z npm error code ERESOLVE\n"
+                       "heqk QEMU gate\tRun\t2026-11-22T18:30:01.1Z npm error ERESOLVE could not resolve\n"
+                       "heqk QEMU gate\tRun\t2026-11-22T18:30:01.2Z npm error While resolving: @astrojs/solid-js@7.1.6\n"
+                       "heqk QEMU gate\tRun\t2026-11-22T18:30:01.3Z npm error Could not resolve dependency:",
     "toolchain_env#apt": "heqk QEMU gate\tInstall qemu-system-aarch64\t2026-11-16T18:44:54.0Z Package mtools is not available, but is referred to by another package.\n"
                          "heqk QEMU gate\tInstall qemu-system-aarch64\t2026-11-16T18:44:54.1Z E: Unable to locate package qemu-system-arm\n"
                          "heqk QEMU gate\tInstall qemu-system-aarch64\t2026-11-16T18:44:54.2Z E: Package 'mtools' has no installation candidate",
