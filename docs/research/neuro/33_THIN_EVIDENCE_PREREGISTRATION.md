@@ -88,3 +88,20 @@ student never sees the hint; the hint-leak filter applies.
 - **A pass:** ftGg replaces ftFg as the explainer candidate, with no thin-evidence regression.
 - **A stop or fail:** ftFg remains the candidate (doc 26 pass), with thin-evidence handling a recorded limitation.
   The explainer is descriptive only and off the protection path either way (doc 30).
+
+## Addendum: dev selection result (2026-11-22)
+
+**The stop rule fired.** ftGg-AE fails one condition: thin-evidence mention is 0.450 (36/80) against base's 0.487.
+Every other condition passes (mention 0.573, p = 9e-09; canary 1.000; hallucination 0.0026; benign-on-malicious
+1.5%). ftFg-AE fails the same condition (0.362).
+
+**Decision.** There is no blind v7. **ftFg stays the explainer candidate** (doc 26 pass), and thin-evidence handling
+is its recorded limitation.
+
+**Observation, not used for selection.** On the 80 thin cases ftGg's JSON verdict is `insufficient_evidence` 58
+times and `malicious` 5 times. ftFg's are 5 and 33. The data fixed the verdict but not the written explanation.
+
+A future attempt needs its own pre-registration. It must not reuse these 5 sets as if fresh: they are now spent
+for this question too.
+
+Full table and hashes: `data/mixG-dev-results.md`.
