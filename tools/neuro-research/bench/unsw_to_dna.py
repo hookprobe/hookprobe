@@ -73,7 +73,7 @@ def ipstr(b):
 
 
 def one(args):
-    path, lookup_dir = args
+    path, lookup_dir, half = args
     if not LOOK:
         load_lookup(lookup_dir)
     name = os.path.basename(path).split(".")[0]
@@ -168,21 +168,25 @@ def one(args):
         close(h)
     days = sorted({r["hour_index"] // 24 for r in out})
     cut = days[len(days) // 2] if days else 0
-    keep = [r for r in out if r["hour_index"] // 24 < cut]
+    keep = [r for r in out if (r["hour_index"] // 24 < cut) == (half == "first")]
+    for r in keep:
+        r["split"] = "dev" if half == "first" else "m3-sealed"
     return name, len(out), keep
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("pcaps"); ap.add_argument("lookup"); ap.add_argument("out"); ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--half", choices=["first", "second"], default="first",
+                    help="first = dev half (default); second = the reserved half, ONLY for the pre-registered M3 run (doc 31)")
     a = ap.parse_args()
     files = sorted((os.path.join(a.pcaps, f) for f in os.listdir(a.pcaps) if ".pcap" in f), key=os.path.getsize, reverse=True)
     with Pool(a.workers) as p, open(a.out, "w") as o:
-        for name, n, keep in p.imap_unordered(one, [(f, a.lookup) for f in files]):
+        for name, n, keep in p.imap_unordered(one, [(f, a.lookup, a.half) for f in files]):
             for r in keep:
                 r.pop("hour_index", None)
                 o.write(json.dumps(r) + "\n")
-            print("  %s: %d hours, %d kept (first half of active days)" % (name, n, len(keep)), flush=True)
+            print("  %s: %d hours, %d kept (%s half of active days)" % (name, n, len(keep), a.half), flush=True)
 
 
 if __name__ == "__main__":
