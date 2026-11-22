@@ -110,3 +110,34 @@ dev. Build ids and manifest hashes will be pinned in Addendum B.
 
 **A converter artefact present in dev too.** 114 window ids occur twice: an hour split across two pcap files. The
 dev half has 66. `m3_run.py` is frozen and counts lines, as it did on dev, so this is reported, not changed.
+
+## Addendum B: pinned test builds (2026-11-22)
+
+Written **before the single M3 run**. No test window has been scored and no label has been looked at. Features
+are extracted with the frozen `bench/dna_features.py`, which is unchanged since `128b2520`.
+
+**CTU-13 test** (intel-data, built at `d9f0aaaf`, purpose `evaluation`):
+- build id `windows-3a93dfd92bed`;
+- manifest SHA-256 `c3d04c2ae56588cfa4ebbbbfe317f7acc7bd76807bc52e278abd29c20f77dd43`;
+- unsealed: Dataset-43, 44, 45, 47, 48, 50, 52, 53, 54. Dev 42, 46, 49 are skipped. All 9 file SHA-256s were
+  re-checked against the manifest here: 0 mismatches;
+- DNA v1 features: `ctu13_test.jsonl`, 675 windows, SHA-256
+  `96741d0440e2509e16b5ff0051c96d216d460ca4ac122e48b7f9c79c86f1ce0e`.
+
+**IoT-23 test:** still building at intel-data. It will be pinned here before the run.
+
+**Intel-data's reproducibility proof.** Rebuilding CTU-13 dev at `d9f0aaaf` reproduced dev build
+`windows-8ada671b2e1e`'s 3 window files byte-for-byte.
+
+**Warninglists: 196 kept, where dev kept 203.** The manifests differ in one field. `d9f0aaaf` drops 35
+warninglists for licence terms, where dev dropped 28. The 7 extra are:
+- netapi-top1k, netapi-top10k, netapi-top1m;
+- moz-top500;
+- covid-19-cyber-threat-coalition-whitelist, covid-19-krassi-whitelist;
+- digitalside.
+
+None of them appears in any IoT-23 or CTU-13 dev window (per intel-data). The effect on `warninglist_frac` is
+therefore expected to be nil. In any case, S1 does not use that feature (it is one of the 4 context features
+dropped above); only S2's beacon gate uses warninglists.
+
+One raw address, 239.255.255.250 (SSDP multicast), is kept by design, as in the dev code.
