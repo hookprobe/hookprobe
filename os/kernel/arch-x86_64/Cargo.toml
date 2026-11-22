@@ -1,0 +1,31 @@
+# heqk on x86_64 — X1 skeleton (ADR 0047 D1 port item 11; the decision record is ADR 0068, pending).
+# A PE32+ UEFI application with zero dependencies (raw UEFI FFI, like efiboot) that boots under
+# qemu-system-x86_64 (q35 + OVMF, KVM when available) and proves the x86_64 CPU substrate heqk needs:
+# ExitBootServices, own GDT/TSS/IDT, own 4-level page tables with NX/SMEP/SMAP, LAPIC timer interrupts,
+# fail-closed RDSEED entropy, and a ring-3 (EL0-equivalent) round trip with kernel-memory isolation.
+#
+# DETACHED workspace (own [workspace] table, like efiboot): it targets x86_64-unknown-uefi and must never
+# enter the aarch64 kernel's build graph / Cargo.lock. Wiring under kernel/ waits for X0's hal traits.
+[package]
+name = "arch-x86_64"
+version = "0.0.26"
+license = "AGPL-3.0-only"
+edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0063 G4)
+
+[workspace]
+
+[[bin]]
+name = "heqk-x86"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
