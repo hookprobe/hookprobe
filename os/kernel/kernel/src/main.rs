@@ -5515,9 +5515,14 @@ fn cm5_p10_probe() {
                                                     let img = pf.image_of(e);
                                                     // ADR 0067 D10: the record names the configuration in force
                                                     let (prov, clk) = (evlog::Prov::current(), pf.clock().is_some());
+                                                    let now_ms = now() / (freq / 1000).max(1);
                                                     evlog::with(&mut |l, s| {
                                                         let _ = l.set_prov(s, clk, prov);
-                                                        let _ = l.push(img);
+                                                        // pre-soak review: a full batch is written now (paced), not
+                                                        // at the next heartbeat while later detections are lost
+                                                        if l.push(img) {
+                                                            let _ = l.flush_full(s, now_ms, clk);
+                                                        }
                                                     });
                                                 }
                                                 if e.verdict != 2 {
@@ -5687,8 +5692,8 @@ fn cm5_p10_probe() {
                                                 evlog::with(&mut |l, s| {
                                                     let before = l.written;
                                                     if l.maybe_flush(s, up_s, clk, false) {
-                                                        kprint!(" [AP-EVLOG] {} detections sealed to the evidence log ({} total this boot, ring {} records)\n",
-                                                            l.written - before, l.written, l.log.count());
+                                                        kprint!(" [AP-EVLOG] {} detections sealed to the evidence log ({} total this boot, ring {} records, {} not kept: over the paced write rate)\n",
+                                                            l.written - before, l.written, l.log.count(), l.dropped);
                                                     }
                                                 });
                                             }
