@@ -31,6 +31,16 @@ const REASM_MAX: usize = 256;
 /// Per-source-IP handshake budget: this many completed msg1 per window.
 const HS_PER_WINDOW: u32 = 6;
 const HS_WINDOW_MS: u64 = 60_000;
+/// F-S1-1: a device retransmits the IDENTICAL msg1 until a msg2 arrives and keeps the FIRST msg2 it gets. A
+/// byte-identical msg1 inside this window is answered with the cached msg2 (a responder retransmit: no new
+/// session, no new key material, no crypto). Covers the device's whole retransmit span with margin.
+const HS_DUP_MS: u64 = 30_000;
+/// At most this many cached-msg2 resends per msg1 (a captured msg1 cannot drive unbounded replies).
+const HS_DUP_RESENDS: u32 = 8;
+/// After the duplicate window, a byte-identical msg1 is a REPLAY: silently ignored, so a captured msg1 can no
+/// longer tear down the device's live session. Remembered for a session lifetime, bounded in count. (A PoP
+/// restart forgets them; the full fix is an initiator timestamp in msg1, a wire change for the ADR process.)
+const HS_SEEN_MAX: usize = 4096;
 
 #[derive(Clone)]
 pub struct Device {
@@ -99,6 +109,17 @@ pub struct Stats {
     pub rebinds: u64,
     /// W4: devices that announced they follow rekey epochs (CAPS)
     pub caps_rekey: u64,
+    /// F-S1-1: identical msg1 retransmits answered from the msg2 cache (no new session)
+    pub hs_duplicate: u64,
+    /// byte-identical msg1 seen after the duplicate window: ignored (no session teardown)
+    pub hs_replayed: u64,
+}
+
+/// The msg2 a completed msg1 produced, kept for the duplicate window.
+struct Msg2Cache {
+    chunks: Vec<Vec<u8>>,
+    at_ms: u64,
+    resends: u32,
 }
 
 pub struct Pop {
@@ -110,6 +131,10 @@ pub struct Pop {
     sid_by_dev: HashMap<usize, Sid>,
     reasm: HashMap<SocketAddr, (HsReasm, u64)>,
     hs_budget: HashMap<IpAddr, (u64, u32)>,
+    /// sha256(msg1) → the msg2 it produced (duplicate window only)
+    msg2_cache: HashMap<[u8; 32], Msg2Cache>,
+    /// sha256(msg1) of every ACCEPTED msg1 → when (replay guard; bounded)
+    msg1_seen: HashMap<[u8; 32], u64>,
     /// The latest event time seen (TUN reads carry none): drives the senders' time-based rekey.
     now_ms: u64,
     /// The thresholds this PoP's senders rekey at (once the device announced CAPS).
@@ -143,6 +168,8 @@ impl Pop {
             sid_by_dev: HashMap::new(),
             reasm: HashMap::new(),
             hs_budget: HashMap::new(),
+            msg2_cache: HashMap::new(),
+            msg1_seen: HashMap::new(),
             now_ms: 0,
             rekey: RekeyPolicy::DEFAULT,
             stats: Stats::default(),
@@ -172,6 +199,27 @@ impl Pop {
         };
         let (reasm, _) = self.reasm.remove(&from).expect("present");
         let msg1 = &reasm.message()[..total];
+
+        // F-S1-1: an identical msg1 is the device retransmitting because our msg2 was slow or lost. Answer
+        // with the SAME msg2 (so the device's first-msg2-wins choice and our session agree); never re-key.
+        // Checked before the budget and before any crypto: it derives nothing new.
+        let digest = sha256::digest(msg1);
+        if let Some(c) = self.msg2_cache.get_mut(&digest) {
+            if now_ms.saturating_sub(c.at_ms) <= HS_DUP_MS {
+                if c.resends >= HS_DUP_RESENDS {
+                    return vec![];
+                }
+                c.resends += 1;
+                self.stats.hs_duplicate += 1;
+                return c.chunks.iter().map(|ch| Out::Hs(from, ch.clone())).collect();
+            }
+        }
+        if self.msg1_seen.contains_key(&digest) {
+            // Seen and accepted before, outside the duplicate window: a replay. It must not replace the
+            // device's live session.
+            self.stats.hs_replayed += 1;
+            return vec![];
+        }
 
         // Per-source budget, charged per COMPLETED msg1 (the expensive part: ML-KEM decap).
         let b = self.hs_budget.entry(from.ip()).or_insert((now_ms, 0));
@@ -247,6 +295,21 @@ impl Pop {
         self.sessions.insert(sid, Sess { dev: di, send, rx, endpoint, created_ms: now_ms, last_rx_ms: now_ms });
         self.sid_by_dev.insert(di, sid);
         self.stats.handshakes_ok += 1;
+        let chunks = out
+            .iter()
+            .map(|o| match o {
+                Out::Hs(_, c) => c.clone(),
+                _ => unreachable!("handshake output only"),
+            })
+            .collect();
+        self.msg2_cache.insert(digest, Msg2Cache { chunks, at_ms: now_ms, resends: 0 });
+        if self.msg1_seen.len() >= HS_SEEN_MAX {
+            // Bounded: drop the oldest remembered msg1 (a replay that old meets an already-replaced session).
+            if let Some(oldest) = self.msg1_seen.iter().min_by_key(|(_, t)| **t).map(|(k, _)| *k) {
+                self.msg1_seen.remove(&oldest);
+            }
+        }
+        self.msg1_seen.insert(digest, now_ms);
         out
     }
 
@@ -368,6 +431,8 @@ impl Pop {
         }
         self.reasm.retain(|_, (_, t)| now_ms.saturating_sub(*t) <= REASM_TTL_MS);
         self.hs_budget.retain(|_, (t, _)| now_ms.saturating_sub(*t) <= HS_WINDOW_MS);
+        self.msg2_cache.retain(|_, c| now_ms.saturating_sub(c.at_ms) <= HS_DUP_MS);
+        self.msg1_seen.retain(|_, t| now_ms.saturating_sub(*t) <= SESSION_MAX_MS);
     }
 
     fn seal(&mut self, sid: Sid, m: &Msg<'_>) -> Option<Out> {
