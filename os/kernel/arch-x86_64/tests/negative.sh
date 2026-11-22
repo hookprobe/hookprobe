@@ -5,6 +5,7 @@
 #                                            → the ring-3 read check must report "NOT refused", exit 35
 #   3. mutant: user stack page executable (NX bit dropped)
 #                                            → the NX-execute check must report "NOT refused", exit 35
+#   4. no virtio devices on the PCIe bus     → the X2 PCIe stage must FAIL (exit 35), not pass vacuously
 # Mutants are built from a temp COPY of the crate; the source tree is never modified.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,7 +17,9 @@ bad() { echo "FAIL $*"; fail=$((fail+1)); }
 expect_fail() { # <label> <grep pattern> -- env…
   local label="$1" pat="$2"; shift 3
   local out; out=$(env "$@" "$RUN" 2>&1)
-  if grep -q "qemu-exit=35" <<<"$out" && grep -aq "$pat" <<<"$out" && ! grep -aq '^\[X1\] PASS' <<<"$out"; then
+  # Judged on the overall verdict: exit 35, the specific failure message, and no "X1+X2 PASS" (an X2 failure may
+  # legitimately follow an "[X1] PASS" line).
+  if grep -q "qemu-exit=35" <<<"$out" && grep -aq "$pat" <<<"$out" && ! grep -aq 'run-qemu: X1+X2 PASS' <<<"$out"; then
     ok "$label"
   else
     bad "$label"; echo "$out" | tail -5 | sed 's/^/     /'
@@ -51,6 +54,8 @@ if D=$(mutant "NX-drop" "| P | RW | US | nx; // RW, never executable" "| P | RW 
   expect_fail "mutant: executable user stack → NX check fails" 'execute from the NX stack was NOT refused' -- X1_CRATE="$D"
   rm -rf "$D"
 fi
+
+expect_fail "no virtio devices → X2 PCIe stage fails (not vacuous)" 'PCIe scan did not find' -- X1_NODEV=1
 
 echo "negative: $pass passed, $fail failed"
 [ "$fail" = 0 ]

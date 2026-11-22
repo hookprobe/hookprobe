@@ -16,6 +16,12 @@ EFI="$HERE/target/x86_64-unknown-uefi/release/heqk-x86.efi"
 
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/esp/EFI/BOOT"; cp "$EFI" "$T/esp/EFI/BOOT/BOOTX64.EFI"; cp "$OVMF_VARS" "$T/vars.fd"
+truncate -s 1M "$T/blk.img"   # a throwaway virtio-blk backing file (X2 only discovers the device)
+# X2 discovers these (modern-only virtio-pci). The user-mode NIC is `restrict=on`: nothing leaves the host.
+# X1_NODEV=1 omits them (tests/negative.sh: the PCIe stage must then FAIL, not pass vacuously).
+DEVS=(-netdev "user,id=n0,restrict=on" -device "virtio-net-pci,netdev=n0,disable-legacy=on"
+      -drive "file=$T/blk.img,format=raw,if=none,id=b0" -device "virtio-blk-pci,drive=b0,disable-legacy=on")
+[ "${X1_NODEV:-0}" = 1 ] && DEVS=()
 
 ACCEL="${X1_ACCEL:-auto}"
 if [ "$ACCEL" = auto ]; then [ -r /dev/kvm ] && [ -w /dev/kvm ] && ACCEL=kvm || ACCEL=tcg; fi
@@ -27,16 +33,19 @@ timeout "${X1_TIMEOUT:-120}" qemu-system-x86_64 -M q35 -m 512M "${CPU[@]}" -node
   -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
   -drive if=pflash,format=raw,file="$T/vars.fd" \
   -drive format=raw,file=fat:rw:"$T/esp" \
+  "${DEVS[@]}" \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04
 RC=$?
 set -e
 
-grep -a '^\[X1' "$T/serial.log" || true
+grep -a '^\[X[12]' "$T/serial.log" || true
 MISSING=0
 for m in '\[X1\] heqk x86_64 entered' '\[X1-ebs\]' '\[X1-gdt\]' '\[X1-idt\]' '\[X1-paging\]' '\[X1-rng\] PASS' \
-         '\[X1-apic\]' '\[X1-ring3\]' '\[X1-ring3-iso\] CPL3 read' '\[X1\] PASS'; do
+         '\[X1-apic\]' '\[X1-ring3\]' '\[X1-ring3-iso\] CPL3 read' '\[X1\] PASS' \
+         '\[X2-acpi\]' '\[X2-frames\]' '\[X2-ioapic\]' '\[X2-lapic\]' '\[X2-pci\].*virtio-net' '\[X2-pci\].*virtio-blk' \
+         '\[X2\] PASS'; do
   grep -aq "$m" "$T/serial.log" || { echo "run-qemu: missing marker: $m"; MISSING=1; }
 done
 echo "run-qemu: accel=$ACCEL qemu-exit=$RC (33 = PASS)"
-[ "$RC" = 33 ] && [ "$MISSING" = 0 ] && { echo "run-qemu: X1 PASS"; exit 0; }
-echo "run-qemu: X1 FAIL"; exit 1
+[ "$RC" = 33 ] && [ "$MISSING" = 0 ] && { echo "run-qemu: X1+X2 PASS"; exit 0; }
+echo "run-qemu: FAIL"; exit 1
