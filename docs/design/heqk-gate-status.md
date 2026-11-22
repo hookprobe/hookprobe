@@ -121,7 +121,7 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 | G19 HTP/SASE tunnel | op | done-QEMU; metal blocked on the PoP | = GF-H3 |
 | G24c crypto audit / libcrux ML-KEM | op | blocked (decision) | — |
 | G46 owner config-key enrol/rotate | op | built + metal; ship blocked on review | = SEC-05 |
-| G47 device rename | eng | done-QEMU | #966 |
+| G47 device rename | eng | done-metal | #966; CM5 2026-11-22 `metal-evidence/20261122-g47-device-label.md` (7/7) |
 | G48 first-run /setup wizard | eng | UI built; metal batch deferred | = GF-H4 |
 | G24b, G28, G31, G43 | eng | done (see C5) | the parity doc's status is stale |
 
