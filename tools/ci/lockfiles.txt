@@ -14,6 +14,7 @@ cargo os/kernel/el0-wifi
 cargo os/kernel/el0-wpa
 cargo os/kernel/wasip1-fixture
 cargo os/kernel/efiboot
+cargo os/kernel/arch-x86_64
 cargo os/build/heqk-sign
 cargo onboarding/enrollment/responder-sim
 cargo onboarding/enrollment/superpop
