@@ -27,6 +27,10 @@ mc, key, what = sys.argv[1], open(sys.argv[2]).read().strip(), sys.argv[3]
 c = ssl.create_default_context(); c.check_hostname = False; c.verify_mode = ssl.CERT_NONE
 o = urllib.request.build_opener(urllib.request.HTTPSHandler(context=c), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 o.open(mc + "/api/login", urllib.parse.urlencode({"token": key}).encode(), timeout=10).read()
+if what == "heal":
+    h = json.loads(o.open(mc + "/api/health", timeout=10).read()).get("wifi_heal") or {}
+    print(h.get("state", "?"), "reloads=%s" % h.get("reloads", "?"), "after_wifi_reboot=%s" % h.get("after_wifi_reboot", h.get("post_reboot_boot", "?")))
+    sys.exit(0)
 if what == "health":
     w = json.loads(o.open(mc + "/api/health", timeout=10).read()).get("wifi_driver") or {}
     b, s = w.get("bus", {}), w.get("security", {})
@@ -43,7 +47,7 @@ except urllib.error.HTTPError as e:
     print("HTTP", e.code, e.read().decode())
 PY
 }
-H() { api health 2>/dev/null; }   # bus_restarts bus_faults wpa_restarts wpa_faults full_wipes pmksa bus_state wpa_state
+H() { api health 2>/dev/null || echo "-1 -1 -1 -1 -1 -1 unreachable unreachable"; }   # bus_restarts bus_faults wpa_restarts wpa_faults full_wipes pmksa bus_state wpa_state
 f() { echo "$1" | awk -v i="$2" '{print $i}'; }
 # a reconnect that KEEPS the supplicant's PMKSA cache (an `iw disconnect` did not make the station leave at all):
 # wpa_supplicant's D-Bus Reassociate on that interface
@@ -223,9 +227,19 @@ if run C5; then
   chk $? "C5 $K spaced bus faults: $K bus restarts, 0 WPA restarts, PMKSA kept; every outage < 2000 ms (worst $worst ms)"
   # a burst: 3 faults in ~10 s -> escalation to a firmware reload; measure until both stations pass traffic again
   m=$(mark); h0=$(H); t0=$(date +%s%N)
-  for _ in 1 2 3; do api cmd53-stall >/dev/null; sleep 3; done
-  ra=1; rb=1; for _ in $(seq 1 60); do gw_ok wlan1 && ra=0; gw_ok wlan0 && rb=0; [ $ra = 0 ] && [ $rb = 0 ] && break; sleep 2; [ $((RANDOM % 10)) = 0 ] && { recon wlan0; unwedge_a; }; done
+  for _ in 1 2 3; do api cmd53-stall >/dev/null 2>&1; sleep 3; done
+  # per station: when each passed traffic again (a slow rejoin names its adapter: A = wlan1 USB rtw88, B = wlan0 onboard)
+  ra=1; rb=1; ta=-1; tb=-1
+  for _ in $(seq 1 60); do
+    [ $ra = 1 ] && gw_ok wlan1 && { ra=0; ta=$(( ($(date +%s%N) - t0) / 1000000 )); }
+    [ $rb = 1 ] && gw_ok wlan0 && { rb=0; tb=$(( ($(date +%s%N) - t0) / 1000000 )); }
+    [ $ra = 0 ] && [ $rb = 0 ] && break; sleep 2; [ $((RANDOM % 10)) = 0 ] && { recon wlan0; unwedge_a; }
+  done
   tr=$(( ($(date +%s%N) - t0) / 1000000 )); h1=$(H)
+  echo "  burst: station A (wlan1) back after $ta ms, station B (wlan0) back after $tb ms (-1 = not back)"
+  # a station not back may be the self-heal ladder working as designed (the third reload in its window takes the ONE
+  # reboot; a recurrence after it degrades Wi-Fi for the boot): say so — back-to-back C5 runs reach it (2026-11-22)
+  { [ $ra = 1 ] || [ $rb = 1 ] || [ "$tr" -gt 30000 ]; } && echo "  burst: self-heal state now: $(api heal 2>/dev/null || echo unreachable)"
   since "$m" | grep -a "bus-faults\|FirmwareReload\|firmware reload\|reload" | head -3 | cut -c1-220 | sed 's/^/  /'
   echo "  burst: health $h0 -> $h1; both stations back after $tr ms"
   since "$m" | grep -aq "bus-faults" && [ $ra = 0 ] && [ $rb = 0 ] && [ "$(f "$h1" 3)" = "$(f "$h0" 3)" ]
