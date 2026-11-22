@@ -277,6 +277,9 @@ mod el0 {
         /// The server lost its memory (fault / complaint reset): every device relearns.
         pub server_resets: u64,
         pub slot_evictions: u64,
+        /// Frames seen before the clock was synced (not attributable to a UTC hour).
+        #[cfg_attr(not(feature = "apmode"), allow(dead_code))]
+        pub frames_no_clock: u64,
     }
 
     /// The EL1 side: MAC -> slot attribution, the pending batch, the hour clock, the evidence ring.
@@ -299,13 +302,29 @@ mod el0 {
         /// `srv.restarts` when last checked: a change means the server lost its memory.
         seen_restarts: u64,
         out: [u8; OUT_MAX],
+        /// IP bytes each device sent in the open hour (one EV_VOLUME per device at the hour close).
+        vol: [u64; DEVICES],
+        /// DNS events the adapter releases on a timeout (`tick`), staged here before they are queued.
+        obuf: [Option<neuro_dp::Out>; neuro_dp::PEND_N],
     }
 
-    static mut HOST: Option<Host> = None;
+    /// The data-plane adapter (doc 20 §2): ~160 KiB of bounded tables (name table, UDP idle table, pending DNS) — in
+    /// its own static so it is never built on a stack.
+    static mut DP: neuro_dp::Dp = neuro_dp::Dp::new();
+    fn dp() -> &'static mut neuro_dp::Dp {
+        // SAFETY: single-core kernel; only the host (one caller at a time, from the AP loop / self-test) touches it.
+        unsafe { &mut *core::ptr::addr_of_mut!(DP) }
+    }
+
+    // In .bss (an `Option<Host> = None` landed in .data: 24 KiB of the image, over the HBoot window). HOST_OK says
+    // whether HOST holds a value.
+    static mut HOST: core::mem::MaybeUninit<Host> = core::mem::MaybeUninit::uninit();
+    static mut HOST_OK: bool = false;
     static mut TRIED: bool = false;
 
     fn host_opt() -> Option<&'static mut Host> {
-        unsafe { (*core::ptr::addr_of_mut!(HOST)).as_mut() }
+        // SAFETY: HOST is written once (in `host()`) before HOST_OK is set; single-core, one caller at a time.
+        unsafe { if HOST_OK { Some((*core::ptr::addr_of_mut!(HOST)).assume_init_mut()) } else { None } }
     }
 
     /// The host, loading the server on first use (once; a failed load leaves Neuro off — nothing depends on it).
@@ -315,7 +334,8 @@ mod el0 {
                 TRIED = true;
                 match load() {
                     Ok(s) => {
-                        HOST = Some(Host { srv: s, slots: [[0; 6]; DEVICES], used: 0, last_seen: [0; DEVICES], batch: [0; IN_MAX], nb: 0, fed: 0, pending: 0, hour: None, c: Counters::default(), ev: [Evidence::default(); EVIDENCE_RING], nev: 0, seen_restarts: 0, out: [0; OUT_MAX] });
+                        (*core::ptr::addr_of_mut!(HOST)).write(Host { srv: s, slots: [[0; 6]; DEVICES], used: 0, last_seen: [0; DEVICES], batch: [0; IN_MAX], nb: 0, fed: 0, pending: 0, hour: None, c: Counters::default(), ev: [Evidence::default(); EVIDENCE_RING], nev: 0, seen_restarts: 0, out: [0; OUT_MAX], vol: [0; DEVICES], obuf: [None; neuro_dp::PEND_N] });
+                        HOST_OK = true;
                         let h = host_opt()?;
                         h.handshake();
                         kprint!(" [NEURO] el0-neuro loaded at {:#x}: ABI v{}.{} devices={} bytes/device={} rw_pages={} (observe + score only; evidence, never an alert)\n",
@@ -325,6 +345,41 @@ mod el0 {
                 }
             }
             host_opt()
+        }
+    }
+
+    /// UTC now in microseconds, only once the wall clock is NTP-synced (a UTC hour must be real to be learned).
+    #[cfg_attr(not(feature = "apmode"), allow(dead_code))] // the AP loop (apmode) calls it; QEMU mcserve has no AP loop
+    fn utc_us() -> Option<u64> {
+        let st = crate::mcserve::state();
+        st.clock_synced.then(|| st.epoch_ms(crate::clock::ticks()).saturating_mul(1000))
+    }
+
+    /// The AP loop's tap at the Wi-Fi boundary: a frame a client sent (`from_station`) or one delivered to a client.
+    /// Loads the server on first use; with no server it costs one branch.
+    #[cfg_attr(not(feature = "apmode"), allow(dead_code))] // the AP loop (apmode) calls it; QEMU mcserve has no AP loop
+    pub fn tap(frame: &[u8], from_station: bool) {
+        if let Some(h) = host() {
+            h.observe_frame(frame, utc_us(), from_station);
+        }
+    }
+
+    /// One heartbeat line (every minute on the AP): host + server counters, so a metal run shows what Neuro did.
+    #[cfg_attr(not(feature = "apmode"), allow(dead_code))] // the AP loop (apmode) calls it; QEMU mcserve has no AP loop
+    pub fn beat_line() {
+        let Some(h) = host_opt() else { return };
+        let c = h.c;
+        let d = dp().c;
+        kprint!("   [NEURO beat] fed={} dropped={} batches={} hours={} failed={} results={} deviant={} resets={} evictions={} no_clock_frames={} | dp frames={} class={} local={} named={} prefix={} names={} dns_timeouts={} udp_evicted={}\n",
+            c.events_fed, c.events_dropped, c.batches, c.hours_closed, c.hours_failed, c.results, c.deviant, c.server_resets, c.slot_evictions, c.frames_no_clock,
+            d.frames, d.rule_class, d.rule_local, d.rule_named, d.rule_prefix, d.names_learned, d.dns_timeouts, d.udp_evicted);
+    }
+
+    /// The AP loop's once-a-second tick: releases timed-out DNS queries and closes the UTC hour when it is over.
+    #[cfg_attr(not(feature = "apmode"), allow(dead_code))] // the AP loop (apmode) calls it; QEMU mcserve has no AP loop
+    pub fn ap_tick() {
+        if let Some(h) = host_opt() {
+            h.tick(utc_us().map(|u| u / 1_000_000));
         }
     }
 
@@ -359,6 +414,12 @@ mod el0 {
             self.nb = 0;
             self.fed = 0;
             self.pending = 0;
+            self.vol = [0; DEVICES];
+        }
+
+        /// The slot of `mac` if it has one (never assigns).
+        fn lookup(&self, mac: &[u8; 6]) -> Option<u16> {
+            (0..DEVICES).find(|&i| self.used & (1u64 << i) != 0 && self.slots[i] == *mac).map(|i| i as u16)
         }
 
         /// The slot of `mac`, assigning one (the least recently seen is evicted: RESET_DEV makes the server forget it).
@@ -387,6 +448,8 @@ mod el0 {
                     return None;
                 }
                 self.c.slot_evictions += 1;
+                self.vol[o] = 0;
+                dp().forget_dev(o as u16);
                 o
             };
             self.slots[i] = *mac;
@@ -397,6 +460,7 @@ mod el0 {
 
         #[allow(clippy::too_many_arguments)] // one event record's fields, spelled out (encode_event's shape)
         /// Queue one event for the open UTC hour. Drops (and counts) when the clock is unset or the server cannot run.
+        #[cfg_attr(feature = "cm5", allow(dead_code))] // used by the QEMU self-tests; metal uses observe_frame
         fn observe(&mut self, mac: &[u8; 6], utc_s: Option<u64>, kind: u8, flags: u8, fp: u32, bytes: u64, conns: u16) {
             let Some(t) = utc_s else {
                 self.c.events_dropped += 1;
@@ -411,6 +475,11 @@ mod el0 {
                 self.c.events_dropped += 1;
                 return;
             };
+            self.push_ev(dev, kind, flags, fp, bytes, conns);
+        }
+
+        /// Queue one event of slot `dev` (already attributed).
+        fn push_ev(&mut self, dev: u16, kind: u8, flags: u8, fp: u32, bytes: u64, conns: u16) {
             let Some(rec) = encode_event(kind, flags, dev, fp, bytes, conns) else {
                 self.c.events_dropped += 1;
                 return;
@@ -424,12 +493,67 @@ mod el0 {
         }
 
         /// A new connection (doc 20: SYN, or UDP after >= 120 s idle) from `mac` to peer fingerprint `fp`.
+        #[cfg_attr(feature = "cm5", allow(dead_code))] // used by the QEMU self-tests; metal uses observe_frame
         pub fn observe_flow(&mut self, mac: &[u8; 6], utc_s: Option<u64>, fp: u32, bytes: u64, conns: u16) {
             self.observe(mac, utc_s, EV_FLOW, 0, fp, bytes, conns)
         }
         /// One DNS query for registered-domain fingerprint `fp` (`nx` = rcode 3).
+        #[cfg_attr(feature = "cm5", allow(dead_code))] // used by the QEMU self-tests; metal uses observe_frame
         pub fn observe_dns(&mut self, mac: &[u8; 6], utc_s: Option<u64>, fp: u32, nx: bool) {
             self.observe(mac, utc_s, EV_DNS, nx as u8, fp, 0, 1)
+        }
+
+        /// One adapter output (doc 20): a new connection or a DNS query becomes an event of the open hour; bytes add to
+        /// the device's hour volume.
+        fn apply(&mut self, o: neuro_dp::Out) {
+            use neuro_dp::Out;
+            let (dev, ts_us) = match o {
+                Out::Flow { dev, ts_us, .. } | Out::Dns { dev, ts_us, .. } | Out::Bytes { dev, ts_us, .. } => (dev, ts_us),
+            };
+            self.roll((ts_us / 3_600_000_000) as u32);
+            if dev as usize >= DEVICES {
+                return;
+            }
+            match o {
+                Out::Bytes { bytes, .. } => self.vol[dev as usize] = self.vol[dev as usize].saturating_add(bytes as u64),
+                _ if !self.srv.ready() => self.c.events_dropped += 1,
+                Out::Flow { fp, .. } => self.push_ev(dev, EV_FLOW, 0, fp, 0, 1),
+                Out::Dns { fp, nx, .. } => self.push_ev(dev, EV_DNS, nx as u8, fp, 0, 1),
+            }
+        }
+
+        /// One frame crossing the Wi-Fi boundary (`from_station`: sent by a client; else delivered to one), at UTC
+        /// `utc_us` (None = the clock is not synced: nothing is attributed, the frame is counted). The adapter turns it
+        /// into fingerprints and counts; the engine never sees the frame. Never blocks: at worst one batch excursion.
+        #[cfg_attr(not(feature = "apmode"), allow(dead_code))] // the AP loop (apmode) calls it; QEMU mcserve has no AP loop
+        pub fn observe_frame(&mut self, frame: &[u8], utc_us: Option<u64>, from_station: bool) {
+            let Some(now) = utc_us else {
+                self.c.frames_no_clock += 1;
+                return;
+            };
+            let Some(mac) = frame.get(if from_station { 6..12 } else { 0..6 }).and_then(|m| <[u8; 6]>::try_from(m).ok()) else { return };
+            if mac[0] & 1 != 0 {
+                return; // group-addressed: not a device
+            }
+            let dev = if from_station { self.slot(&mac, (now / 1_000_000) as u32) } else { self.lookup(&mac) };
+            let Some(dev) = dev else {
+                if from_station {
+                    self.c.events_dropped += 1;
+                }
+                return;
+            };
+            let (s, d) = if from_station { (Some(dev), None) } else { (None, Some(dev)) };
+            let mut outs = [None; 8];
+            let mut n = 0;
+            dp().frame(frame, now, s, d, &mut |o| {
+                if n < outs.len() {
+                    outs[n] = Some(o);
+                    n += 1;
+                }
+            });
+            for o in outs[..n].iter().flatten() {
+                self.apply(*o);
+            }
         }
 
         /// Deliver the pending batch (one excursion).
@@ -473,12 +597,33 @@ mod el0 {
         /// Called by the owner of the clock (the AP loop) about once a second: closes the hour when it is over.
         pub fn tick(&mut self, utc_s: Option<u64>) {
             if let Some(t) = utc_s {
+                // DNS queries whose response never came are released without the NX flag (bounded wait)
+                let mut n = 0;
+                let ob = &mut self.obuf;
+                dp().expire(t.saturating_mul(1_000_000), &mut |o| {
+                    if n < ob.len() {
+                        ob[n] = Some(o);
+                        n += 1;
+                    }
+                });
+                for i in 0..n {
+                    if let Some(o) = self.obuf[i].take() {
+                        self.apply(o);
+                    }
+                }
                 self.roll((t / 3600) as u32);
             }
         }
 
         /// CLOSE_HOUR for epoch hour `h`; validated results -> counters + evidence. Returns the records kept.
         pub fn close(&mut self, h: u32) -> usize {
+            // the hour's volume: one EV_VOLUME per device that sent anything
+            for dev in 0..DEVICES {
+                let b = core::mem::take(&mut self.vol[dev]);
+                if b > 0 && self.srv.ready() {
+                    self.push_ev(dev as u16, EV_VOLUME, 0, 0, b, 0);
+                }
+            }
             self.flush();
             let fed = core::mem::take(&mut self.fed);
             if fed == 0 {
@@ -526,12 +671,14 @@ mod el0 {
         }
 
         /// The evidence records kept, newest first.
+        #[cfg_attr(feature = "cm5", allow(dead_code))] // used by the QEMU self-tests; metal uses observe_frame
         pub fn evidence(&self) -> impl Iterator<Item = &Evidence> + '_ {
             let n = self.nev.min(EVIDENCE_RING as u64);
             (0..n).map(move |k| &self.ev[((self.nev - 1 - k) % EVIDENCE_RING as u64) as usize])
         }
 
         /// HEALTH (v1.1 servers).
+        #[cfg_attr(feature = "cm5", allow(dead_code))] // used by the QEMU self-tests; metal uses observe_frame
         pub fn health(&mut self) -> Option<Health> {
             if self.srv.info.is_none_or(|i| i.caps & CAP_HEALTH == 0) {
                 return None;
@@ -635,6 +782,225 @@ mod el0 {
             if pass { "PASS" } else { "FAIL" }, ok, closes, events, all_batches_ok, if first_bad > 0 { " — first mismatch at golden line (see below)" } else { "" });
         if first_bad > 0 {
             kprint!(" [P-neuro-golden] first mismatch: golden.txt line {}\n", first_bad);
+        }
+        pass
+    }
+
+    #[cfg(not(feature = "cm5"))]
+    static DP_PCAP: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../neuro/neuro-dp/tests/fixture.pcap"));
+    #[cfg(not(feature = "cm5"))]
+    static DP_EXPECT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../neuro/neuro-dp/tests/fixture.expect.txt"));
+    #[cfg(not(feature = "cm5"))]
+    static DP_MACS: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../neuro/neuro-dp/tests/fixture.macs"));
+
+    /// One device-hour, as a multiset digest: counts plus order-free sums of mixed fingerprints.
+    #[cfg(not(feature = "cm5"))]
+    #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+    struct DevHour {
+        dev: u16,
+        hour: u64,
+        conns: u64,
+        bytes: u64,
+        ndns: u64,
+        peers: u64,
+        dns: u64,
+    }
+
+    #[cfg(not(feature = "cm5"))]
+    fn mix(x: u64) -> u64 {
+        let mut z = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    #[cfg(not(feature = "cm5"))]
+    fn dh_at(t: &mut [DevHour; 32], n: &mut usize, dev: u16, hour: u64) -> Option<usize> {
+        if let Some(i) = t[..*n].iter().position(|d| d.dev == dev && d.hour == hour) {
+            return Some(i);
+        }
+        if *n == t.len() {
+            return None;
+        }
+        t[*n] = DevHour { dev, hour, ..Default::default() };
+        *n += 1;
+        Some(*n - 1)
+    }
+
+    /// [P-neuro-dp]: doc 20 §5.1 in the kernel. The fixture capture (os/neuro/neuro-dp/tests) replayed through the
+    /// kernel's adapter (aarch64 build) and into the real el0-neuro: every device-hour's connections, bytes, peer and
+    /// DNS multisets equal the reference converter (unsw_to_d1.py --peer-key v2-24 --name-table 4096); the engine
+    /// receives exactly those events (one EV_FLOW per connection, one EV_DNS per query, one EV_VOLUME per device-hour)
+    /// and closes every hour; nothing is dropped; evidence only.
+    #[cfg(not(feature = "cm5"))]
+    fn dp_selftest(h: &mut Host) -> bool {
+        use neuro_dp::Out;
+        // fixture device list (index = line order)
+        let mut macs = [[0u8; 6]; 8];
+        let mut nm = 0;
+        for l in DP_MACS.lines() {
+            let Some(m) = l.split_whitespace().next() else { continue };
+            let mut v = [0u8; 6];
+            let mut ok = true;
+            for (i, part) in m.split(':').enumerate() {
+                match (i < 6).then(|| u8::from_str_radix(part, 16).ok()).flatten() {
+                    Some(b) => v[i] = b,
+                    None => ok = false,
+                }
+            }
+            if ok && nm < macs.len() {
+                macs[nm] = v;
+                nm += 1;
+            }
+        }
+        // expected digests
+        let mut want = [DevHour::default(); 32];
+        let mut nw = 0;
+        let mut want_events = 0u64;
+        for line in DP_EXPECT.lines().filter(|l| !l.is_empty()) {
+            let mut parts = line.split('|');
+            let mut head = parts.next().unwrap_or("").split_whitespace().map(|x| x.parse::<u64>().unwrap_or(u64::MAX));
+            let (dev, hour, conns, bytes) = (head.next().unwrap_or(0), head.next().unwrap_or(0), head.next().unwrap_or(0), head.next().unwrap_or(0));
+            let Some(i) = dh_at(&mut want, &mut nw, dev as u16, hour) else { return false };
+            let w = &mut want[i];
+            w.conns = conns;
+            w.bytes = bytes;
+            for p in parts.next().unwrap_or("").split_whitespace() {
+                w.peers = w.peers.wrapping_add(mix(u32::from_str_radix(p, 16).unwrap_or(0) as u64));
+            }
+            for d in parts.next().unwrap_or("").split_whitespace() {
+                let (f, x) = d.split_once(':').unwrap_or(("0", "0"));
+                w.dns = w.dns.wrapping_add(mix((u32::from_str_radix(f, 16).unwrap_or(0) as u64) << 1 | (x == "1") as u64));
+                w.ndns += 1;
+            }
+            want_events += conns + w.ndns + (bytes > 0) as u64;
+        }
+        // a clean host: no device, no open hour, the server's memory cleared; wait out any hold-off
+        h.flush();
+        h.hour = None;
+        h.used = 0;
+        h.vol = [0; DEVICES];
+        h.fed = 0;
+        h.pending = 0;
+        let t_end = crate::superv::now_ms() + 8_000;
+        while !h.srv.ready() && crate::superv::now_ms() < t_end {}
+        for d in 0..DEVICES as u16 {
+            let _ = h.call(CMD_RESET_DEV, &d.to_le_bytes(), Some(0));
+        }
+        let c0 = h.c;
+        let ev0 = h.health().map_or(0, |x| x.events_ok);
+        // replay: the same attribution as observe_frame, recording every adapter output by fixture device
+        let mut got = [DevHour::default(); 32];
+        let mut ng = 0;
+        let mut overflow = false;
+        let fixture_dev = |h: &Host, slot: u16| -> Option<u16> {
+            let m = h.slots[slot as usize];
+            macs[..nm].iter().position(|x| *x == m).map(|i| i as u16)
+        };
+        let mut record = |h: &Host, o: &Out, got: &mut [DevHour; 32], ng: &mut usize| {
+            let (slot, ts) = match *o {
+                Out::Flow { dev, ts_us, .. } | Out::Dns { dev, ts_us, .. } | Out::Bytes { dev, ts_us, .. } => (dev, ts_us),
+            };
+            let Some(fd) = fixture_dev(h, slot) else { return };
+            let Some(i) = dh_at(got, ng, fd, ts / 3_600_000_000) else {
+                overflow = true;
+                return;
+            };
+            let g = &mut got[i];
+            match *o {
+                Out::Flow { fp, .. } => {
+                    g.conns += 1;
+                    g.peers = g.peers.wrapping_add(mix(fp as u64));
+                }
+                Out::Dns { fp, nx, .. } => {
+                    g.ndns += 1;
+                    g.dns = g.dns.wrapping_add(mix((fp as u64) << 1 | nx as u64));
+                }
+                Out::Bytes { bytes, .. } => g.bytes += bytes as u64,
+            }
+        };
+        let mut i = 24usize;
+        let mut frames = 0u32;
+        let le32 = |b: &[u8], i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        while i + 16 <= DP_PCAP.len() {
+            let (sec, us, cap) = (le32(DP_PCAP, i) as u64, le32(DP_PCAP, i + 4) as u64, le32(DP_PCAP, i + 8) as usize);
+            let Some(fr) = DP_PCAP.get(i + 16..i + 16 + cap) else { break };
+            i += 16 + cap;
+            frames += 1;
+            let ts = sec * 1_000_000 + us;
+            let src: [u8; 6] = fr[6..12].try_into().unwrap_or([0; 6]);
+            let dst: [u8; 6] = fr[0..6].try_into().unwrap_or([0; 6]);
+            let s = macs[..nm].contains(&src).then(|| h.slot(&src, (ts / 1_000_000) as u32)).flatten();
+            let d = macs[..nm].contains(&dst).then(|| h.lookup(&dst)).flatten();
+            let mut outs = [None; 8];
+            let mut n = 0;
+            dp().frame(fr, ts, s, d, &mut |o| {
+                if n < 8 {
+                    outs[n] = Some(o);
+                    n += 1;
+                }
+            });
+            let mut ne = 0;
+            let ob = &mut h.obuf;
+            dp().expire(ts, &mut |o| {
+                if ne < ob.len() {
+                    ob[ne] = Some(o);
+                    ne += 1;
+                }
+            });
+            for o in outs[..n].iter().flatten() {
+                record(h, o, &mut got, &mut ng);
+                h.apply(*o);
+            }
+            for k in 0..ne {
+                if let Some(o) = h.obuf[k].take() {
+                    record(h, &o, &mut got, &mut ng);
+                    h.apply(o);
+                }
+            }
+        }
+        let mut nd = 0;
+        let ob = &mut h.obuf;
+        dp().drain(&mut |o| {
+            if nd < ob.len() {
+                ob[nd] = Some(o);
+                nd += 1;
+            }
+        });
+        for k in 0..nd {
+            if let Some(o) = h.obuf[k].take() {
+                record(h, &o, &mut got, &mut ng);
+                h.apply(o);
+            }
+        }
+        if let Some(x) = h.hour {
+            h.close(x);
+        }
+        // compare every device-hour (order-free)
+        let mut matched = 0;
+        for w in want[..nw].iter() {
+            if got[..ng].iter().any(|g| g == w) {
+                matched += 1;
+            }
+        }
+        let parity = !overflow && ng == nw && matched == nw;
+        let fed = h.c.events_fed - c0.events_fed;
+        let hours = h.c.hours_closed - c0.hours_closed;
+        let ev1 = h.health().map_or(0, |x| x.events_ok);
+        let engine = fed == want_events && ev1.wrapping_sub(ev0) as u64 == want_events && h.c.events_dropped == c0.events_dropped && h.c.hours_failed == c0.hours_failed && hours == 4;
+        let st = dp().c;
+        let pass = parity && engine;
+        kprint!(" [P-neuro-dp] {} — doc 20 §5.1 in the kernel: {} frames of the fixture capture through the adapter (aarch64): {}/{} device-hours equal the reference converter (connections, bytes, peer and DNS multisets); the engine got {} events (want {}: one per connection, per DNS query, per device-hour volume; server counted {}), {} UTC hours closed, 0 dropped={}; rules class {} local {} named {} prefix {}, names learned {}, DNS timeouts {}\n",
+            if pass { "PASS" } else { "FAIL" }, frames, matched, nw, fed, want_events, ev1.wrapping_sub(ev0), hours, h.c.events_dropped == c0.events_dropped,
+            st.rule_class, st.rule_local, st.rule_named, st.rule_prefix, st.names_learned, st.dns_timeouts);
+        if !parity {
+            for w in want[..nw].iter() {
+                if let Some(g) = got[..ng].iter().find(|g| g.dev == w.dev && g.hour == w.hour) {
+                    if g != w {
+                        kprint!(" [P-neuro-dp] dev {} hour {}: got conns {} bytes {} dns {} / want conns {} bytes {} dns {}\n", w.dev, w.hour, g.conns, g.bytes, g.ndns, w.conns, w.bytes, w.ndns);
+                    }
+                }
+            }
         }
         pass
     }
@@ -745,9 +1111,10 @@ mod el0 {
             if bp { "PASS" } else { "FAIL" }, held, dropped);
         let _ = crate::superv::swap(saved2);
 
-        let pass = abi && gold && fault && validate && path && bp;
-        kprint!(" [P-neuro] {} — el0-neuro hosted by heqk (QEMU): abi={} golden={} fault={} validate={} host={} backpressure={} (CM5 metal: not run)\n",
-            if pass { "PASS" } else { "FAIL" }, abi, gold, fault, validate, path, bp);
+        let dpok = dp_selftest(h);
+        let pass = abi && gold && fault && validate && path && bp && dpok;
+        kprint!(" [P-neuro] {} — el0-neuro hosted by heqk (QEMU): abi={} golden={} fault={} validate={} host={} backpressure={} data-plane={} (CM5 metal: not run)\n",
+            if pass { "PASS" } else { "FAIL" }, abi, gold, fault, validate, path, bp, dpok);
         pass
     }
 }

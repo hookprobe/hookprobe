@@ -1,0 +1,18 @@
+# HookProbe Neuro: the kernel's data-plane adapter (docs/research/neuro/20 §2). Frames -> el0-neuro events, exactly as
+# the reference converter tools/neuro-research/unsw_to_d1.py --peer-key v2-24 --name-table 4096 computes them, with
+# bounded state (no allocation, no float, no unsafe). EL1 code (it sees addresses so the engine never does); used by
+# os/kernel/kernel/src/neuro.rs behind the kernel feature `neuro`. Tested on the host against the reference.
+[package]
+name = "neuro-dp"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+neuro-core = { path = "../neuro-core" }

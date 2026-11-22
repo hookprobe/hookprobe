@@ -22,7 +22,8 @@ The engine **observes and scores**. It never decides enforcement (ADR 0023, cont
 | `el0-neuro` builds for heqk | **passed** for `aarch64-unknown-none-softfloat`, QEMU and CM5 variants; clippy clean | CM5 ELF: code 5.4 KB RX at 0x1_4026_0000, rodata 512 B R, **.bss 83 KB RW with 0 bytes in the file**: about 6 KB embedded in the kernel image. **Zero FP/SIMD instructions** (objdump) |
 | Peer keys for the data plane (`neuro-core::peerkey`) equal the Python reference bit for bit | **passed** (host) | `neuro-core/tests/peerkey.rs`: 3,000 keys in 5 modes and 4,000 name-table operations (64-entry table, evictions) identical to `unsw_to_d1.py`; `NameEntry` 32 B, `NameTable<4096>` 128 KiB |
 | Runs in QEMU-heqk | **passed** (2026-11-22, behind the kernel feature `neuro`, off in every shipping image) | `os/kernel/tools/neuro-qemu.sh`: `[P-neuro-golden]` 1,200/1,200 closes bit-exact through the permanent ABI (`hal::neuroabi`, v1.1) + EL1 reply validation; fault containment, complaint/reset, backpressure, isolation. Design: [`docs/design/heqk-neuro-integration.md`](../../docs/design/heqk-neuro-integration.md) |
-| Runs on CM5 | **not started** | needs the data-plane hooks and a bench slot (design doc §9 P2/P3) |
+| Data-plane adapter (doc 20 §2) | **passed** (host parity with the reference converter + `[P-neuro-dp]` in QEMU) | [`neuro-dp/`](neuro-dp/): frames -> fingerprints in EL1, bounded state |
+| Runs on CM5 | **not started** | needs a bench slot (design doc §9 P3) |
 
 ## Run the checks
 
