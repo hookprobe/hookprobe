@@ -883,7 +883,12 @@ pub mod keyer {
         for k in 0..hal::wpasrvabi::DRBG_SEED_LEN / 8 {
             e[k * 8..k * 8 + 8].copy_from_slice(&arch_aarch64::rng200::next_word_strict()?.to_le_bytes());
         }
-        #[cfg(not(feature = "cm5"))]
+        // QEMU integration-test profile: virtio-rng, fail closed (the counter TEST pattern below is not in this profile)
+        #[cfg(all(feature = "qemu-itest", not(feature = "cm5")))]
+        for k in 0..hal::wpasrvabi::DRBG_SEED_LEN / 8 {
+            e[k * 8..k * 8 + 8].copy_from_slice(&arch_aarch64::virtio_rng::next_word_strict()?.to_le_bytes());
+        }
+        #[cfg(not(any(feature = "cm5", feature = "qemu-itest")))]
         for (i, b) in e.iter_mut().enumerate() {
             *b = (i as u8).wrapping_mul(29) ^ (unsafe { SEEDS } as u8).wrapping_add(0x5c);
         }

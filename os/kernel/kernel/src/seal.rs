@@ -175,18 +175,26 @@ fn boot_salt() -> Option<[u8; 32]> {
     static SET: AtomicBool = AtomicBool::new(false);
     static W: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
     if !SET.load(Ordering::Acquire) {
-        #[cfg(feature = "cm5")]
+        // CM5: the RNG200; QEMU integration-test profile: virtio-rng (same strict leaf contract, no fallback)
+        #[cfg(any(feature = "cm5", feature = "qemu-itest"))]
         {
             let mut w = [0u64; 4];
             for x in w.iter_mut() {
-                *x = arch_aarch64::rng200::next_word_strict()?;
+                #[cfg(feature = "cm5")]
+                {
+                    *x = arch_aarch64::rng200::next_word_strict()?;
+                }
+                #[cfg(all(feature = "qemu-itest", not(feature = "cm5")))]
+                {
+                    *x = arch_aarch64::virtio_rng::next_word_strict()?;
+                }
             }
             for (a, v) in W.iter().zip(w) {
                 a.store(v, Ordering::Relaxed);
             }
             SET.store(true, Ordering::Release);
         }
-        #[cfg(not(feature = "cm5"))]
+        #[cfg(not(any(feature = "cm5", feature = "qemu-itest")))]
         return None;
     }
     let mut s = [0u8; 32];

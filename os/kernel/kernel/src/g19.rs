@@ -726,3 +726,26 @@ pub fn rekey_selftest() -> bool {
         if pass { "PASS" } else { "FAIL" }, no_caps, caps, flow, dte, dre, pte, pre, dseq, epochs, stale, timed, fresh));
     pass
 }
+
+/// QEMU integration-test profile only: the inner address the PoP assigned (None = no tunnel / no ASSIGN yet).
+#[cfg(feature = "qemu-itest")]
+pub fn assigned_inner() -> Option<[u8; 4]> {
+    tun()?.assign.map(|a| a.inner)
+}
+
+/// QEMU integration-test profile only: seal one inner IPv4 packet (source = the assigned address) into the tunnel and
+/// send it to the PoP. The E2 probe uses it for an ICMP echo through the tunnel; the product path is `send`.
+#[cfg(feature = "qemu-itest")]
+pub fn send_inner(pkt: &[u8], now_ms: i64, tx: &mut dyn FnMut(&[u8]) -> bool) -> bool {
+    let (Some(cfg), Some(t)) = (rt().cfg, tun()) else { return false };
+    let Some(a) = t.assign else { return false };
+    if pkt.len() < 20 || pkt[0] >> 4 != 4 || pkt[12..16] != a.inner || pkt.len() > a.mtu as usize {
+        return false;
+    }
+    let r = rt();
+    let mut pl = [0u8; 1600];
+    let Some(m) = t.seal(T_DATA, pkt, &mut pl, now_ms) else { return false };
+    let mut f = [0u8; 1700];
+    let n = crate::netsvc::build_hs_datagram(r.wan_mac, r.wan_ip, r.gw_mac, cfg.pop, DATA_PORT, &pl[..m], &mut f);
+    n > 0 && tx(&f[..n])
+}
