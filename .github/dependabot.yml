@@ -60,3 +60,8 @@ updates:
       # Mission Control build + the shipped prod-mc image (#748, 2026-11-08). Lift once astro check supports 7.
       - dependency-name: "typescript"
         versions: [">=7"]
+      # @astrojs/solid-js 7.x (the integration Mission Control builds with, ADR 0001) peers solid-js "^1.9.13":
+      # Solid 2.0 breaks the UI build and with it g3, the Mission Control e2e and the QEMU gate (#1475, 2026-11-22).
+      # 1.x patches still flow. Lift once @astrojs/solid-js supports solid-js 2.
+      - dependency-name: "solid-js"
+        versions: [">=2"]
