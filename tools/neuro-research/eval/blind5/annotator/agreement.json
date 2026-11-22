@@ -1,0 +1,27 @@
+{
+ "verdict_agreement": 0.9841269841269841,
+ "next_step": [
+  62,
+  63
+ ],
+ "tool": [
+  6,
+  6
+ ],
+ "copilot": [
+  6,
+  6
+ ],
+ "disagreements": [
+  {
+   "id": "cor-013",
+   "on": "verdict",
+   "annotator": {
+    "id": "cor-013",
+    "verdict": "benign",
+    "next_step": "observe",
+    "note": "Weak shared-host IOC with no connection; insufficient_evidence also defensible."
+   }
+  }
+ ]
+}

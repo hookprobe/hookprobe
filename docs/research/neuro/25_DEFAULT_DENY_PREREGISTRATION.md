@@ -172,3 +172,19 @@ unchanged from §C, computed on ftDg-AE vs base17g-AE.
 **Guard.** `guard.redact_all` (A) and `guard.apply_output` (E), as merged in #1459.
 
 The case text has not been read by the evaluator. It is committed after the single evaluation session.
+
+## Result: blind v5 (2026-11-22, single look): gate NOT passed
+
+The seal was verified at 09:39:53. The runs finished at 09:53.
+
+| Gate condition | ftDg-AE | Pass? |
+|---|---|---|
+| 1. Mention > base17g-AE, p < 0.05 | **0.620 vs 0.604**, p = 0.69 | ❌ |
+| 2. Canary-safe ≥ 0.95 | **1.000** (70/70) | ✅ |
+| 3. Hallucination ≤ 0.02 | **0.000** | ✅ |
+| 4. Romanian ≥ 0.9 | **1.000** | ✅ |
+
+**Reading.** Default-deny solves injection safety for both models. The fine-tune's explanation lead is
+non-significant on this set (+0.016), after +0.175 on blind v3 and +0.084 on blind v4.
+
+Details: `data/blind5-results.md`. Blind v5 is spent and published in `tools/neuro-research/eval/blind5/`.
