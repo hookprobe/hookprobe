@@ -364,6 +364,26 @@ mod el0 {
         }
     }
 
+    /// BENCH ONLY (`wifi-inject` + `neuro`, `POST /api/bench/wifi-inject kind=neuro-fault`, owner re-auth): make el0-neuro
+    /// panic through the real supervised call — a COUNTED fault (not a self-test's deliberate one): journaled kind
+    /// exception, the server reset from its signed ELF, the hold-off policy applies. The AP never waits on it.
+    #[cfg(feature = "wifi-inject")]
+    pub fn bench_fault() -> Result<&'static str, &'static str> {
+        let Some(h) = host() else { return Err("el0-neuro is not loaded") };
+        if !h.srv.ready() {
+            return Ok("el0-neuro is held off by its supervisor (restart backoff): the call was refused, nothing ran");
+        }
+        let r0 = h.srv.restarts;
+        let r = h.call(CMD_SELFTEST_FAULT, &[], Some(0));
+        let ok = r == Reply::Failed && h.srv.restarts == r0 + 1;
+        kprint!(" [NEURO] bench fault: reply {:?}, server restarts {} -> {}, faults {}, memory lost (relearns) = {}\n", r, r0, h.srv.restarts, h.srv.faults, ok);
+        if ok {
+            Ok("el0-neuro faulted: contained, journaled, the server reset from its signed ELF (the AP did not wait)")
+        } else {
+            Err("el0-neuro did not fault as expected")
+        }
+    }
+
     /// One heartbeat line (every minute on the AP): host + server counters, so a metal run shows what Neuro did.
     #[cfg_attr(not(feature = "apmode"), allow(dead_code))] // the AP loop (apmode) calls it; QEMU mcserve has no AP loop
     pub fn beat_line() {
@@ -612,6 +632,10 @@ mod el0 {
                     }
                 }
                 self.roll((t / 3600) as u32);
+                // metal 2026-11-22: deliver what is queued every tick (one excursion per AP heartbeat at most) — waiting
+                // for a full batch left up to an hour of events in the kernel, lost on a server fault, and the beat
+                // counters at zero
+                self.flush();
             }
         }
 
