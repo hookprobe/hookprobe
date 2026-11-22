@@ -347,6 +347,7 @@ impl McNode {
             let rx = tcp::SocketBuffer::new(unsafe { &mut TCP_RX_BUF[i][..] });
             let tx = tcp::SocketBuffer::new(unsafe { &mut TCP_TX_BUF[i][..] });
             let mut s = tcp::Socket::new(rx, tx);
+            reap_dead_peers(&mut s);
             let _ = s.listen(HTTP_PORT);
             *h = Some(sockets.add(s));
         }
@@ -357,6 +358,7 @@ impl McNode {
                 let rx = tcp::SocketBuffer::new(unsafe { &mut TCP_RX_BUF[i][..] });
                 let tx = tcp::SocketBuffer::new(unsafe { &mut TCP_TX_BUF[i][..] });
                 let mut s = tcp::Socket::new(rx, tx);
+                reap_dead_peers(&mut s);
                 let _ = s.listen(HTTPS_PORT);
                 handles[i] = Some(sockets.add(s));
             }
@@ -845,6 +847,22 @@ pub fn run() -> ! {
         }
     }
 }
+
+/// Pre-soak review 2026-11-22: a peer that vanishes without a FIN (a laptop that sleeps with the dashboard's SSE
+/// stream open, a phone that leaves Wi-Fi, a LAN host that stops ACKing on purpose) held its Mission Control slot
+/// until reboot: smoltcp never gives up retransmitting without a timeout, an ESTABLISHED SSE stream keeps
+/// `may_send()`, and a closed plain-HTTP slot sits in FIN-WAIT forever. Eight such peers and HTTPS refused everyone.
+/// With a timeout the socket aborts (back to Listen through `!is_open()`) once the peer has been silent that long, in
+/// any state; keep-alive probes make an idle-but-alive peer answer, so only a dead one is reaped. Both settings
+/// survive `listen()` / `abort()` (smoltcp's reset keeps them), so they are set once per socket.
+fn reap_dead_peers(s: &mut tcp::Socket) {
+    s.set_timeout(Some(smoltcp::time::Duration::from_secs(PEER_SILENT_S)));
+    s.set_keep_alive(Some(smoltcp::time::Duration::from_secs(PEER_PROBE_S)));
+}
+/// A peer silent this long (no segment, not even an ACK of our SSE ping or keep-alive probe) is gone.
+const PEER_SILENT_S: u64 = 60;
+/// Keep-alive probe interval on an idle connection (three probes inside the silence window).
+const PEER_PROBE_S: u64 = 15;
 
 #[allow(static_mut_refs)]
 fn serve_conn<P: Pipe>(i: usize, s: &mut P, c: &mut Conn, st: &McState, now_ms: u64) {

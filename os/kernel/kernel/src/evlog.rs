@@ -80,7 +80,15 @@ pub struct EvLog {
     last_flush_s: u64,
     pub written: u64,
     pub failed: u64,
+    /// Detections that could not be kept: the batch was full and a fill-flush ran less than `FILL_FLUSH_MIN_MS` ago
+    /// (pre-soak review 2026-11-22: they used to vanish without a count). Reported in the heartbeat line.
+    pub dropped: u64,
+    last_fill_flush_ms: u64,
 }
+
+/// A full batch is written at once, at most this often (a flood must not turn the AP loop into an eMMC writer):
+/// up to 4 records = 80 detections a second are kept; beyond that they are counted in `dropped`.
+pub const FILL_FLUSH_MIN_MS: u64 = 250;
 
 /// EVID-01 (decision C): the seal policy of the evidence log and the snapshot — device id only. `Policy::digest` hashes
 /// the floor and the selected PCRs, so both are zeroed here: a later build, a rollback or a raised floor derives the
@@ -104,7 +112,7 @@ impl EvLog {
             Err(fslog::FsErr::NotFormatted) => fslog::format(store, lo, hi)?,
             Err(e) => return Err(e),
         };
-        Ok(EvLog { log, vek, policy, pend: [[0; EV_IMAGE_LEN]; PER_REC], npend: 0, prov: Prov::UNKNOWN, pend_prov: Prov::UNKNOWN, last_flush_s: 0, written: 0, failed: 0 })
+        Ok(EvLog { log, vek, policy, pend: [[0; EV_IMAGE_LEN]; PER_REC], npend: 0, prov: Prov::UNKNOWN, pend_prov: Prov::UNKNOWN, last_flush_s: 0, written: 0, failed: 0, dropped: 0, last_fill_flush_ms: 0 })
     }
 
     /// Every stored event, oldest first: `cb(build tag, image)`. The tag is all zero for records written before
@@ -155,7 +163,8 @@ impl EvLog {
         self.maybe_flush(store, at, true, true)
     }
 
-    /// Queue one event image (from `ProdFull::image_of`).
+    /// Queue one event image (from `ProdFull::image_of`). Returns true when the batch is now full (the caller writes
+    /// it with [`EvLog::flush_full`]). A push into a full batch is counted in `dropped`, never silently lost.
     pub fn push(&mut self, img: [u8; EV_IMAGE_LEN]) -> bool {
         if self.npend < PER_REC {
             if self.npend == 0 {
@@ -163,8 +172,22 @@ impl EvLog {
             }
             self.pend[self.npend] = img;
             self.npend += 1;
+        } else {
+            self.dropped += 1;
         }
         self.npend == PER_REC
+    }
+
+    /// The batch filled between heartbeats: write it now (it used to wait for the 5 s heartbeat while every further
+    /// detection was discarded), at most once per `FILL_FLUSH_MIN_MS`. `now_ms` = monotonic. True = written.
+    #[cfg(feature = "p15-write")]
+    pub fn flush_full<D: BlockDev>(&mut self, store: &mut SealedStore<D>, now_ms: u64, clock_known: bool) -> bool {
+        if self.npend < PER_REC || (self.last_fill_flush_ms != 0 && now_ms.saturating_sub(self.last_fill_flush_ms) < FILL_FLUSH_MIN_MS) {
+            return false;
+        }
+        self.last_fill_flush_ms = now_ms.max(1);
+        let at = self.last_flush_s; // not a timed flush: the once-a-minute pacing is unchanged
+        self.maybe_flush(store, at, clock_known, false)
     }
 
     /// The wall clock became known: this boot's pending tick-stamped images become wall-clock ms.
@@ -370,6 +393,24 @@ pub fn selftest() -> bool {
         let _ = l4.maybe_flush(&mut s2, 1000 + r as u64, true, false);
     }
     let ring = l4.log.count() == 8;
+    // pre-soak review: a push into a full batch is COUNTED (it vanished before), a full batch is written at once by
+    // flush_full, and fill-flushes are paced (at most one per FILL_FLUSH_MIN_MS)
+    let fill = {
+        let (w0, d0) = (l4.written, l4.dropped);
+        let mut full = false;
+        for i in 0..PER_REC as u32 {
+            full = l4.push(img(&ev(3000 + i), 1_762_000_200_000));
+        }
+        let over = l4.push(img(&ev(3100), 1_762_000_200_000)); // the 21st: no room
+        let counted = full && over && l4.dropped == d0 + 1;
+        let first = l4.flush_full(&mut s2, 10_000, true);
+        for i in 0..PER_REC as u32 {
+            l4.push(img(&ev(3200 + i), 1_762_000_200_000));
+        }
+        let paced = !l4.flush_full(&mut s2, 10_100, true); // 100 ms later: held
+        let second = l4.flush_full(&mut s2, 10_300, true);
+        counted && first && paced && second && l4.written == w0 + 2 * PER_REC as u64 && l4.log.count() == 8
+    };
     // before any clock: a full batch is written as "time unknown", never as a fake time
     let mut l5 = l4;
     for i in 0..PER_REC as u32 {
@@ -422,10 +463,10 @@ pub fn selftest() -> bool {
         }
     });
     let provenance = quiet && same && split && kept && wrote_b && prov_ok && prov_n == 9;
-    let pass = fresh && batched && !clear && survives && build_tags && ota && other_dev && foreign && tamper && ring && unknown_ok && provenance;
+    let pass = fresh && batched && !clear && survives && build_tags && ota && other_dev && foreign && tamper && ring && fill && unknown_ok && provenance;
     arch_aarch64::_print(format_args!(
-        " [P-evlog] {} — #54 sealed evidence log (fslog ring in the DataVolume Evidence region, HQKSEAL1 records under HKDF(SRK)): formatted on first use={} batched {} events/record, held < 60 s then flushed={} ciphertext at rest (no plaintext source)={} remount reads every event back in order={} each record names its build, an untagged older record reads as unknown={} EVID-01: the boot after an OTA (other PCRs, raised floor) reads the whole history={} another device id reads nothing={} another device key reads nothing={} flipped ciphertext byte drops only that record={} bounded ring (oldest overwritten)={} pre-clock batch = time unknown={}\n",
-        if pass { "PASS" } else { "FAIL" }, fresh, PER_REC, batched, !clear, survives, build_tags, ota, other_dev, foreign, tamper, ring, unknown_ok
+        " [P-evlog] {} — #54 sealed evidence log (fslog ring in the DataVolume Evidence region, HQKSEAL1 records under HKDF(SRK)): formatted on first use={} batched {} events/record, held < 60 s then flushed={} ciphertext at rest (no plaintext source)={} remount reads every event back in order={} each record names its build, an untagged older record reads as unknown={} EVID-01: the boot after an OTA (other PCRs, raised floor) reads the whole history={} another device id reads nothing={} another device key reads nothing={} flipped ciphertext byte drops only that record={} bounded ring (oldest overwritten)={} a full batch is written at once, paced, and an overflow is counted (never silently lost)={} pre-clock batch = time unknown={}\n",
+        if pass { "PASS" } else { "FAIL" }, fresh, PER_REC, batched, !clear, survives, build_tags, ota, other_dev, foreign, tamper, ring, fill, unknown_ok
     ));
     arch_aarch64::_print(format_args!(
         "   provenance (ADR 0067 D10): each record names the config generation + bundle digest in force={} (no write when nothing is pending={} or nothing changed={}, a change writes the pending batch under the OLD config={}, with no clock the batch is kept and marked unknown={}, a build-tag-only record reads as unknown={}, {} events checked)\n",
