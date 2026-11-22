@@ -422,6 +422,7 @@ dependencies = [
  "ed25519-compact",
  "hal",
  "ml-kem",
+ "neuro-dp",
  "sae",
  "smoltcp",
  "x25519-dalek",
@@ -462,6 +463,17 @@ dependencies = [
  "ctutils",
  "hybrid-array",
  "num-traits",
+]
+
+[[package]]
+name = "neuro-core"
+version = "0.0.26"
+
+[[package]]
+name = "neuro-dp"
+version = "0.0.26"
+dependencies = [
+ "neuro-core",
 ]
 
 [[package]]

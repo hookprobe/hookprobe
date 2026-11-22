@@ -47,9 +47,13 @@ items:
     state: decided
     evidence: [docs/research/neuro/20_TEMPORAL_EVIDENCE_CONTRACT.md, docs/research/neuro/19_D1C_DEVICE_THRESHOLD_PREREGISTRATION.md]
   - id: dp-hooks
-    what: new-connection + DNS events from the data plane with doc-20 fingerprints; AP-loop tick with SNTP UTC
-    state: not_started
-    plan: P2
+    what: data-plane adapter (os/neuro/neuro-dp) = reference converter v2-24 + name table 4096; AP-loop taps + tick (UTC once NTP-synced)
+    state: qemu_passed
+    evidence: [os/neuro/neuro-dp/tests/parity.rs, "[P-neuro-dp]", "AP build cm5+apmc+appersist+wpa3+neuro compiles; payload 3,113,984 B"]
+  - id: model-training
+    what: training / evaluation of any model (L1+, explainer)
+    state: proposed
+    owner: Neuro research session (Apple M5 Pro host); this integration consumes signed packages only (D3)
   - id: api-evidence
     what: read-only evidence fields for Mission Control (UI designer-owned)
     state: not_started

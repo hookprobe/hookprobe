@@ -3879,6 +3879,8 @@ fn cm5_p10_probe() {
                         macro_rules! wifi_send {
                             ($f:expr) => {{
                                 let f: &[u8] = $f;
+                                #[cfg(feature = "neuro")]
+                                neuro::tap(f, false); // HookProbe Neuro: observe only
                                 if wifi_off {
                                     wifi_tx_dropped += 1;
                                     false
@@ -4898,6 +4900,8 @@ fn cm5_p10_probe() {
                                     // every query crosses heqk's IDS like any other flow.
                                     let client_dns = our_ip;
                                     let frame = &rx[off..off + len];
+                                    #[cfg(feature = "neuro")]
+                                    neuro::tap(frame, true); // HookProbe Neuro: observe only (evidence), never a verdict
                                     let act = cyw43::ap_handle_data(frame, &ap.bssid, &our_ip, &pool_base, &client_dns, &mut dh);
                                     // G10: an IPv6 Neighbour Solicitation from one station also goes to the others (as the
                                     // firmware's isolation would swallow it); the frame still continues to heqk's IPv6 LAN below.
@@ -5367,6 +5371,8 @@ fn cm5_p10_probe() {
                                                                 nat_wifi_tx_fail += 1;
                                                             }
                                                         } else if {
+                                                            #[cfg(feature = "neuro")]
+                                                            neuro::tap(&nbuf[..m], false); // HookProbe Neuro: observe only
                                                             let sent = wq_n == 0 && pq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(&nbuf[..m]);
                                                             if nat_trace < NAT_TRACE_N {
                                                                 nat_trace += 1;
@@ -5537,6 +5543,14 @@ fn cm5_p10_probe() {
                                     if t.wrapping_sub(last_beat) > 5 * freq {
                                         {
                                             beat_n += 1;
+                                            // HookProbe Neuro: release timed-out DNS queries, close the UTC hour when it is over
+                                            #[cfg(feature = "neuro")]
+                                            {
+                                                neuro::ap_tick();
+                                                if beat_n % 12 == 0 {
+                                                    neuro::beat_line();
+                                                }
+                                            }
                                             {
                                                 let (hs, hc, hk, hb, hr, hpr) = wifiheal::status();
                                                 kprint!("   [WIFI-HEAL] state={} last={} kicks={} bounces={} reloads={} post_reboot_boot={} stations={}\n", hs, hc, hk, hb, hr, hpr, stas.len());

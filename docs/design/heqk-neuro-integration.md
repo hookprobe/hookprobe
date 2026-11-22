@@ -40,7 +40,7 @@ In concrete terms:
 | Decision: evidence, never an alert | **decided** | docs/research/neuro/20 |
 | P3/P4 (golden replay and fault containment inside heqk) | **passed in QEMU on a throwaway patch, never committed** | `docs/research/neuro/data/p3-p4-heqk-report.md` |
 | **Kernel host + permanent ABI (this work)** | **implemented, QEMU PASS** | `kernel/src/neuro.rs`, `hal/src/neuroabi.rs`, `[P-neuro*]` (§8) |
-| Data-plane hooks (flow / DNS → events), hourly close from the AP loop | **not started** | §9 P2 |
+| Data-plane adapter (doc 20 §2) + AP-loop taps + hourly close | **QEMU PASS; parity with the reference converter** | `os/neuro/neuro-dp` (host parity test), `[P-neuro-dp]`; AP taps compile for CM5 behind `neuro` |
 | CM5 metal (timing, loop-gap impact) | **not run** | §9 P3 |
 | Sealed snapshots of the behavioural memory | **proposed** (doc 14 P5) | not designed; privacy review needed (§10 D4) |
 | Protection model (DNA v1 f16 baseline, policy compiler, HQPROP1) | **proposed** | docs 27–31; M3 not run |
@@ -289,13 +289,36 @@ The other 24 boot self-tests in the same boot passed.
 |---|---|---|
 | **P0** | Repository-truth baseline, permanent ABI v1 in hal, kernel host behind `neuro`, QEMU tests, this design + register | **done (this change)** |
 | **P1** | Operator review of §10 and of the ABI; ADR 0048 drafted from §1, §4 and §7 (operator-merged) | needs operator |
-| **P2** | Data-plane hooks: new-connection rule (SYN / UDP idle ≥ 120 s) and DNS → `observe_*` with doc 20 fingerprints (`peerkey`, `NameTable<4096>` = 128 KiB EL1 budget); `tick()` from the AP loop with SNTP UTC; `/api` evidence fields; QEMU e2e with synthetic traffic | next, QEMU-only |
+| **P2** | Data-plane adapter `os/neuro/neuro-dp` (doc 20 §2: DNS / new-connection / bytes rules, `peer_fp` V2/24, `NameTable<4096>`), bounded (UDP idle table 1,024, 256 pending DNS, 10 s DNS wait); AP-loop taps at the Wi-Fi boundary (station RX, `wifi_send!`, NAT-inbound send) + `ap_tick()` in the heartbeat, UTC only once NTP-synced; `[NEURO beat]` counters | **done in QEMU**: host parity test (16/16 device-hours, 762 connections, 349 DNS incl. 58 NX, every rule) + `[P-neuro-dp]` (same in the kernel, 1,127 engine events, 4 hours closed, 0 dropped). `/api` evidence fields: still open |
 | **P3** | CM5 metal: bench image with `neuro`; excursion cost and **worst loop gap** vs baseline; `[IDS-BENCH]` ns/packet unchanged; fault injection on metal; 24 h bench run (not the REL-05 soak) | needs bench slot |
 | **P4** | Sealed snapshot of the behavioural memory (survives reboot/OTA) — privacy review first (§10 D4) | proposed |
 | **P5** | L1 behind M3 + the FP lease or integer quantisation; HNX verify in kernel | proposed, gated |
 
 **Not in scope until the soak and release gates are done:** any change to the shipping AP image. The `neuro` feature
 is off everywhere and adds nothing to the AP payload.
+
+## 9a. Data-plane adapter (P2)
+
+`os/neuro/neuro-dp` is EL1 code: it sees addresses so the engine never does. It is a no_std, allocation-free,
+`unsafe`-free crate that mirrors `tools/neuro-research/unsw_to_d1.py --peer-key v2-24 --name-table 4096`.
+`tests/gen_fixture.py` writes a deterministic capture (2,418 frames over 4 UTC hours and 4 devices) together with the
+reference converter's output on it. `tests/parity.rs` checks that every device-hour is equal: connections, bytes, and
+the peer and DNS multisets.
+
+**Bounded-state differences from the reference.** Each is counted, and none occurs on the fixture:
+- the UDP idle table holds 1,024 flows (4-way, oldest evicted);
+- at most 256 DNS queries are pending at a time;
+- a query waits at most 10 s for its response, then is reported without the NX flag.
+
+**Memory and payload.**
+- Memory: about 160 KiB of `.bss` (128 KiB name table, 24 KiB UDP table, 8 KiB pending DNS) in its own static.
+- AP payload with `neuro` on: **3,113,984 B**, under the 3,137,736 B HBoot window (23,752 B headroom). The host
+  state was moved from `.data` to `.bss` to get there.
+- The shipping AP image without `neuro` is unchanged.
+
+**Model work.** Nothing in N0 or P2 is trained: the engine and the adapter are deterministic. Model training and
+evaluation (L1+ classifiers, the explainer, blind gates) belong to the Neuro research session on the Apple M5 Pro
+host. This integration consumes its outputs only as signed packages (§6.1), once D3 is decided.
 
 ## 10. Decisions for the operator
 
