@@ -4189,8 +4189,22 @@ fn cm5_p10_probe() {
                                 kprint!(" [AP-PERSIST] {} detections restored from before the last power cycle (boot #{}, {})\n", n, pf.snap.boots,
                                     if from_log > 0 { "sealed evidence log" } else { "sealed snapshot" });
                             }
-                            let seed = arch_aarch64::rng200::next_word_strict().unwrap_or(0) ^ mc_t0;
-                            match mcserve::McNode::new(ap.bssid, mcserve::NetMode::Static { ip: our_ip, prefix: 24, gw: our_ip }, seed) {
+                            // The network stack's random seed (TCP ISNs, ephemeral ports) comes from the TRNG only — as on the
+                            // prod-mc path. It used to fall back to a timer value when the TRNG had no word (key-generation
+                            // review 2026-11-22): a strict read can miss transiently (FIFO half-drained), so retry briefly, then
+                            // fail closed (no AP-side Mission Control; logins would fail without a TRNG anyway).
+                            let seed = (0..200).find_map(|_| {
+                                let w = arch_aarch64::rng200::next_word_strict();
+                                if w.is_none() {
+                                    let t = now();
+                                    while now().wrapping_sub(t) < freq / 1000 {} // 1 ms between tries (bounded: 200 ms)
+                                }
+                                w
+                            });
+                            if seed.is_none() {
+                                kprint!(" [AP-MC] TRNG gave no word in 200 ms: Mission Control on Wi-Fi NOT started (fail closed — no timer-seeded network stack)\n");
+                            }
+                            match seed.and_then(|seed| mcserve::McNode::new(ap.bssid, mcserve::NetMode::Static { ip: our_ip, prefix: 24, gw: our_ip }, seed)) {
                                 Some(mut n) => {
                                     n.disable_sntp();
                                     kprint!(" [AP-MC] Mission Control on http://{}.{}.{}.{}/ for Wi-Fi clients (served by heqk)\n", our_ip[0], our_ip[1], our_ip[2], our_ip[3]);
