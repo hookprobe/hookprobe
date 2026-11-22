@@ -1,23 +1,22 @@
-# setup-vrf-g19.nft — the lines S0 needs in the A1's production firewall (`inet hookprobe_vrf`).
+# setup-vrf-g19.nft — the lines a PoP host needs when its firewall is a drop-policy table (`inet hookprobe_vrf`).
 #
-# WHY: hookprobe_vrf has `policy drop` on BOTH input and forward. superpop-net.sh's own tables cannot
-# override a drop in another base chain, so without these lines the PoP receives nothing and forwards nothing.
-# WHERE: hookprobe-com/scripts/setup-vrf.sh (the table's source). Do NOT `nft add` them by hand on the host:
-# hookprobe-vrf.service regenerates the table, and organism_selfheal.py restarts that service.
-# NOTE: the live input chain already differs from setup-vrf.sh (Cloudflare sets + origin_bypass added at
-# runtime by security-patch.py). Merge into the source and re-run security-patch.py after reloading.
+# WHY: with `policy drop` on input AND forward, superpop-net.sh's own tables cannot override a drop in another
+# base chain, so without these lines the PoP receives nothing and forwards nothing.
+# WHERE: the generator of that table (hookprobe-com scripts/setup-vrf.sh). Do not `nft add` them by hand: a table
+# regeneration or a self-heal restart would remove them.
+# WAN_IF is a placeholder: substitute the host's WAN interface (tests/vrf-g19-e2e.sh does).
 
 # ---- chain forward: add right AFTER `ct state established,related accept` ----
-        # G19 super-PoP (S0 test tenant): tunnelled devices reach the public internet only — never the VCN,
-        # the OCI metadata service, the podman VRFs, CGNAT or each other.
+        # G19 super-PoP: tunnelled devices reach the public internet only — never private/cloud-internal ranges,
+        # the cloud metadata service, container networks, CGNAT, multicast, or each other.
         iifname "hqpop0" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10, 198.18.0.0/15, 127.0.0.0/8, 224.0.0.0/4 } counter drop
-        iifname "hqpop0" ip saddr 198.18.0.0/15 oifname "enp0s6" counter accept
+        iifname "hqpop0" ip saddr 198.18.0.0/15 oifname "WAN_IF" counter accept
         iifname "hqpop0" counter drop
 
 # ---- chain input: add right AFTER `iif lo accept` (before `ct state established,related accept`) ----
-        # G19: tunnelled devices never reach host services (the PoP hands out 1.1.1.1 as DNS).
+        # G19: tunnelled devices never reach host services (the PoP hands out a public resolver as DNS).
         iifname "hqpop0" counter drop
 
-# ---- chain input: add next to the other UDP service ports (e.g. after the IKEv2 line) ----
-        # G19 super-PoP: handshake (7654) + data (7655); direct to origin — mssp.hookprobe.com is Cloudflare-proxied.
-        iifname "enp0s6" udp dport { 7654, 7655 } accept
+# ---- chain input: add next to the other UDP service ports ----
+        # G19 super-PoP: handshake (7654) + data (7655), straight to the host's own address (not via a proxy/CDN).
+        iifname "WAN_IF" udp dport { 7654, 7655 } accept

@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# s1-vm.sh — per-VM lifecycle for the S1 `qemu-itest` guest (G19 super-PoP interop) on fortress.
+# s1-vm.sh — per-VM lifecycle for the S1 `qemu-itest` guest (G19 super-PoP interop) on the test host.
 #
-#   sudo s1-vm.sh new      <id>                 per-VM dir, a fresh 32-byte KEK, a fixed-size data volume
+#   sudo S1_POP_IP=<ip> s1-vm.sh new <id>       per-VM dir, a fresh 32-byte KEK, a fixed-size data volume;
+#                                               records the PoP address the sandbox may reach (no default)
 #   sudo s1-vm.sh run      <id> <kernel.bin>    boot the guest sandboxed in netns hqs1 (s1-net.sh up first)
 #   sudo s1-vm.sh stop     <id>
 #   sudo s1-vm.sh evidence <id>                 write the interop evidence record (class E2 — NOT metal)
 #   sudo s1-vm.sh destroy  <id>                 shred the KEK, delete the VM
 #   sudo s1-vm.sh wrongkey <id> <other-id> <kernel.bin>   boot <id>'s volume with <other-id>'s KEK (must be refused)
+#   sudo s1-vm.sh rotate   <id> <kernel.bin>    one boot with a fresh KEK offered as fw_cfg opt/hookprobe/kek-next
+#   sudo s1-vm.sh rotate-commit <id>            after that boot re-wrapped the VEK: kek-next becomes kek, the old one is shredded
 #
 # Operator decisions 2026-11-22: a dedicated test identity, a unique per-VM VEK protected separately from the
 # backing volume (the KEK lives in keys/, outside disk/, and reaches the guest only through read-only fw_cfg),
@@ -17,7 +20,7 @@ set -euo pipefail
 
 ROOT="${S1_ROOT:-/var/lib/hookprobe-s1}"
 RUN_USER="${S1_USER:-hqs1}"                # a dedicated unprivileged system user (see README)
-POP_IP="${S1_POP_IP:-130.61.174.233}"
+POP_IP="${S1_POP_IP:-}"                    # the PoP public IPv4; required by `new`, then read from vm.meta
 DISK_MB="${S1_DISK_MB:-64}"
 MAX_SEC="${S1_MAX_SEC:-7200}"              # hard wall-clock cap per run
 NS_PATH=/run/netns/hqs1
@@ -31,6 +34,7 @@ unit() { echo "hqs1-vm-$1"; }
 new() {
   id_ok "$1"; local d; d=$(vmdir "$1")
   [ -e "$d" ] && die "$d exists (destroy it first; keys are never reused)"
+  [[ "$POP_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die "S1_POP_IP=<the PoP's public IPv4> required"
   id "$RUN_USER" >/dev/null 2>&1 || die "user $RUN_USER missing: useradd --system --no-create-home --shell /usr/sbin/nologin $RUN_USER"
   install -d -m 0755 "$ROOT" "$ROOT/vms"
   install -d -m 0700 -o "$RUN_USER" "$d"
@@ -41,14 +45,22 @@ new() {
   # Never share a test key across VMs: refuse a (vanishingly unlikely) fingerprint collision.
   grep -rqs "kek_fp=$fp" "$ROOT"/vms/*/vm.meta && { shred -u "$d/keys/kek.bin"; rm -rf "$d"; die "KEK fingerprint collision — retry"; }
   chown "$RUN_USER" "$d/keys/kek.bin"; chmod 0400 "$d/keys/kek.bin"
-  truncate -s "${DISK_MB}M" "$d/disk/data.img"; chown "$RUN_USER" "$d/disk/data.img"; chmod 0600 "$d/disk/data.img"
+  # heqk never writes LBA 0 ("gate 2: never the MBR"), so the HOST partitions: one 0xDA DataVolume from LBA 2048
+  # (the keystore window LBA 2016-2047 stays below it). Unpartitioned → the guest prints [P-itest-vol] FAIL-CLOSED.
+  truncate -s "${DISK_MB}M" "$d/disk/data.img"
+  printf 'start=2048, type=da\n' | sfdisk --quiet --label dos "$d/disk/data.img"
+  sfdisk -d "$d/disk/data.img" | grep -q 'start= *2048, .*type=da' || die "data volume partitioning failed"
+  chown "$RUN_USER" "$d/disk/data.img"; chmod 0600 "$d/disk/data.img"
   printf 'id=%s\ncreated=%s\nkek_fp=%s\ndisk_mb=%s\npop=%s\n' "$1" "$(date -u +%FT%TZ)" "$fp" "$DISK_MB" "$POP_IP" >"$d/vm.meta"
   echo "s1-vm: created $d (KEK fp $fp, data volume ${DISK_MB} MiB)"
 }
 
-launch() { # <id> <kernel> <kek-file> <unit-name>
-  local id="$1" kernel="$2" kek="$3" u="$4" d; d=$(vmdir "$id")
+launch() { # <id> <kernel> <kek-file> <unit-name> [<kek-next-file>]
+  local id="$1" kernel="$2" kek="$3" u="$4" next="${5:-}" d; d=$(vmdir "$id")
+  local extra=(); [ -n "$next" ] && extra=(-fw_cfg "name=opt/hookprobe/kek-next,file=$next")
   [ -d "$d" ] || die "no VM $id (run 'new' first)"
+  local pop; pop=$(sed -n 's/^pop=//p' "$d/vm.meta")
+  [[ "$pop" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die "no valid pop= in $d/vm.meta"
   [ -e "$NS_PATH" ] || die "netns hqs1 missing (s1-net.sh up)"
   [ -f "$kernel" ] || die "kernel image $kernel missing"
   # The guest may only see files inside its own VM dir: copy the kernel in (read-only to the guest).
@@ -62,7 +74,7 @@ launch() { # <id> <kernel> <kek-file> <unit-name>
     -p User="$RUN_USER" -p Group="$RUN_USER" \
     -p CPUQuota=100% -p MemoryMax=2G -p MemorySwapMax=0 -p TasksMax=64 \
     -p RuntimeMaxSec="$MAX_SEC" -p LimitFSIZE=256M \
-    -p IPAddressDeny=any -p IPAddressAllow="$POP_IP" \
+    -p IPAddressDeny=any -p IPAddressAllow="$pop" \
     -p RestrictAddressFamilies="AF_INET AF_UNIX" \
     -p PrivateDevices=yes -p DevicePolicy=closed \
     -p ProtectSystem=strict -p ProtectHome=yes -p PrivateTmp=yes \
@@ -74,7 +86,7 @@ launch() { # <id> <kernel> <kek-file> <unit-name>
       -serial "file:$d/run/serial.log" \
       -global virtio-mmio.force-legacy=false \
       -object rng-random,id=rng0,filename=/dev/urandom -device virtio-rng-device,rng=rng0 \
-      -fw_cfg "name=opt/hookprobe/kek,file=$kek" \
+      -fw_cfg "name=opt/hookprobe/kek,file=$kek" "${extra[@]}" \
       -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
       -drive "file=$d/disk/data.img,format=raw,if=none,id=hd0" -device virtio-blk-device,drive=hd0 \
       -kernel "$d/run/kernel.bin"
@@ -92,6 +104,26 @@ wrongkey() {
   echo "s1-vm: expect the guest to REFUSE the volume and generate no keys; then: shred -u $(vmdir "$1")/keys/kek-foreign.bin"
 }
 
+rotate() {
+  id_ok "$1"; [ -n "${2:-}" ] || die "usage: rotate <id> <kernel.bin>"; local d; d=$(vmdir "$1")
+  [ -f "$d/keys/kek.bin" ] || die "no KEK for $1"
+  [ -e "$d/keys/kek-next.bin" ] && die "a rotation is already pending (rotate-commit or shred keys/kek-next.bin)"
+  ( umask 077; head -c 32 /dev/urandom >"$d/keys/kek-next.bin" )
+  cmp -s "$d/keys/kek.bin" "$d/keys/kek-next.bin" && { shred -u "$d/keys/kek-next.bin"; die "KEK collision — retry"; }
+  chown "$RUN_USER" "$d/keys/kek-next.bin"; chmod 0400 "$d/keys/kek-next.bin"
+  launch "$1" "$2" "$d/keys/kek.bin" "$(unit "$1")" "$d/keys/kek-next.bin"
+  echo "s1-vm: rotation boot started; when the guest confirms the re-wrap, run: s1-vm.sh rotate-commit $1"
+}
+
+rotate_commit() {
+  id_ok "$1"; local d; d=$(vmdir "$1"); [ -f "$d/keys/kek-next.bin" ] || die "no pending rotation for $1"
+  systemctl is-active --quiet "$(unit "$1")" && die "stop the VM first (s1-vm.sh stop $1)"
+  shred -u "$d/keys/kek.bin"; mv "$d/keys/kek-next.bin" "$d/keys/kek.bin"
+  local fp; fp=$(sha256sum "$d/keys/kek.bin" | cut -c1-16)
+  sed -i "s/^kek_fp=.*/kek_fp=$fp/" "$d/vm.meta"; echo "rotated=$(date -u +%FT%TZ)" >>"$d/vm.meta"
+  echo "s1-vm: rotation committed for $1 (new KEK fp $fp; the old KEK is shredded)"
+}
+
 stop() { id_ok "$1"; systemctl stop "$(unit "$1")" "$(unit "$1")-wrongkey" 2>/dev/null || true; echo "s1-vm: stopped $1"; }
 
 evidence() {
@@ -106,7 +138,7 @@ evidence() {
     echo "qemu=$(qemu-system-aarch64 --version | head -1)"
     echo "netns_allowlist=$(nft list table inet hqs1 >/dev/null 2>&1 && echo present || echo MISSING)"
     echo "--- markers"
-    grep -aE '\[ITEST\]|\[G19|g19|\[NETCP\]|HwTrng|TRNG|entropy|refus|PANIC' "$log" | head -200 || echo "(no markers)"
+    grep -aE '\[ITEST\]|\[P-itest|\[G19|g19|\[NETCP\]|HwTrng|TRNG|entropy|refus|PANIC' "$log" | head -200 || echo "(no markers)"
   } >"$out"
   echo "s1-vm: wrote $out"
 }
@@ -120,4 +152,5 @@ destroy() {
 
 cmd="${1:-}"; shift || true
 case "$cmd" in new) new "$@" ;; run) run "$@" ;; stop) stop "$@" ;; evidence) evidence "$@" ;;
-  destroy) destroy "$@" ;; wrongkey) wrongkey "$@" ;; *) sed -n '2,10p' "$0"; exit 2 ;; esac
+  destroy) destroy "$@" ;; wrongkey) wrongkey "$@" ;; rotate) rotate "$@" ;; rotate-commit) rotate_commit "$@" ;;
+  *) sed -n '2,12p' "$0"; exit 2 ;; esac
