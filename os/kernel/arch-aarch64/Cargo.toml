@@ -10,6 +10,9 @@ hal = { path = "../hal" }
 sae = { path = "../sae", optional = true }
 
 [features]
+# QEMU integration-test profile only (kernel feature `qemu-itest`, operator decision 2026-11-22): the virtio-rng
+# entropy leaf. The kernel refuses it together with cm5 / cloud at compile time.
+virtio-rng = []
 fwcon-fast = []
 # BENCH ONLY (WPA3 AP feasibility probe, 2026-11-10): the AP asks the firmware for WPA3-SAE + PMF required, tries
 # in-firmware SAE (sae_password), enables every firmware event (incl. event_msgs_ext) and logs each one with its

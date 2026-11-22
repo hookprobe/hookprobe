@@ -784,6 +784,8 @@ pub fn run() -> ! {
     let _ = crate::hsh::probe_selftest(); // D1: the functional probe of el0-hsh
     #[cfg(feature = "neuro")]
     let _ = crate::neuro::selftest(); // HookProbe Neuro N0: el0-neuro hosted (ABI, golden, fault, validation, backpressure)
+    #[cfg(feature = "qemu-itest")]
+    let _ = crate::itest::selftest(); // QEMU integration-test profile: virtio-rng entropy (or FAIL-CLOSED without it)
     let _ = crate::el0as::report(); // ADR 0065 S0: every resident EL0 server loaded by now is in its own address space
     #[cfg(feature = "hsh")]
     let _ = crate::hsh::selftest_web(0); // R6 = D: owner-signed HQMGMT1 envelopes on the web carrier

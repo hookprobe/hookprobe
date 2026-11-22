@@ -98,6 +98,8 @@ mod superv;
 mod mgmtabi;
 #[cfg(feature = "mcserve")]
 mod hsh;
+#[cfg(feature = "qemu-itest")]
+mod itest; // QEMU integration-test profile only (virtio-rng entropy)
 #[cfg(feature = "neuro")]
 mod neuro; // HookProbe Neuro N0: the el0-neuro host (evidence only)
 mod el0srv; // ADR 0065 step 2: the resident EL0 driver-server substrate (el0-wifi)
