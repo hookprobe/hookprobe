@@ -88,7 +88,7 @@ def build(store, registry, purpose, *, collections=None, cap_per_source=None, so
     if purpose not in licensing.PURPOSES:
         raise ValueError(purpose)
     v = validator or schema.default()
-    excluded = {}
+    excluded, caveats = {}, {}
 
     def bump(key, n=1):
         excluded[key] = excluded.get(key, 0) + n
@@ -123,10 +123,12 @@ def build(store, registry, purpose, *, collections=None, cap_per_source=None, so
         if lic is None:
             bump(f"unknown_licence:{r['provenance']['license_id']}")
             continue
-        ok, _why = licensing.decide(lic, purpose)
+        ok, why = licensing.decide(lic, purpose)
         if not ok:
             bump(f"licence_gate:{sid}")
             continue
+        if why == licensing.EVALUATION_UNCLEAR:
+            caveats[sid] = f"{lic['id']}: {why}"
         # the same record_id from two kept acquisitions (one record in two files): the newest wins
         when = meta[aid]["fetched_at"] if aid in meta else ""
         prev = by_rid.get(r["record_id"])
@@ -226,6 +228,8 @@ def build(store, registry, purpose, *, collections=None, cap_per_source=None, so
         "counts": {cid: sum(1 for e in examples if e["collection"] == cid) for cid in wanted},
         "excluded": excluded,
     }
+    if caveats:  # sources admitted only under the evaluation exception: this build must never train a model
+        manifest["licence_caveats"] = dict(sorted(caveats.items()))
     errs = v.errors(manifest, "manifest.schema.json")
     if errs:
         raise RuntimeError(f"manifest invalid: {errs[:3]}")

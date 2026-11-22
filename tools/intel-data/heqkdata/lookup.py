@@ -63,7 +63,7 @@ def build(store, registry, purpose, out_root=None, cve_sources=CVE_SOURCES, atta
           weakness_sources=WEAKNESS_SOURCES, context_sources=CONTEXT_SOURCES):
     """cve_sources in precedence order; kev_source is the KEV catalogue (sources are parameters for tests)."""
     attack_sources = attack_sources or ATTACK_SOURCES
-    used, refused = {}, {}
+    used, refused, caveats = {}, {}, {}
     for sid in tuple(cve_sources) + tuple(attack_sources) + tuple(weakness_sources) + tuple(context_sources):
         ok, why = licensing.decide(registry.license_of(sid), purpose)
         acq = _newest(store, sid)
@@ -73,6 +73,8 @@ def build(store, registry, purpose, out_root=None, cve_sources=CVE_SOURCES, atta
             refused[sid] = "no acquisition"
         else:
             used[sid] = acq
+            if why == licensing.EVALUATION_UNCLEAR:
+                caveats[sid] = why
     version = "lookup-" + canon.sha256_obj([FORMAT, VERSION, purpose, _code_digest(),
                                             sorted((s, a["acquisition_id"], _norm(store, a)) for s, a in used.items())])[:12]
     out = os.path.join(out_root or os.path.join(store.root, "builds"), version)
@@ -208,6 +210,8 @@ def build(store, registry, purpose, out_root=None, cve_sources=CVE_SOURCES, atta
         "notes": "Record facts only. kev=false means 'not in the CISA KEV snapshot fetched at "
                  + (used[kev_source]["fetched_at"] if kev_source in used else "n/a") + "'.",
     }
+    if caveats:  # admitted only for evaluation: never ship these tables to a device
+        manifest["licence_caveats"] = caveats
     mp = os.path.join(out, "manifest.json")
     with open(mp + ".partial", "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=1, sort_keys=True)

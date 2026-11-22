@@ -60,6 +60,11 @@
       "type": "object",
       "additionalProperties": { "type": "string", "maxLength": 1024 }
     },
+    "licence_caveats": {
+      "description": "Sources admitted only because purpose=evaluation accepts a verified licence whose commercial use is unclear (operator decision 2026-11-22). A build with caveats must never be used to train or ship a model.",
+      "type": "object",
+      "additionalProperties": { "type": "string", "maxLength": 512 }
+    },
     "excluded": {
       "description": "Records or sources left out, with the reason (licence gate, validation failure, duplicate, contamination).",
       "type": "object",

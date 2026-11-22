@@ -91,9 +91,9 @@ Sources: COMMERCIAL 11, OPEN 89, RESEARCH 22, RESTRICTED 32, UNKNOWN 51 — tota
 
 | id | name | org / country | class | train | eval | ship | access | P | verified |
 |---|---|---|---|---|---|---|---|---|---|
-| `cic-bell-dns-exf-2021` | [CIC-Bell-DNS-EXF-2021](https://www.unb.ca/cic/datasets/dns-exf-2021.html) | Canadian Institute for Cybersecurity, UN / CA | RESEARCH | — | — | — | registration | 5 | verified |
-| `cira-cic-dohbrw-2020` | [CIRA-CIC-DoHBrw-2020](https://www.unb.ca/cic/datasets/dohbrw-2020.html) | Canadian Institute for Cybersecurity, UN / CA | RESEARCH | — | — | — | registration | 5 | verified |
-| `cic-bell-dns-2021` | [CIC-Bell-DNS-2021](https://www.unb.ca/cic/datasets/dns-2021.html) | Canadian Institute for Cybersecurity, UN / CA | RESEARCH | — | — | — | registration | 4 | verified |
+| `cic-bell-dns-exf-2021` | [CIC-Bell-DNS-EXF-2021](https://www.unb.ca/cic/datasets/dns-exf-2021.html) | Canadian Institute for Cybersecurity, UN / CA | RESEARCH | — | ✅ | — | registration | 5 | verified |
+| `cira-cic-dohbrw-2020` | [CIRA-CIC-DoHBrw-2020](https://www.unb.ca/cic/datasets/dohbrw-2020.html) | Canadian Institute for Cybersecurity, UN / CA | RESEARCH | — | ✅ | — | registration | 5 | verified |
+| `cic-bell-dns-2021` | [CIC-Bell-DNS-2021](https://www.unb.ca/cic/datasets/dns-2021.html) | Canadian Institute for Cybersecurity, UN / CA | RESEARCH | — | ✅ | — | registration | 4 | verified |
 | `dns-threats-palau-2019` | [DNS Threats Dataset (normal / DGA / tunnelling domains)](https://zenodo.org/records/6508640) | Stratosphere Lab (CTU) and UNCuyo / CONI / AR | UNKNOWN | — | — | — | public_download | 4 | verified |
 | `lu-circl-passive-dns` | [CIRCL Passive DNS](https://circl.lu/services/passive-dns/) | CIRCL / LU | RESTRICTED | — | — | — | agreement | 4 | verified |
 | `spamhaus-dnsbl-dqs` | [Spamhaus DNSBLs (ZEN/SBL/XBL/PBL/DBL, ZRD) public mirrors and Data Query Service](https://www.spamhaus.org/organization/dnsblusage/) | Spamhaus Technology / GB | COMMERCIAL | — | — | — | commercial_contract | 4 | verified |
@@ -111,20 +111,20 @@ Sources: COMMERCIAL 11, OPEN 89, RESEARCH 22, RESTRICTED 32, UNKNOWN 51 — tota
 |---|---|---|---|---|---|---|---|---|---|
 | `eu-eccc-dep-call-11` | [ECCC Digital Europe call DIGITAL-ECCC-2027-DEPLOY-CYBER-11 (AI4SME, CYBERAI)](https://www.ffg.at/europa/dep/calls/SO3_Call11_2026-2027) | European Cybersecurity Competence Centre / EU | RESTRICTED | — | — | — | eligibility_restricted | 5 | partially_verified |
 | `ro-ncc-ro` | [NCC-RO - Romanian National Coordination Centre for cybersecurity](https://cybersecurity-centre.europa.eu/centrul-national-de-coordonare-romania_en) | ADR (Authority for the Digitalization of / RO | RESTRICTED | — | — | — | eligibility_restricted | 5 | partially_verified |
-| `int-aws-activate` | [AWS Activate](https://aws.amazon.com/startups/credits) | Amazon Web Services / INT | COMMERCIAL | — | — | — | eligibility_restricted | 3 | verified |
-| `int-google-for-startups` | [Google for Startups Cloud Program](https://cloud.google.com/startup) | Google / INT | COMMERCIAL | — | — | — | eligibility_restricted | 3 | partially_verified |
-| `int-microsoft-for-startups` | [Microsoft for Startups (Azure credits)](https://www.microsoft.com/en-us/startups) | Microsoft / INT | COMMERCIAL | — | — | — | eligibility_restricted | 3 | verified |
+| `int-aws-activate` | [AWS Activate](https://aws.amazon.com/startups/credits) | Amazon Web Services / INT | COMMERCIAL | — | ✅ | — | eligibility_restricted | 3 | verified |
+| `int-google-for-startups` | [Google for Startups Cloud Program](https://cloud.google.com/startup) | Google / INT | COMMERCIAL | — | ✅ | — | eligibility_restricted | 3 | partially_verified |
+| `int-microsoft-for-startups` | [Microsoft for Startups (Azure credits)](https://www.microsoft.com/en-us/startups) | Microsoft / INT | COMMERCIAL | — | ✅ | — | eligibility_restricted | 3 | verified |
 | `ro-bitdefender-voyager` | [Bitdefender Voyager Ventures and academic programmes](https://www.bitdefender.com/en-us/company/voyager-ventures) | Bitdefender / RO | RESTRICTED | — | — | — | eligibility_restricted | 3 | partially_verified |
 | `ch-cyd-campus-fellowships` | [CYD Campus Fellowships and Proof-of-Concept Fellowships](https://www.epfl.ch/research/funding/epfl-programmes/cyd/) | Cyber-Defence Campus (armasuisse S+T) wi / CH | RESTRICTED | — | — | — | eligibility_restricted | 2 | partially_verified |
 | `eu-cyssde-cascade` | [CYSSDE cascade open calls (pentest/vulnerability assessment)](https://cyssde.eu/) | CYSSDE consortium (Digital Europe GA 101 / EU | RESTRICTED | — | — | — | eligibility_restricted | 2 | partially_verified |
-| `int-oracle-for-startups` | [Oracle for Startups](https://www.oracle.com/startup/) | Oracle / INT | COMMERCIAL | — | — | — | eligibility_restricted | 1 | unverified |
+| `int-oracle-for-startups` | [Oracle for Startups](https://www.oracle.com/startup/) | Oracle / INT | COMMERCIAL | — | ✅ | — | eligibility_restricted | 1 | unverified |
 
 ## iot
 
 | id | name | org / country | class | train | eval | ship | access | P | verified |
 |---|---|---|---|---|---|---|---|---|---|
 | `iot-23` | [IoT-23 (Aposemat)](https://www.stratosphereips.org/datasets-iot23) | Stratosphere Laboratory, CTU Prague (fun / CZ | OPEN | ✅ | ✅ | ✅ | public_download | 5 | verified |
-| `ciciot2023` | [CICIoT2023](https://www.unb.ca/cic/datasets/iotdataset-2023.html) | Canadian Institute for Cybersecurity, UN / CA | RESEARCH | — | — | — | registration | 4 | verified |
+| `ciciot2023` | [CICIoT2023](https://www.unb.ca/cic/datasets/iotdataset-2023.html) | Canadian Institute for Cybersecurity, UN / CA | RESEARCH | — | ✅ | — | registration | 4 | verified |
 | `kitsune-network-attack` | [Kitsune Network Attack Dataset](https://archive.ics.uci.edu/dataset/516/kitsune+network+attack+dataset) | Ben-Gurion University of the Negev (Mirs / IL | OPEN | ✅ | ✅ | ✅ | public_download | 4 | verified |
 | `ton-iot` | [TON_IoT datasets](https://research.unsw.edu.au/projects/toniot-datasets) | UNSW Canberra (Cyber Range and IoT Labs) / AU | RESEARCH | — | — | — | public_download | 3 | verified |
 | `bot-iot` | [Bot-IoT](https://research.unsw.edu.au/projects/bot-iot-dataset) | UNSW Canberra (Cyber Range Lab) / AU | RESEARCH | — | — | — | public_download | 2 | verified |
@@ -148,11 +148,11 @@ Sources: COMMERCIAL 11, OPEN 89, RESEARCH 22, RESTRICTED 32, UNKNOWN 51 — tota
 |---|---|---|---|---|---|---|---|---|---|
 | `lanl-unified-host-network-2017` | [LANL Unified Host and Network Dataset (2017)](https://csr.lanl.gov/data/2017/) | Los Alamos National Laboratory / US | OPEN | ✅ | ✅ | ✅ | registration | 4 | verified |
 | `bccc-cse-cic-ids2018` | [BCCC-CSE-CIC-IDS2018 (Large-Scale Intrusion Detection Dataset)](https://www.yorku.ca/research/bccc/ucs-technical/cybersecurity-datasets-cds/large-scale-intrusion-detection-dataset-bccc-cse-cic-ids2018/) | BCCC, York University / CA | UNKNOWN | — | — | — | request_form | 3 | partially_verified |
-| `cic-ddos2019` | [CIC-DDoS2019](https://www.unb.ca/cic/datasets/ddos-2019.html) | Canadian Institute for Cybersecurity, UN / CA | RESEARCH | — | — | — | registration | 3 | verified |
-| `cic-ids2017` | [CIC-IDS2017 (Intrusion Detection Evaluation Dataset)](https://www.unb.ca/cic/datasets/ids-2017.html) | Canadian Institute for Cybersecurity, Un / CA | RESEARCH | — | — | — | registration | 3 | verified |
-| `cse-cic-ids2018` | [CSE-CIC-IDS2018 (IPS/IDS dataset on AWS)](https://www.unb.ca/cic/datasets/ids-2018.html) | Communications Security Establishment (C / CA | RESEARCH | — | — | — | public_download | 3 | verified |
+| `cic-ddos2019` | [CIC-DDoS2019](https://www.unb.ca/cic/datasets/ddos-2019.html) | Canadian Institute for Cybersecurity, UN / CA | RESEARCH | — | ✅ | — | registration | 3 | verified |
+| `cic-ids2017` | [CIC-IDS2017 (Intrusion Detection Evaluation Dataset)](https://www.unb.ca/cic/datasets/ids-2017.html) | Canadian Institute for Cybersecurity, Un / CA | RESEARCH | — | ✅ | — | registration | 3 | verified |
+| `cse-cic-ids2018` | [CSE-CIC-IDS2018 (IPS/IDS dataset on AWS)](https://www.unb.ca/cic/datasets/ids-2018.html) | Communications Security Establishment (C / CA | RESEARCH | — | ✅ | — | public_download | 3 | verified |
 | `darpa-optc` | [DARPA OpTC (Operationally Transparent Cyber)](https://github.com/FiveDirections/OpTC-data) | DARPA (collected by Five Directions) / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
-| `distrinet-cic-ids-2017-2018-improved` | [Improved CIC-IDS2017 and CSE-CIC-IDS2018 (WTMC2021 / CNS2022 relabels)](https://intrusion-detection.distrinet-research.be/CNS2022/) | imec-DistriNet, KU Leuven (with UNSW Can / BE | RESEARCH | — | — | — | public_download | 3 | partially_verified |
+| `distrinet-cic-ids-2017-2018-improved` | [Improved CIC-IDS2017 and CSE-CIC-IDS2018 (WTMC2021 / CNS2022 relabels)](https://intrusion-detection.distrinet-research.be/CNS2022/) | imec-DistriNet, KU Leuven (with UNSW Can / BE | RESEARCH | — | ✅ | — | public_download | 3 | partially_verified |
 | `shadowserver-reports` | [Shadowserver network reports](https://www.shadowserver.org/what-we-do/network-reporting/get-reports/) | The Shadowserver Foundation / US | RESTRICTED | — | — | — | request_form | 3 | partially_verified |
 | `ugr16` | [UGR'16](https://nesg.ugr.es/nesg-ugr16/) | Network Engineering & Security Group (NE / ES | UNKNOWN | — | — | — | public_download | 3 | unverified |
 | `uq-netflow-nids` | [UQ NetFlow NIDS datasets (NF-UNSW-NB15, NF-ToN-IoT, NF-BoT-IoT, NF-CSE-CIC-IDS2018, NF-UQ-NIDS; v1/v2/v3)](https://staff.itee.uq.edu.au/marius/NIDS_datasets/) | University of Queensland (Portmann, Sarh / AU | UNKNOWN | — | — | — | public_download | 3 | partially_verified |
@@ -174,7 +174,7 @@ Sources: COMMERCIAL 11, OPEN 89, RESEARCH 22, RESTRICTED 32, UNKNOWN 51 — tota
 | `pl-certpl-warning-list` | [CERT Polska Warning List (Lista Ostrzezen)](https://cert.pl/en/warning-list/) | CERT Polska (NASK-PIB) / PL | RESTRICTED | — | — | — | public_download | 3 | verified |
 | `ro-romanian-phishing-datasets` | [Romanian-language phishing datasets (public)](https://data.mendeley.com/datasets/6yv6nhk92n) | n/a / RO | UNKNOWN | — | — | — | reports_only | 3 | partially_verified |
 | `uk-cambridge-cybercrime-centre` | [Cambridge Cybercrime Centre datasets](https://www.cambridgecybercrime.uk/datasets.html) | University of Cambridge / UK | RESEARCH | — | — | — | agreement | 3 | verified |
-| `iscx-url2016` | [ISCX-URL2016](https://www.unb.ca/cic/datasets/url-2016.html) | Canadian Institute for Cybersecurity, UN / CA | RESEARCH | — | — | — | registration | 2 | verified |
+| `iscx-url2016` | [ISCX-URL2016](https://www.unb.ca/cic/datasets/url-2016.html) | Canadian Institute for Cybersecurity, UN / CA | RESEARCH | — | ✅ | — | registration | 2 | verified |
 | `openphish-community` | [OpenPhish Community Feed](https://openphish.com/phishing_feeds.html) | OpenPhish / US | RESTRICTED | — | — | — | public_download | 2 | verified |
 | `phishtank` | [PhishTank](https://phishtank.org/) | Cisco Talos (originally OpenDNS) / US | UNKNOWN | — | — | — | api_key | 2 | partially_verified |
 | `hf-ealvaradob-phishing` | [ealvaradob/phishing-dataset (combined URLs, emails, SMS, HTML)](https://huggingface.co/datasets/ealvaradob/phishing-dataset) | ealvaradob (individual) / - | UNKNOWN | — | — | — | public_download | 1 | partially_verified |
