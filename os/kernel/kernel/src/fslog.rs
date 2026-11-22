@@ -589,6 +589,46 @@ pub fn create_vek<D: BlockDev>(
     }
 }
 
+/// QEMU integration-test profile (`qemu-itest`): is there a sealed blob at keystore `lba` at all? Distinguishes "no key
+/// yet" (create one) from "a key that does not unseal" (wrong KEK / corrupted: refuse, never replace it).
+#[cfg(feature = "qemu-itest")]
+pub fn sealed_blob_at<D: BlockDev>(store: &SealedStore<D>, lba: u64) -> bool {
+    let mut sec = [0u8; SEC];
+    store.read_sector(lba, &mut sec).is_ok() && &sec[..8] == seal::SEAL_MAGIC
+}
+
+/// `qemu-itest`: unseal a 32-byte key from keystore `lba` under (`root`, `policy`). None = absent / wrong root / tampered.
+#[cfg(feature = "qemu-itest")]
+pub fn load_key_at<D: BlockDev>(store: &SealedStore<D>, lba: u64, root: &[u8; 32], policy: &seal::Policy) -> Option<[u8; 32]> {
+    let mut sec = [0u8; SEC];
+    store.read_sector(lba, &mut sec).ok()?;
+    if &sec[..8] != seal::SEAL_MAGIC {
+        return None;
+    }
+    let total = seal::SEAL_HDR_LEN + get_u32(&sec, 68) as usize;
+    if total > SEC {
+        return None;
+    }
+    let mut k = [0u8; 32];
+    match seal::unseal(root, policy, &sec[..total], &mut k) {
+        Ok(32) => Some(k),
+        _ => None,
+    }
+}
+
+/// `qemu-itest`: seal a 32-byte key under (`root`, `policy`) into keystore `lba` (must be the keystore window).
+#[cfg(feature = "qemu-itest")]
+pub fn store_key_at<D: BlockDev>(store: &mut SealedStore<D>, lba: u64, root: &[u8; 32], policy: &seal::Policy, key: &[u8; 32]) -> Result<(), FsErr> {
+    let mut blob = seal::SealBlob::new();
+    seal::seal(root, policy, key, &mut blob).map_err(|_| FsErr::Io)?;
+    let mut sec = [0u8; SEC];
+    sec[..blob.len].copy_from_slice(blob.as_slice());
+    match store.store_sector(lba, &sec)? {
+        RegionKind::Keystore => Ok(()),
+        _ => Err(FsErr::OutsideRegion),
+    }
+}
+
 /// M3.3 — the normal volume-open path for the key: load the sealed VEK, or create
 /// + persist a fresh one on first mount. Returns `(vek, created)` — `created` is
 /// true only on the very first open of a volume (proves cross-restart survival:

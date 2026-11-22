@@ -97,6 +97,19 @@ pub trait EntropySource {
 // health check + byte assembly live above it in MetalEntropy and are testable.
 // ---------------------------------------------------------------------------
 
+// QEMU integration-test profile (operator decision 2026-11-22): virtio-rng is a TEST entropy leaf. It must never sit
+// next to a production leaf (CM5 RNG200, cloud SMCCC TRNG), in a boot-chain image, or next to a seeded path.
+#[cfg(all(feature = "qemu-itest", any(feature = "cm5", feature = "cloud", feature = "hboot", feature = "apmode", feature = "prod")))]
+compile_error!(
+    "qemu-itest (virtio-rng entropy) is the QEMU integration-test profile only: never with cm5 / cloud / hboot / apmode / \
+     prod. The CM5 keeps the BCM2712 RNG200 and the cloud its SMCCC TRNG."
+);
+#[cfg(all(feature = "qemu-itest", any(feature = "securechannel-selftest", feature = "securechannel-host-responder")))]
+compile_error!(
+    "qemu-itest must not be combined with a seeded / deterministic entropy facility (securechannel-selftest, \
+     securechannel-host-responder): deterministic entropy stays self-test-only."
+);
+
 /// A raw 64-bit hardware-random word source. `next_word` returns `None` when the
 /// TRNG is unavailable / not ready — the fail-closed signal. An implementation
 /// MUST NEVER return a timer, counter, or constant here: that would be the seeded
@@ -148,7 +161,13 @@ impl RawTrng for HwTrng {
         {
             arch_aarch64::smccc::trng_word()
         }
-        #[cfg(not(any(feature = "cm5", feature = "cloud")))]
+        // QEMU integration-test profile: virtio-rng (host /dev/urandom), same strict contract — `None` when absent,
+        // timed out, short, or failing its continuous test (latched). Compile-time barred from cm5 / cloud above.
+        #[cfg(all(feature = "qemu-itest", not(any(feature = "cm5", feature = "cloud"))))]
+        {
+            arch_aarch64::virtio_rng::next_word_strict()
+        }
+        #[cfg(not(any(feature = "cm5", feature = "cloud", feature = "qemu-itest")))]
         {
             None
         }

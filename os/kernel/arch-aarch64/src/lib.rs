@@ -91,6 +91,12 @@ pub mod pci;
 pub mod smccc;
 pub mod virtio;
 pub mod virtio_blk;
+/// QEMU integration-test profile only (kernel `qemu-itest`): virtio-rng entropy leaf. Never in a CM5 / cloud image.
+#[cfg(feature = "virtio-rng")]
+pub mod virtio_rng;
+/// QEMU integration-test profile only: the read-only fw_cfg interface (the per-VM KEK).
+#[cfg(feature = "virtio-rng")]
+pub mod fwcfg;
 pub mod virtio_net;
 pub mod virtio_transport;
 

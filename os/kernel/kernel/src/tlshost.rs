@@ -605,7 +605,20 @@ fn fill_entropy(out: &mut [u8]) -> usize {
         }
         out.len()
     }
-    #[cfg(not(feature = "cm5"))]
+    // QEMU integration-test profile: virtio-rng, fail closed (no counter/timer source in this profile)
+    #[cfg(all(feature = "qemu-itest", not(feature = "cm5")))]
+    {
+        let mut i = 0;
+        while i < out.len() {
+            let Some(w) = arch_aarch64::virtio_rng::next_word_strict() else { return 0 };
+            let b = w.to_le_bytes();
+            let n = (out.len() - i).min(8);
+            out[i..i + n].copy_from_slice(&b[..n]);
+            i += n;
+        }
+        out.len()
+    }
+    #[cfg(not(any(feature = "cm5", feature = "qemu-itest")))]
     {
         // QEMU ONLY (no TRNG in the virt machine): SHA-256 over a counter + the cycle counter. Fine for the
         // QEMU HTTPS proof; never present in a CM5 image.

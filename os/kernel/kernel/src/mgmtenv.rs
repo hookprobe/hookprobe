@@ -23,7 +23,12 @@ fn rand8() -> Option<[u8; 8]> {
     {
         arch_aarch64::rng200::next_word_strict().map(|w| w.to_le_bytes())
     }
-    #[cfg(not(feature = "cm5"))]
+    // QEMU integration-test profile: virtio-rng, fail closed — no timer path in this profile (operator 2026-11-22)
+    #[cfg(all(feature = "qemu-itest", not(feature = "cm5")))]
+    {
+        arch_aarch64::virtio_rng::next_word_strict().map(|w| w.to_le_bytes())
+    }
+    #[cfg(not(any(feature = "cm5", feature = "qemu-itest")))]
     {
         let c: u64;
         unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) c, options(nomem, nostack)) };

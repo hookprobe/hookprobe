@@ -240,7 +240,17 @@ pub(crate) fn rand16() -> Option<[u8; 16]> {
             _ => None, // fail-closed: this login fails, the sensor keeps running
         }
     }
-    #[cfg(not(feature = "cm5"))]
+    // QEMU integration-test profile: virtio-rng, fail closed (no login without entropy, as on the CM5)
+    #[cfg(all(feature = "qemu-itest", not(feature = "cm5")))]
+    {
+        let a = arch_aarch64::virtio_rng::next_word_strict()?;
+        let b = arch_aarch64::virtio_rng::next_word_strict()?;
+        let mut o = [0u8; 16];
+        o[..8].copy_from_slice(&a.to_le_bytes());
+        o[8..].copy_from_slice(&b.to_le_bytes());
+        Some(o)
+    }
+    #[cfg(not(any(feature = "cm5", feature = "qemu-itest")))]
     {
         let n = RAND_CTR.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         let mut h = boot_abi::sha256::Hasher::new();
@@ -784,6 +794,10 @@ pub fn run() -> ! {
     let _ = crate::hsh::probe_selftest(); // D1: the functional probe of el0-hsh
     #[cfg(feature = "neuro")]
     let _ = crate::neuro::selftest(); // HookProbe Neuro N0: el0-neuro hosted (ABI, golden, fault, validation, backpressure)
+    #[cfg(feature = "qemu-itest")]
+    let _ = crate::itest::selftest(); // QEMU integration-test profile: virtio-rng entropy (or FAIL-CLOSED without it)
+    #[cfg(feature = "qemu-itest")]
+    let _ = crate::itest::volume_selftest(); // the per-VM sealed volume: VEK under the fw_cfg KEK, identity, at-rest / integrity / wrong-key / rotation
     let _ = crate::el0as::report(); // ADR 0065 S0: every resident EL0 server loaded by now is in its own address space
     #[cfg(feature = "hsh")]
     let _ = crate::hsh::selftest_web(0); // R6 = D: owner-signed HQMGMT1 envelopes on the web carrier
@@ -796,12 +810,21 @@ pub fn run() -> ! {
     let mut frame = [0u8; MTU];
     let mut last_sample = 0i64;
     let mut last_hb = 0i64;
+    // QEMU integration-test profile: the G19 tunnel to the build-time PoP (S1 / E2 evidence)
+    #[cfg(feature = "qemu-itest")]
+    let mut g19p = crate::itest::G19Probe::start(now_ms());
     loop {
         let now = now_ms();
         let mut budget = 64;
         while budget > 0 {
             budget -= 1;
             let Some(n) = nic.rx(&mut frame) else { break };
+            #[cfg(feature = "qemu-itest")]
+            if let Some(p) = g19p.as_mut() {
+                if p.rx(&mut frame, n, now) {
+                    continue; // the PoP's handshake / tunnel datagram (consumed by G19)
+                }
+            }
             st.seen += 1;
             let src = crate::net::eth_ipv4_src(&frame[..n]);
             if src != 0 && crate::behavioral::is_internal(src) {
@@ -816,6 +839,10 @@ pub fn run() -> ! {
             if node.wants(&frame[..n]) {
                 node.ingress(&frame[..n], now);
             }
+        }
+        #[cfg(feature = "qemu-itest")]
+        if let Some(p) = g19p.as_mut() {
+            p.tick(now, node.leased, node.ip, mac, &mut |f| nic.tx(f));
         }
         drain_events(st, |_| {});
         if now - last_sample >= 1000 {
