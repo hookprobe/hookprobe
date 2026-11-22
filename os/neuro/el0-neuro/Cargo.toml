@@ -20,6 +20,8 @@ cm5 = []
 
 [dependencies]
 neuro-core = { path = "../neuro-core" }
+# the shared kernel <-> server ABI (hal convention; docs/design/heqk-neuro-integration.md §4)
+hal = { path = "../../kernel/hal" }
 
 [profile.release]
 panic = "abort"

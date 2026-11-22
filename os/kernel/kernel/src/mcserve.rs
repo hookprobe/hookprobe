@@ -782,6 +782,8 @@ pub fn run() -> ! {
     let _ = crate::superv::complain_selftest(); // autoheal harness H4c: the complaint channel (every EL0 server loaded by now)
     #[cfg(all(feature = "hsh", feature = "mctls"))]
     let _ = crate::hsh::probe_selftest(); // D1: the functional probe of el0-hsh
+    #[cfg(feature = "neuro")]
+    let _ = crate::neuro::selftest(); // HookProbe Neuro N0: el0-neuro hosted (ABI, golden, fault, validation, backpressure)
     let _ = crate::el0as::report(); // ADR 0065 S0: every resident EL0 server loaded by now is in its own address space
     #[cfg(feature = "hsh")]
     let _ = crate::hsh::selftest_web(0); // R6 = D: owner-signed HQMGMT1 envelopes on the web carrier

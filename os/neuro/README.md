@@ -11,7 +11,7 @@ The engine **observes and scores**. It never decides enforcement (ADR 0023, cont
 | Crate | What | Target |
 |---|---|---|
 | [`neuro-core/`](neuro-core/) | the engine: integer streaming DNA. No `unsafe`, no allocation, no float, no dependencies. | any (`no_std`); tests on the host |
-| [`el0-neuro/`](el0-neuro/) | the EL0 server: shared-IO ABI (`src/abi.rs`, proposed), 64 device slots in `.bss`, commands EVENTS / CLOSE_HOUR / RESET_DEV / INFO | `aarch64-unknown-none-softfloat` |
+| [`el0-neuro/`](el0-neuro/) | the EL0 server: shared-IO ABI (`hal::neuroabi` v1, shared with the kernel host `os/kernel/kernel/src/neuro.rs`), 64 device slots in `.bss`, commands EVENTS / CLOSE_HOUR / RESET_DEV / INFO | `aarch64-unknown-none-softfloat` |
 
 ## Verification status — read before relying on it
 
@@ -21,7 +21,8 @@ The engine **observes and scores**. It never decides enforcement (ADR 0023, cont
 | The Rust port equals the integer reference bit for bit | **passed** (host, rustc 1.99.0-nightly 9f36de775 2026-07-19, the heqk pin) | `neuro-core/tests/golden.rs`: 1,200 hour closes (155 alarms, Bloom rotations at 168/336 h), every score part and the final profile bit-exact; 27 unit checks; **1,296 B per device** (real struct size) |
 | `el0-neuro` builds for heqk | **passed** for `aarch64-unknown-none-softfloat`, QEMU and CM5 variants; clippy clean | CM5 ELF: code 5.4 KB RX at 0x1_4026_0000, rodata 512 B R, **.bss 83 KB RW with 0 bytes in the file**: about 6 KB embedded in the kernel image. **Zero FP/SIMD instructions** (objdump) |
 | Peer keys for the data plane (`neuro-core::peerkey`) equal the Python reference bit for bit | **passed** (host) | `neuro-core/tests/peerkey.rs`: 3,000 keys in 5 modes and 4,000 name-table operations (64-entry table, evictions) identical to `unsw_to_d1.py`; `NameEntry` 32 B, `NameTable<4096>` 128 KiB |
-| Runs in QEMU-heqk / on CM5 | **not started** | needs HomePods: wire the crate into `kernel/build.rs`, assign the address range, move `abi.rs` into `hal/` (`docs/research/neuro/12` R1) |
+| Runs in QEMU-heqk | **passed** (2026-11-22, behind the kernel feature `neuro`, off in every shipping image) | `os/kernel/tools/neuro-qemu.sh`: `[P-neuro-golden]` 1,200/1,200 closes bit-exact through the permanent ABI (`hal::neuroabi`, v1.1) + EL1 reply validation; fault containment, complaint/reset, backpressure, isolation. Design: [`docs/design/heqk-neuro-integration.md`](../../docs/design/heqk-neuro-integration.md) |
+| Runs on CM5 | **not started** | needs the data-plane hooks and a bench slot (design doc §9 P2/P3) |
 
 ## Run the checks
 

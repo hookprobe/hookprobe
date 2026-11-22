@@ -3,10 +3,22 @@
 version = 4
 
 [[package]]
+name = "boot-abi"
+version = "0.1.0"
+
+[[package]]
 name = "el0-neuro"
 version = "0.0.26"
 dependencies = [
+ "hal",
  "neuro-core",
+]
+
+[[package]]
+name = "hal"
+version = "0.0.26"
+dependencies = [
+ "boot-abi",
 ]
 
 [[package]]
