@@ -61,7 +61,7 @@ import shutil
 import sqlite3
 import tempfile
 
-from . import VERSION, adapters, canon, context, licensing
+from . import VERSION, adapters, canon, context, instrlike, licensing
 from .adapters import Ctx, Reject
 
 # Bump when the window content changes for the same inputs (host rule, pseudonyms, fields, drops), so a new
@@ -72,8 +72,9 @@ FORMAT = 2
 # CTU-13 (binetflow) window content version, in the export id of argus_binetflow sources only.
 # 1 = first cut (never shared); 2 = hosts from From-/Normal- labels only, To- flows follow an existing host.
 BINET_FORMAT = 2
-# remote_context field version (in the export id only when --context is used). 1 = iptoasn + warninglists.
-CONTEXT_FORMAT = 1
+# remote_context field version (in the export id only when --context is used). 1 = iptoasn + warninglists;
+# 2 = as_name is registrant-chosen text, exported flagged as {"value", "instr_like"} (Neuro, 2026-11-22).
+CONTEXT_FORMAT = 2
 # Split / file names per source, from the store's "<scenario>__<file>" prefix. Sources not listed use the prefix.
 SCENARIO_NAMES = {"ctu-13": lambda s: f"CTU-13.Dataset-{int(s) + 41}" if s.isdigit() else s}
 
@@ -321,16 +322,21 @@ def _remote_context(tuples, P, tables, memo):
     return out
 
 
-def _write_window(out, head, n_events, make_events, chunk_events, make_context=None):
+def _write_window(out, head, n_events, make_events, chunk_events, make_context=None, counts=None):
     """Chunk i of n carries events [i*size, (i+1)*size); labels and baseline are on chunk 0 only. Event dicts
     are made one chunk at a time (make_events(lo, hi)), so a window of millions of flows is never all in memory
     as dicts."""
     size = chunk_events or max(1, n_events)
     n = max(1, -(-n_events // size))
+    flagged = counts if counts is not None else collections.Counter()
+    flagged["instr_like_flagged"] += 0  # recorded per file even when 0
     for i in range(n):
-        line = dict(head, chunk=[i, n], events=make_events(i * size, (i + 1) * size))
+        events = [instrlike.wrap(e) for e in make_events(i * size, (i + 1) * size)]
+        flagged["instr_like_flagged"] += sum(instrlike.flagged(e) for e in events)
+        line = dict(head, chunk=[i, n], events=events)
         if make_context is not None:  # per chunk: the remotes of this chunk's events
             line["remote_context"] = make_context(i * size, (i + 1) * size)
+            flagged["instr_like_flagged"] += sum(instrlike.flagged(c) for c in line["remote_context"].values())
         if i:
             line["labels"], line["baseline"] = {}, {"pairs": [], "suffixes": []}
         out.write(json.dumps(line, separators=(",", ":")) + "\n")
@@ -389,7 +395,7 @@ def host_windows(store, registry, acq, out, split, chunk_events=0, workdir=None,
                                                  lambda lo, hi, f=flows: [_event(t, _iso(t[0]), P) for t in f[lo:hi]],
                                                  chunk_events,
                                                  (lambda lo, hi, f=flows: _remote_context(f[lo:hi], P, tables, memo))
-                                                 if tables else None)
+                                                 if tables else None, counts=counts)
                 counts["windows"] += 1
                 counts["events"] += len(flows)
                 counts["max_window_events"] = max(counts["max_window_events"], len(flows))
@@ -481,7 +487,7 @@ def binetflow_host_windows(store, registry, acq, out, split, chunk_events=0, wor
                                                  lambda lo, hi, f=flows: [_binet_event(t, _iso(t[0]), P) for t in f[lo:hi]],
                                                  chunk_events,
                                                  (lambda lo, hi, f=flows: _remote_context(f[lo:hi], P, tables, memo))
-                                                 if tables else None)
+                                                 if tables else None, counts=counts)
                 counts["windows"] += 1
                 counts["events"] += len(flows)
                 counts["background_events"] += n_bg
@@ -530,7 +536,7 @@ def scenario_hour_windows(store, registry, acq, out, split, max_rows=1_500_000):
                 "source": scenario, "host": None,
                 "hour_utc": None, "window_index": k, "split": split, "labels": dict(sorted(labels.items())),
                 "baseline": {"pairs": [], "suffixes": []}}
-        counts["lines"] += _write_window(out, head, len(events), lambda lo, hi, e=events: e[lo:hi], 0)
+        counts["lines"] += _write_window(out, head, len(events), lambda lo, hi, e=events: e[lo:hi], 0, counts=counts)
         counts["windows"] += 1
         counts["events"] += len(events)
     return counts
@@ -557,6 +563,7 @@ def export(store, registry, source_id, purpose, split_rule, out_root=None, windo
     key = [[FORMAT, BINET_FORMAT] if binet else FORMAT, sorted(a["acquisition_id"] for a in acqs.values()), VERSION, purpose,
            split_rule, window, sorted(splits or []), sorted(unseal), chunk_events,
            max_rows if window == "scenario-hour" else None]
+    key.append(["instr_like", instrlike.rule()["pattern"], instrlike.rule()["flags"]])
     if tables:  # only then, so exports without context keep their ids
         key.append(["context", CONTEXT_FORMAT, sorted((s, a["acquisition_id"]) for s, (_, a) in tables.items())])
     version = "windows-" + canon.sha256_obj(key)[:12]
@@ -573,6 +580,8 @@ def export(store, registry, source_id, purpose, split_rule, out_root=None, windo
                 "max_rows": max_rows if window == "scenario-hour" else None, "files": [], "skipped": {}, "unsealed": []}
     if tables:
         manifest["context"] = context.manifest_entry(tables)
+    manifest["instr_like"] = dict(instrlike.rule(), fields=sorted(instrlike.ATTACKER_FIELDS),
+                                  count="instr_like_flagged per file: values flagged in events and remote_context")
     for fn in sorted(acqs):
         a = acqs[fn]
         scenario = scenario_name(source_id, fn)

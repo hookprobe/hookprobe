@@ -27,7 +27,7 @@ python3 -I heqk_data.py lookup --purpose commercial_training                   #
 python3 -I heqk_data.py dga xjw3kq9vzt2lmpr8.com                     # heqk dga.rs, bit-exact
 python3 -I heqk_data.py dga-eval                                     # dga.rs FP/recall sweep on the store
 python3 -I heqk_data.py catalog --out ../../docs/research/intel-data/CATALOGUE.md
-python3 -I -m unittest discover -s tests -t tests                     # 87 tests, fixtures only
+python3 -I -m unittest discover -s tests -t tests                     # 96 tests, fixtures only
 ```
 
 Purposes are `commercial_training`, `evaluation`, `research` and `live_intel`. Each source is checked
@@ -65,6 +65,7 @@ choices are in `heqkdata/windows.py`.
 | `heqkdata/quality.py` | quality report + tier-A baseline of `dga.rs` on the DNS test split |
 | `heqkdata/export.py` | versioned build: JSONL, chat SFT JSONL, `IOC.TXT` (unsigned), optional Parquet, manifest |
 | `heqkdata/windows.py` | host-hour windows of full captures for Neuro; pseudonyms, baselines, split rules, sealing |
+| `heqkdata/instrlike.py` | Neuro's `!instr-like` flag on attacker-controlled export strings (rule imported from `neuro-research/semantic_compression.py`) |
 | `heqkdata/sample.py` | per-label reservoir sample at registration for multi-GB Zeek logs |
 | `heqkdata/dga_ref.py` | bit-exact port of `os/kernel/kernel/src/dga.rs` (checked against compiled Rust on 20,009 names) |
 | `samples/` | example records and exports produced from the test fixtures (reserved IP and domain values only) |

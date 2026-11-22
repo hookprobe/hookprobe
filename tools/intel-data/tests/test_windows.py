@@ -7,7 +7,7 @@ import os
 import unittest
 
 from helpers import Sandbox
-from heqkdata import export, registry, windows
+from heqkdata import export, instrlike, registry, windows
 from heqkdata.store import Store
 
 HEAD = ("#separator \\x09\n#fields\tts\tuid\tid.orig_h\tid.orig_p\tid.resp_h\tid.resp_p\tproto\tservice\tduration\t"
@@ -169,6 +169,9 @@ class ExportRules(unittest.TestCase):
         out = os.path.join(self.sb.dir, "w")
         _, man = windows.export(self.st, self.reg, "f-iot23", "commercial_training", "neuro-sha256-mod3", out_root=out)
         self.assertEqual([f["scenario"] for f in man["files"]], [dev_name])
+        self.assertEqual(man["instr_like"]["pattern"], instrlike.pattern().pattern)
+        self.assertEqual(len(man["instr_like"]["detector_sha256"]), 64)
+        self.assertEqual([f["instr_like_flagged"] for f in man["files"]], [0])  # recorded even when 0
         self.assertIn("sealed", man["skipped"][test_name])
         _, man = windows.export(self.st, self.reg, "f-iot23", "commercial_training", "neuro-sha256-mod3", out_root=out,
                                 unseal=["f-iot23"])
