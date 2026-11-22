@@ -7,6 +7,8 @@
 #   sudo s1-vm.sh evidence <id>                 write the interop evidence record (class E2 — NOT metal)
 #   sudo s1-vm.sh destroy  <id>                 shred the KEK, delete the VM
 #   sudo s1-vm.sh wrongkey <id> <other-id> <kernel.bin>   boot <id>'s volume with <other-id>'s KEK (must be refused)
+#   sudo s1-vm.sh rotate   <id> <kernel.bin>    one boot with a fresh KEK offered as fw_cfg opt/hookprobe/kek-next
+#   sudo s1-vm.sh rotate-commit <id>            after that boot re-wrapped the VEK: kek-next becomes kek, the old one is shredded
 #
 # Operator decisions 2026-11-22: a dedicated test identity, a unique per-VM VEK protected separately from the
 # backing volume (the KEK lives in keys/, outside disk/, and reaches the guest only through read-only fw_cfg),
@@ -41,13 +43,19 @@ new() {
   # Never share a test key across VMs: refuse a (vanishingly unlikely) fingerprint collision.
   grep -rqs "kek_fp=$fp" "$ROOT"/vms/*/vm.meta && { shred -u "$d/keys/kek.bin"; rm -rf "$d"; die "KEK fingerprint collision — retry"; }
   chown "$RUN_USER" "$d/keys/kek.bin"; chmod 0400 "$d/keys/kek.bin"
-  truncate -s "${DISK_MB}M" "$d/disk/data.img"; chown "$RUN_USER" "$d/disk/data.img"; chmod 0600 "$d/disk/data.img"
+  # heqk never writes LBA 0 ("gate 2: never the MBR"), so the HOST partitions: one 0xDA DataVolume from LBA 2048
+  # (the keystore window LBA 2016-2047 stays below it). Unpartitioned → the guest prints [P-itest-vol] FAIL-CLOSED.
+  truncate -s "${DISK_MB}M" "$d/disk/data.img"
+  printf 'start=2048, type=da\n' | sfdisk --quiet --label dos "$d/disk/data.img"
+  sfdisk -d "$d/disk/data.img" | grep -q 'start= *2048, .*type=da' || die "data volume partitioning failed"
+  chown "$RUN_USER" "$d/disk/data.img"; chmod 0600 "$d/disk/data.img"
   printf 'id=%s\ncreated=%s\nkek_fp=%s\ndisk_mb=%s\npop=%s\n' "$1" "$(date -u +%FT%TZ)" "$fp" "$DISK_MB" "$POP_IP" >"$d/vm.meta"
   echo "s1-vm: created $d (KEK fp $fp, data volume ${DISK_MB} MiB)"
 }
 
-launch() { # <id> <kernel> <kek-file> <unit-name>
-  local id="$1" kernel="$2" kek="$3" u="$4" d; d=$(vmdir "$id")
+launch() { # <id> <kernel> <kek-file> <unit-name> [<kek-next-file>]
+  local id="$1" kernel="$2" kek="$3" u="$4" next="${5:-}" d; d=$(vmdir "$id")
+  local extra=(); [ -n "$next" ] && extra=(-fw_cfg "name=opt/hookprobe/kek-next,file=$next")
   [ -d "$d" ] || die "no VM $id (run 'new' first)"
   [ -e "$NS_PATH" ] || die "netns hqs1 missing (s1-net.sh up)"
   [ -f "$kernel" ] || die "kernel image $kernel missing"
@@ -74,7 +82,7 @@ launch() { # <id> <kernel> <kek-file> <unit-name>
       -serial "file:$d/run/serial.log" \
       -global virtio-mmio.force-legacy=false \
       -object rng-random,id=rng0,filename=/dev/urandom -device virtio-rng-device,rng=rng0 \
-      -fw_cfg "name=opt/hookprobe/kek,file=$kek" \
+      -fw_cfg "name=opt/hookprobe/kek,file=$kek" "${extra[@]}" \
       -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
       -drive "file=$d/disk/data.img,format=raw,if=none,id=hd0" -device virtio-blk-device,drive=hd0 \
       -kernel "$d/run/kernel.bin"
@@ -90,6 +98,26 @@ wrongkey() {
   install -m 0400 -o "$RUN_USER" "$other" "$(vmdir "$1")/keys/kek-foreign.bin"
   launch "$1" "$3" "$(vmdir "$1")/keys/kek-foreign.bin" "$(unit "$1")-wrongkey"
   echo "s1-vm: expect the guest to REFUSE the volume and generate no keys; then: shred -u $(vmdir "$1")/keys/kek-foreign.bin"
+}
+
+rotate() {
+  id_ok "$1"; [ -n "${2:-}" ] || die "usage: rotate <id> <kernel.bin>"; local d; d=$(vmdir "$1")
+  [ -f "$d/keys/kek.bin" ] || die "no KEK for $1"
+  [ -e "$d/keys/kek-next.bin" ] && die "a rotation is already pending (rotate-commit or shred keys/kek-next.bin)"
+  ( umask 077; head -c 32 /dev/urandom >"$d/keys/kek-next.bin" )
+  cmp -s "$d/keys/kek.bin" "$d/keys/kek-next.bin" && { shred -u "$d/keys/kek-next.bin"; die "KEK collision — retry"; }
+  chown "$RUN_USER" "$d/keys/kek-next.bin"; chmod 0400 "$d/keys/kek-next.bin"
+  launch "$1" "$2" "$d/keys/kek.bin" "$(unit "$1")" "$d/keys/kek-next.bin"
+  echo "s1-vm: rotation boot started; when the guest confirms the re-wrap, run: s1-vm.sh rotate-commit $1"
+}
+
+rotate_commit() {
+  id_ok "$1"; local d; d=$(vmdir "$1"); [ -f "$d/keys/kek-next.bin" ] || die "no pending rotation for $1"
+  systemctl is-active --quiet "$(unit "$1")" && die "stop the VM first (s1-vm.sh stop $1)"
+  shred -u "$d/keys/kek.bin"; mv "$d/keys/kek-next.bin" "$d/keys/kek.bin"
+  local fp; fp=$(sha256sum "$d/keys/kek.bin" | cut -c1-16)
+  sed -i "s/^kek_fp=.*/kek_fp=$fp/" "$d/vm.meta"; echo "rotated=$(date -u +%FT%TZ)" >>"$d/vm.meta"
+  echo "s1-vm: rotation committed for $1 (new KEK fp $fp; the old KEK is shredded)"
 }
 
 stop() { id_ok "$1"; systemctl stop "$(unit "$1")" "$(unit "$1")-wrongkey" 2>/dev/null || true; echo "s1-vm: stopped $1"; }
@@ -120,4 +148,5 @@ destroy() {
 
 cmd="${1:-}"; shift || true
 case "$cmd" in new) new "$@" ;; run) run "$@" ;; stop) stop "$@" ;; evidence) evidence "$@" ;;
-  destroy) destroy "$@" ;; wrongkey) wrongkey "$@" ;; *) sed -n '2,10p' "$0"; exit 2 ;; esac
+  destroy) destroy "$@" ;; wrongkey) wrongkey "$@" ;; rotate) rotate "$@" ;; rotate-commit) rotate_commit "$@" ;;
+  *) sed -n '2,12p' "$0"; exit 2 ;; esac

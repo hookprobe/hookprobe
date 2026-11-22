@@ -30,7 +30,7 @@ An E2 record is labelled "NOT metal" and never marks a metal gate.
 | No host-filesystem sharing: no virtfs, **no `-semihosting`** (it gives the guest host file I/O); the sandbox sees only its own VM dir | `ProtectSystem=strict`, `ProtectHome`, `ReadWritePaths` |
 | No device passthrough: `PrivateDevices`, `DevicePolicy=closed`, no `/dev/kvm` (TCG) | systemd-run |
 | No privileges: dedicated user `hqs1`, empty capability set, `NoNewPrivileges` | systemd-run |
-| Per-VM KEK: 32 B in `keys/`, outside `disk/`; reaches the guest only via read-only fw_cfg `opt/hookprobe/kek`; shredded on destroy; no reuse, no sharing | `s1-vm.sh new/destroy` |
+| Data volume: host-partitioned (one 0xDA DataVolume from LBA 2048; heqk never writes LBA 0). Per-VM KEK: 32 B in `keys/`, outside `disk/`; reaches the guest only via read-only fw_cfg `opt/hookprobe/kek`; shredded on destroy; no reuse, no sharing | `s1-vm.sh new/destroy` |
 
 ## Run (needs sudo; operator)
 
@@ -44,6 +44,8 @@ sudo tools/s1-pop/s1-vm.sh run s1a <kernel.bin>
 grep -a '\[ITEST\] device identity' /var/lib/hookprobe-s1/vms/s1a/run/serial.log   # → add the pk to the S0 allowlist
 sudo tools/s1-pop/s1-vm.sh evidence s1a
 sudo tools/s1-pop/s1-vm.sh new s1b && sudo tools/s1-pop/s1-vm.sh wrongkey s1a s1b <kernel.bin>   # must refuse
+sudo tools/s1-pop/s1-vm.sh rotate s1a <kernel.bin>      # one boot offering opt/hookprobe/kek-next; guest re-wraps the VEK
+sudo tools/s1-pop/s1-vm.sh stop s1a && sudo tools/s1-pop/s1-vm.sh rotate-commit s1a   # kek-next → kek, old KEK shredded
 sudo tools/s1-pop/s1-vm.sh destroy s1a; sudo tools/s1-pop/s1-net.sh down
 ```
 
