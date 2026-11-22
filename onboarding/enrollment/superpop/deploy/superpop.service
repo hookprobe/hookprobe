@@ -1,0 +1,47 @@
+# superpop.service — the G19 super-PoP, S0 TEST TENANT, on the OCI A1 (mesh.hookprobe.com, 130.61.174.233).
+# Install: see deploy/S0-RUNBOOK.md. Operator-applied (Red); nothing here is applied automatically.
+#
+# Budget (shares the host with hookprobe.com/MSSP): one core (CPU 3, ≤100%), 256 MiB. The PoP needs only
+# CAP_NET_ADMIN, to create its TUN; host networking (address, NAT, MSS clamp) runs as root in ExecStartPost.
+# Inner pool 198.18.0.0/15 (RFC 2544): it collides with nothing on the A1 (podman 172.30-33/24, VCN 10.0.1.0/24).
+[Unit]
+Description=HookProbe G19 super-PoP (S0 test tenant)
+After=network-online.target hookprobe-vrf.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=superpop
+Group=superpop
+ExecStart=/usr/local/bin/superpop run --key-file /etc/superpop/pop.key --devices /etc/superpop/devices \
+  --bind 10.0.1.110 --tun hqpop0 --tenant 53315f54455354 --pool 198.18.0.0/15
+# '+' = runs as root outside the sandbox: wait for the TUN, then address/forwarding-check/NAT/MSS (superpop-net.sh).
+ExecStartPost=+/bin/sh -c 'for i in $(seq 50); do ip link show hqpop0 >/dev/null 2>&1 && exec /usr/local/sbin/superpop-net.sh hqpop0 enp0s6 198.18.0.0/15 198.18.0.1; sleep 0.1; done; echo "superpop: hqpop0 never appeared" >&2; exit 1'
+ExecStopPost=-+/usr/sbin/nft delete table inet superpop
+ExecStopPost=-+/usr/sbin/nft delete table ip superpop_nat
+Restart=on-failure
+RestartSec=5
+
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+AllowedCPUs=3
+CPUQuota=100%
+MemoryMax=256M
+TasksMax=32
+DevicePolicy=closed
+DeviceAllow=/dev/net/tun rw
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=/etc/superpop
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
