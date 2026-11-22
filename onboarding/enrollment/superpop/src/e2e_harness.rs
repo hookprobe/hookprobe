@@ -323,6 +323,118 @@ pub fn scenario() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::securechannel::InitiatorPending;
+
+    /// One device msg1, chunked exactly as the device sends it, plus its pending initiator state.
+    fn msg1_chunks(kp: &KeyPair) -> (Vec<Vec<u8>>, InitiatorPending) {
+        let mut ent = OsEntropy;
+        let rnd = InitiatorRandomness::from_entropy(&mut ent).unwrap();
+        let (msg1, pend) = initiator_write_msg1(kp, &responder().public(), &rnd, &sha256::digest(kp.pk.as_ref())).unwrap();
+        let mut chunks = Vec::new();
+        hs_chunk(msg1.as_slice(), |c| {
+            chunks.push(c.to_vec());
+            true
+        });
+        (chunks, pend)
+    }
+
+    fn feed(pop: &mut Pop, from: SocketAddr, chunks: &[Vec<u8>], now: u64) -> Vec<Out> {
+        let mut ent = OsEntropy;
+        chunks.iter().flat_map(|c| pop.on_hs(from, c, now, &mut ent)).collect()
+    }
+
+    /// The device completes on THIS msg2 (first-msg2-wins, as heqk's initiator does).
+    fn complete(pend: InitiatorPending, outs: &[Out]) -> Dev {
+        let mut re = HsReasm::new();
+        let mut total = None;
+        for o in outs {
+            if let Out::Hs(_, c) = o {
+                total = re.feed(c).unwrap().or(total);
+            }
+        }
+        let (session, _) = initiator_read_msg2(pend, &re.message()[..total.unwrap()]).unwrap();
+        Dev::from_session(session)
+    }
+
+    fn assigned(pop: &mut Pop, dev: &mut Dev, from: SocketAddr, now: u64) -> bool {
+        match one_data(pop.on_data(from, &dev.seal(&Msg::AddrReq), now)) {
+            Ok((_, dg)) => dev.open(&dg).ok().and_then(|pt| wire::decode(&pt).map(|m| matches!(m, Msg::Assign(_)))).unwrap_or(false),
+            Err(_) => false,
+        }
+    }
+
+    /// F-S1-1 regression: the device retransmits the identical msg1 before our msg2 lands and keeps the FIRST
+    /// msg2. The PoP must answer the retransmit with the same msg2, not a new session the device never sees.
+    #[test]
+    fn identical_msg1_retransmit_gets_the_same_msg2() {
+        let mut pop = new_pop();
+        let a = dev_kp(b"G19-TEST-device-A");
+        let from = addr("10.0.0.5:7654");
+        let (chunks, pend) = msg1_chunks(&a);
+        let first = feed(&mut pop, from, &chunks, 1_000);
+        let second = feed(&mut pop, from, &chunks, 1_500); // the device's 500 ms retransmit
+        assert!(!first.is_empty());
+        assert_eq!(first, second, "a retransmitted msg1 must get the byte-identical msg2");
+        assert_eq!(pop.stats.handshakes_ok, 1, "one handshake, not two");
+        assert_eq!(pop.stats.hs_duplicate, 1);
+        assert_eq!(pop.session_count(), 1);
+        let mut dev = complete(pend, &first);
+        assert!(assigned(&mut pop, &mut dev, addr("10.0.0.5:40001"), 1_600), "ADDR_REQ on the device's sid must be answered");
+        assert_eq!(pop.stats.unknown_sid, 0, "no record may land on a dead sid");
+    }
+
+    /// A captured msg1 replayed after the duplicate window is ignored: it must not tear down the live session.
+    #[test]
+    fn replayed_old_msg1_does_not_replace_the_live_session() {
+        let mut pop = new_pop();
+        let a = dev_kp(b"G19-TEST-device-A");
+        let from = addr("10.0.0.5:7654");
+        let data = addr("10.0.0.5:40001");
+        let (chunks, pend) = msg1_chunks(&a);
+        let outs = feed(&mut pop, from, &chunks, 1_000);
+        let mut dev = complete(pend, &outs);
+        assert!(assigned(&mut pop, &mut dev, data, 1_100));
+        for t in [10_000u64, 20_000, 31_100] {
+            assert!(pop.on_data(data, &dev.seal(&Msg::Keepalive), t).len() == 1, "keepalive echoed");
+        }
+        let replay = feed(&mut pop, addr("203.0.113.9:7654"), &chunks, 31_200); // after HS_DUP_MS, from anywhere
+        assert!(replay.is_empty(), "a replay gets silence");
+        assert_eq!(pop.stats.hs_replayed, 1);
+        assert_eq!(pop.stats.handshakes_ok, 1, "the replay created no session");
+        assert!(assigned(&mut pop, &mut dev, data, 31_300), "the live session still works after the replay");
+        assert_eq!(pop.stats.unknown_sid, 0);
+    }
+
+    /// The cached msg2 is resent a bounded number of times.
+    #[test]
+    fn cached_msg2_resends_are_bounded() {
+        let mut pop = new_pop();
+        let a = dev_kp(b"G19-TEST-device-A");
+        let from = addr("10.0.0.5:7654");
+        let (chunks, _pend) = msg1_chunks(&a);
+        assert!(!feed(&mut pop, from, &chunks, 1_000).is_empty());
+        let answered = (1..=12u64).filter(|i| !feed(&mut pop, from, &chunks, 1_000 + i * 100).is_empty()).count();
+        assert_eq!(answered, 8, "at most HS_DUP_RESENDS cached replies");
+        assert_eq!(pop.stats.handshakes_ok, 1);
+    }
+
+    /// A NEW msg1 (fresh ephemeral) is a legitimate re-handshake and still replaces the session.
+    #[test]
+    fn a_fresh_msg1_still_replaces_the_session() {
+        let mut pop = new_pop();
+        let a = dev_kp(b"G19-TEST-device-A");
+        let from = addr("10.0.0.5:7654");
+        let data = addr("10.0.0.5:40001");
+        let (c1, p1) = msg1_chunks(&a);
+        let mut d1 = complete(p1, &feed(&mut pop, from, &c1, 1_000));
+        assert!(assigned(&mut pop, &mut d1, data, 1_100));
+        let (c2, p2) = msg1_chunks(&a);
+        let mut d2 = complete(p2, &feed(&mut pop, from, &c2, 5_000));
+        assert_eq!(pop.stats.handshakes_ok, 2);
+        assert_eq!(pop.session_count(), 1, "one live session per device");
+        assert!(assigned(&mut pop, &mut d2, data, 5_100), "the new session works");
+        assert!(!assigned(&mut pop, &mut d1, data, 5_200), "the replaced session is gone");
+    }
 
     #[test]
     fn end_to_end_scenario() {
