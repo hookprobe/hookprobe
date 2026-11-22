@@ -36,6 +36,8 @@ const MAGIC: &[u8; 4] = b"HQT1";
 pub const OVERHEAD: usize = 4 + 8 + 8 + 16;
 pub const KEEPALIVE_IDLE_MS: i64 = 15_000;
 pub const SILENCE_REHANDSHAKE_MS: i64 = 45_000;
+/// Re-handshake when the PoP has not assigned an inner address this long after the handshake.
+pub const NO_ASSIGN_REHANDSHAKE_MS: i64 = 10_000;
 pub const SESSION_MAX_MS: i64 = 24 * 3600 * 1000;
 
 pub fn sid_of(handshake_hash: &[u8; 32]) -> [u8; 8] {
@@ -359,6 +361,14 @@ pub fn tick(now_ms: i64, wan_up: bool, wan_ip: [u8; 4], wan_mac: [u8; 6], gw_mac
             c.restart(now_ms);
         }
         Act::None => {
+            // No ASSIGN well after the handshake: the PoP does not hold our sid (it replaced the session on a
+            // duplicate msg1, S1 F-S1-1) — re-handshake now instead of after 45 s of silence.
+            if tun().is_some_and(|t| t.assign.is_none() && now_ms - t.since_ms >= NO_ASSIGN_REHANDSHAKE_MS) {
+                arch_aarch64::_print(format_args!(" [G19] no ASSIGN {} s after the handshake — re-handshake\n", NO_ASSIGN_REHANDSHAKE_MS / 1000));
+                drop_tun();
+                c.restart(now_ms);
+                return;
+            }
             if tun().is_some_and(|t| t.assign.is_none() && t.last_tx_ms + 2_000 < now_ms) {
                 send_ctl(T_ADDR_REQ, &[], now_ms, tx); // ASSIGN lost: ask again
             }
