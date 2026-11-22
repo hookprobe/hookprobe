@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # netns-e2e.sh — exercise s1-net.sh for real, unprivileged, with no effect on the host.
 # It re-executes itself under `unshare -Urnm`: a private user + network + mount namespace in which
-#   "fortress" = this namespace (uplink veth fx0 → "internet"), runs s1-net.sh up/verify/down unchanged,
-#   "internet" = netns inet holding the PoP (130.61.174.233) and a decoy (1.1.1.1),
+#   "host"     = this namespace (uplink veth fx0 → "internet"), runs s1-net.sh up/verify/down unchanged,
+#   "internet" = netns inet holding the PoP (203.0.113.7, TEST-NET-3) and a decoy (1.1.1.1),
 # then checks the allowlist end to end: only UDP 7654/7655 to the PoP leaves the guest netns, it is
-# masqueraded to the uplink address, nothing reaches "fortress", and `down` removes every trace.
+# masqueraded to the uplink address, nothing reaches the host, and `down` removes every trace.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 NET="${S1_NET:-$HERE/../s1-net.sh}"
@@ -15,14 +15,14 @@ fi
 pass=0 fail=0
 ok()  { echo "ok   $*"; pass=$((pass+1)); }
 bad() { echo "FAIL $*"; fail=$((fail+1)); }
-POP=130.61.174.233
+POP=203.0.113.7
 
 mount -t tmpfs none /run          # private /run so `ip netns` works without touching the host's
 mkdir -p /run/netns
 ip link set lo up
 sysctl -qw net.ipv4.ip_forward=1   # this namespace's own forwarding (the host's is untouched)
 
-# "internet": PoP + decoy behind a veth; "fortress" routes everything there (the stand-in for ppp0).
+# "internet": PoP + decoy behind a veth; the host routes everything there (the stand-in for its uplink).
 ip netns add inet
 ip link add fx0 type veth peer name ix0; ip link set ix0 netns inet
 ip addr add 192.0.2.1/24 dev fx0; ip link set fx0 up
@@ -30,7 +30,7 @@ ip netns exec inet bash -c "ip link set lo up; ip addr add 192.0.2.2/24 dev ix0;
   ip addr add $POP/32 dev lo; ip addr add 1.1.1.1/32 dev lo; ip route add default via 192.0.2.1"
 ip route add default via 192.0.2.2
 
-# listeners: UDP 7654/7655 on the PoP log the source address; TCP 22 on the PoP and on "fortress" (must stay unreached)
+# listeners: UDP 7654/7655 on the PoP log the source address; TCP 22 on the PoP and on the host (must stay unreached)
 LOG=$(mktemp -d)
 ip netns exec inet python3 -I -c "
 import socket,select,sys
@@ -50,7 +50,7 @@ while True: c,a=s.accept(); open('$LOG/pop22','a').write(a[0]+'\n'); c.close()
 python3 -I -c "
 import socket
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('0.0.0.0',22)); s.listen()
-while True: c,a=s.accept(); open('$LOG/fortress22','a').write(a[0]+'\n'); c.close()
+while True: c,a=s.accept(); open('$LOG/host22','a').write(a[0]+'\n'); c.close()
 " & L3=$!
 trap 'kill $L1 $L2 $L3 2>/dev/null || true' EXIT
 sleep 0.5
@@ -66,7 +66,7 @@ grep -q " 7655 data$" "$LOG/udp" 2>/dev/null && ok "UDP 7655 reaches the PoP" ||
 grep -q "nope" "$LOG/udp" 2>/dev/null && bad "UDP 7656 leaked" || ok "other UDP ports to the PoP dropped"
 awk '{print $1}' "$LOG/udp" 2>/dev/null | sort -u | grep -qvx 192.0.2.1 && bad "guest address leaked (no masquerade)" || ok "masqueraded to the uplink address"
 [ -s "$LOG/pop22" ] && bad "TCP 22 on the PoP reached" || ok "TCP to the PoP blocked"
-[ -s "$LOG/fortress22" ] && bad "a fortress service was reached from the guest" || ok "fortress services unreachable from the guest"
+[ -s "$LOG/host22" ] && bad "a host service was reached from the guest" || ok "host services unreachable from the guest"
 # reply path: the PoP's answer on the guest's own flow returns (conntrack established) ...
 R=$(ip netns exec hqs1 python3 -I -c "
 import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(2)

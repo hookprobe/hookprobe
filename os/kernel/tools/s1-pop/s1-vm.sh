@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# s1-vm.sh — per-VM lifecycle for the S1 `qemu-itest` guest (G19 super-PoP interop) on fortress.
+# s1-vm.sh — per-VM lifecycle for the S1 `qemu-itest` guest (G19 super-PoP interop) on the test host.
 #
-#   sudo s1-vm.sh new      <id>                 per-VM dir, a fresh 32-byte KEK, a fixed-size data volume
+#   sudo S1_POP_IP=<ip> s1-vm.sh new <id>       per-VM dir, a fresh 32-byte KEK, a fixed-size data volume;
+#                                               records the PoP address the sandbox may reach (no default)
 #   sudo s1-vm.sh run      <id> <kernel.bin>    boot the guest sandboxed in netns hqs1 (s1-net.sh up first)
 #   sudo s1-vm.sh stop     <id>
 #   sudo s1-vm.sh evidence <id>                 write the interop evidence record (class E2 — NOT metal)
@@ -19,7 +20,7 @@ set -euo pipefail
 
 ROOT="${S1_ROOT:-/var/lib/hookprobe-s1}"
 RUN_USER="${S1_USER:-hqs1}"                # a dedicated unprivileged system user (see README)
-POP_IP="${S1_POP_IP:-130.61.174.233}"
+POP_IP="${S1_POP_IP:-}"                    # the PoP public IPv4; required by `new`, then read from vm.meta
 DISK_MB="${S1_DISK_MB:-64}"
 MAX_SEC="${S1_MAX_SEC:-7200}"              # hard wall-clock cap per run
 NS_PATH=/run/netns/hqs1
@@ -33,6 +34,7 @@ unit() { echo "hqs1-vm-$1"; }
 new() {
   id_ok "$1"; local d; d=$(vmdir "$1")
   [ -e "$d" ] && die "$d exists (destroy it first; keys are never reused)"
+  [[ "$POP_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die "S1_POP_IP=<the PoP's public IPv4> required"
   id "$RUN_USER" >/dev/null 2>&1 || die "user $RUN_USER missing: useradd --system --no-create-home --shell /usr/sbin/nologin $RUN_USER"
   install -d -m 0755 "$ROOT" "$ROOT/vms"
   install -d -m 0700 -o "$RUN_USER" "$d"
@@ -57,6 +59,8 @@ launch() { # <id> <kernel> <kek-file> <unit-name> [<kek-next-file>]
   local id="$1" kernel="$2" kek="$3" u="$4" next="${5:-}" d; d=$(vmdir "$id")
   local extra=(); [ -n "$next" ] && extra=(-fw_cfg "name=opt/hookprobe/kek-next,file=$next")
   [ -d "$d" ] || die "no VM $id (run 'new' first)"
+  local pop; pop=$(sed -n 's/^pop=//p' "$d/vm.meta")
+  [[ "$pop" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die "no valid pop= in $d/vm.meta"
   [ -e "$NS_PATH" ] || die "netns hqs1 missing (s1-net.sh up)"
   [ -f "$kernel" ] || die "kernel image $kernel missing"
   # The guest may only see files inside its own VM dir: copy the kernel in (read-only to the guest).
@@ -70,7 +74,7 @@ launch() { # <id> <kernel> <kek-file> <unit-name> [<kek-next-file>]
     -p User="$RUN_USER" -p Group="$RUN_USER" \
     -p CPUQuota=100% -p MemoryMax=2G -p MemorySwapMax=0 -p TasksMax=64 \
     -p RuntimeMaxSec="$MAX_SEC" -p LimitFSIZE=256M \
-    -p IPAddressDeny=any -p IPAddressAllow="$POP_IP" \
+    -p IPAddressDeny=any -p IPAddressAllow="$pop" \
     -p RestrictAddressFamilies="AF_INET AF_UNIX" \
     -p PrivateDevices=yes -p DevicePolicy=closed \
     -p ProtectSystem=strict -p ProtectHome=yes -p PrivateTmp=yes \

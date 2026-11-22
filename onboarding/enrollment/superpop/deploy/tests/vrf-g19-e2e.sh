@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # vrf-g19-e2e.sh — prove deploy/setup-vrf-g19.nft + superpop-net.sh against a drop-policy hookprobe_vrf,
 # unprivileged (`unshare -Urnm`), with no effect on the host.
-#   "a1"   = this namespace: enp0s6 (uplink → inet), hqpop0 (stands in for the PoP TUN; a veth to netns dev)
-#   "inet" = netns: the public internet (1.1.1.1, 203.0.113.10) + VCN/metadata look-alikes (10.0.1.1, 169.254.169.254)
+#   "host" = this namespace: wan0 (uplink → inet), hqpop0 (stands in for the PoP TUN; a veth to netns dev)
+#   "inet" = netns: the public internet (1.1.1.1, 203.0.113.10) + cloud-internal/metadata look-alikes (10.99.0.1, 169.254.169.254)
 #   "dev"  = netns: a tunnelled device at 198.18.0.2 (what the PoP would write into the TUN)
 # The firewall is the hookprobe_vrf skeleton (policy drop on input + forward, established, the live UDP ports)
 # with the G19 lines inserted exactly where setup-vrf-g19.nft says.
@@ -19,17 +19,17 @@ mount -t tmpfs none /run; mkdir -p /run/netns; ip link set lo up
 sysctl -qw net.ipv4.ip_forward=1
 
 ip netns add inet; ip netns add dev
-ip link add enp0s6 type veth peer name i0; ip link set i0 netns inet
-ip addr add 10.0.1.110/24 dev enp0s6; ip link set enp0s6 up
-ip netns exec inet bash -c "ip link set lo up; ip addr add 10.0.1.1/24 dev i0; ip link set i0 up
+ip link add wan0 type veth peer name i0; ip link set i0 netns inet
+ip addr add 10.99.0.10/24 dev wan0; ip link set wan0 up
+ip netns exec inet bash -c "ip link set lo up; ip addr add 10.99.0.1/24 dev i0; ip link set i0 up
   for a in 1.1.1.1 203.0.113.10 169.254.169.254; do ip addr add \$a/32 dev lo; done"
-ip route add default via 10.0.1.1
+ip route add default via 10.99.0.1
 ip link add hqpop0 type veth peer name d0; ip link set d0 netns dev; ip link set hqpop0 up
 ip netns exec dev bash -c "ip link set lo up; ip addr add 198.18.0.2/32 dev d0; ip link set d0 up
   ip route add 198.18.0.1/32 dev d0; ip route add default via 198.18.0.1"
 
 # hookprobe_vrf skeleton + the snippet's three blocks, at the documented positions
-blk() { awk -v want="$1" '/^# ---- /{on=(index($0,want)>0); next} on && /^ +[a-z]/' "$SNIP"; }
+blk() { awk -v want="$1" '/^# ---- /{on=(index($0,want)>0); next} on && /^ +[a-z]/' "$SNIP" | sed 's/"WAN_IF"/"wan0"/g'; }
 FWD=$(blk "chain forward"); IN_EARLY=$(blk "AFTER \`iif lo accept\`"); IN_PORTS=$(blk "UDP service ports")
 [ -n "$FWD" ] && [ -n "$IN_EARLY" ] && [ -n "$IN_PORTS" ] || { echo "FAIL could not extract the snippet blocks"; exit 1; }
 nft -f - <<EOF
@@ -55,7 +55,7 @@ $IN_PORTS
 EOF
 ok "hookprobe_vrf + G19 snippet loads"
 
-"$NETSH" hqpop0 enp0s6 198.18.0.0/15 198.18.0.1 >/dev/null && ok "superpop-net.sh applies next to hookprobe_vrf" || bad "superpop-net.sh"
+"$NETSH" hqpop0 wan0 198.18.0.0/15 198.18.0.1 >/dev/null && ok "superpop-net.sh applies next to hookprobe_vrf" || bad "superpop-net.sh"
 
 LOG=$(mktemp -d)
 listen() { # <netns|-> <ip> <port> <tag>
@@ -69,7 +69,7 @@ while True:
 PIDS=()
 listen inet 1.1.1.1 53 dns
 listen inet 203.0.113.10 9 web
-listen inet 10.0.1.1 9 vcn
+listen inet 10.99.0.1 9 vcn
 listen inet 169.254.169.254 80 meta
 listen - 0.0.0.0 53 hostdns
 listen - 0.0.0.0 7654 pophs
@@ -83,12 +83,12 @@ except Exception: print('none')"; }
 
 [ "$(send dev 1.1.1.1 53)" = reply ] && ok "device → internet DNS (1.1.1.1) works, reply returns" || bad "device → 1.1.1.1"
 [ "$(send dev 203.0.113.10 9)" = reply ] && ok "device → internet host works" || bad "device → internet host"
-grep -qx 10.0.1.110 "$LOG/web" && ok "device traffic masqueraded to the A1 address" || bad "no masquerade (saw: $(cat "$LOG/web" 2>/dev/null))"
-send dev 10.0.1.1 9 >/dev/null;          [ -s "$LOG/vcn" ]     && bad "device reached the VCN" || ok "device → VCN (10.0.0.0/8) dropped"
-send dev 169.254.169.254 80 >/dev/null;  [ -s "$LOG/meta" ]    && bad "device reached OCI metadata" || ok "device → metadata service dropped"
-send dev 198.18.0.1 53 >/dev/null;       [ -s "$LOG/hostdns" ] && bad "device reached a host service" || ok "device → A1 host services dropped"
-[ "$(send inet 10.0.1.110 7654)" = reply ] && ok "internet → PoP handshake port 7654 accepted" || bad "7654 not reachable"
-[ "$(send inet 10.0.1.110 7655)" = reply ] && ok "internet → PoP data port 7655 accepted" || bad "7655 not reachable"
-[ "$(send inet 10.0.1.110 7656)" = none ]  && ok "internet → other UDP ports still dropped" || bad "7656 reachable"
+grep -qx 10.99.0.10 "$LOG/web" && ok "device traffic masqueraded to the host address" || bad "no masquerade (saw: $(cat "$LOG/web" 2>/dev/null))"
+send dev 10.99.0.1 9 >/dev/null;          [ -s "$LOG/vcn" ]     && bad "device reached a private range" || ok "device → private range (10.0.0.0/8) dropped"
+send dev 169.254.169.254 80 >/dev/null;  [ -s "$LOG/meta" ]    && bad "device reached the metadata service" || ok "device → metadata service dropped"
+send dev 198.18.0.1 53 >/dev/null;       [ -s "$LOG/hostdns" ] && bad "device reached a host service" || ok "device → host services dropped"
+[ "$(send inet 10.99.0.10 7654)" = reply ] && ok "internet → PoP handshake port 7654 accepted" || bad "7654 not reachable"
+[ "$(send inet 10.99.0.10 7655)" = reply ] && ok "internet → PoP data port 7655 accepted" || bad "7655 not reachable"
+[ "$(send inet 10.99.0.10 7656)" = none ]  && ok "internet → other UDP ports still dropped" || bad "7656 reachable"
 
 echo "vrf-g19-e2e: $pass passed, $fail failed"; [ "$fail" = 0 ]
