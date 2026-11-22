@@ -75,6 +75,13 @@ fn main() {
         build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "el0-wifi", "el0wifi-target", feat, "el0_wifi.elf");
         // ADR 0065 step 4g: el0-wpa, the separate WPA security server (same substrate, its own address space)
         build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "el0-wpa", "el0wpa-target", feat, "el0_wpa.elf");
+        // HookProbe Neuro N0: el0-neuro lives outside os/kernel (os/neuro); the same detached-crate substrate
+        if std::env::var("CARGO_FEATURE_NEURO").is_ok() {
+            build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "../neuro/el0-neuro", "el0neuro-target", feat, "el0_neuro.elf");
+            println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/neuroabi.rs").display());
+            println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../../neuro/neuro-core/src").display());
+            println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../../neuro/neuro-core/tests/golden.txt").display());
+        }
         println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/wpasrvabi.rs").display());
         println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/wifisrvabi.rs").display());
         println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/el0ring.rs").display());
@@ -363,7 +370,9 @@ fn build_el0_crate(kernel_manifest_dir: &str, out_dir: &str, name: &str, tdir: &
         panic!("{name} nested build FAILED (status {status}) — the kernel cannot ship without its EL0 image");
     }
 
-    let produced = nested_target.join("aarch64-unknown-none-softfloat/release").join(name);
+    // the binary is named after the crate directory (a crate outside os/kernel is passed as a relative path)
+    let bin = Path::new(name).file_name().unwrap_or_else(|| panic!("{name}: no crate directory name"));
+    let produced = nested_target.join("aarch64-unknown-none-softfloat/release").join(bin);
     let dest = Path::new(out_dir).join(dest_name);
     std::fs::copy(&produced, &dest).unwrap_or_else(|e| {
         panic!("{name} ELF not found at {}: {e}", produced.display())

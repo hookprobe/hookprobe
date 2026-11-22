@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# heqk × Neuro status register — machine-readable companion of heqk-neuro-integration.md.
+# state: implemented | not_integrated | qemu_passed | metal_passed | measured | proposed | blocked | decided | not_started
+# Each item cites evidence. "qemu_passed" never implies metal. Update with the evidence, never ahead of it.
+as_of: 2026-11-22
+main: ed7a35aab
+items:
+  - id: N0-engine
+    what: integer behavioural memory (neuro-core), bit-exact with the integer reference
+    state: measured
+    evidence: [os/neuro/neuro-core/tests/golden.rs, os/neuro/neuro-core/tests/peerkey.rs]
+  - id: N0-server
+    what: el0-neuro EL0 excursion server, softfloat, zero FP/SIMD instructions
+    state: implemented
+    evidence: [os/neuro/el0-neuro/src/main.rs]
+  - id: ABI-v1
+    what: permanent kernel<->Neuro ABI in hal (v1.0 frozen + v1.1 version word, INFO ext, HEALTH)
+    state: qemu_passed
+    evidence: [os/kernel/hal/src/neuroabi.rs, "[P-neuro-abi]"]
+    decision: D1
+  - id: host
+    what: kernel host (load, supervision, validation, attribution, batching, hour roll, evidence ring) behind feature neuro
+    state: qemu_passed
+    evidence: [os/kernel/kernel/src/neuro.rs, os/kernel/tools/neuro-qemu.sh, "[P-neuro]"]
+  - id: golden-in-kernel
+    what: 1200 golden hour closes bit-exact through the real ABI and EL1 validation
+    state: qemu_passed
+    evidence: ["[P-neuro-golden]"]
+  - id: fault-containment
+    what: bad input refused without reset; panic contained, journaled, reset from signed ELF; memory gone
+    state: qemu_passed
+    evidence: ["[P-neuro-fault]"]
+  - id: reply-validation
+    what: malformed reply refused, complaint journaled, server reset, no evidence kept
+    state: qemu_passed
+    evidence: ["[P-neuro-validate]", "hal::neuroabi tests"]
+  - id: backpressure
+    what: held-off / throttled / no-clock events dropped and counted, caller never waits
+    state: qemu_passed
+    evidence: ["[P-neuro-backpressure]", "[P-neuro-host]"]
+  - id: isolation
+    what: el0-neuro in its own address space
+    state: qemu_passed
+    evidence: ["[P-el0-as] 9 servers"]
+  - id: evidence-only
+    what: deviant hours are evidence records, never alert/notification/verdict/action
+    state: decided
+    evidence: [docs/research/neuro/20_TEMPORAL_EVIDENCE_CONTRACT.md, docs/research/neuro/19_D1C_DEVICE_THRESHOLD_PREREGISTRATION.md]
+  - id: dp-hooks
+    what: new-connection + DNS events from the data plane with doc-20 fingerprints; AP-loop tick with SNTP UTC
+    state: not_started
+    plan: P2
+  - id: api-evidence
+    what: read-only evidence fields for Mission Control (UI designer-owned)
+    state: not_started
+    plan: P2
+  - id: cm5-metal
+    what: excursion cost, worst loop gap, IDS ns/pkt, metal fault injection, 24 h bench run
+    state: not_started
+    plan: P3
+  - id: sealed-snapshot
+    what: behavioural memory survives reboot/OTA
+    state: proposed
+    decision: D4
+  - id: fp-lease
+    what: per-server FP/SIMD lease with save/restore/scrub (doc 12 R2); no CPACR/CPTR config exists today
+    state: blocked
+    blocked_on: [R0 readouts on CM5, D2]
+  - id: model-package
+    what: HNX signed package, kernel verify (doc 06, doc 12 R5)
+    state: proposed
+    decision: D3
+  - id: model-region
+    what: contiguous model reservation + admission (doc 12 R3/R4/R6, ADR 0061)
+    state: proposed
+  - id: smp-role
+    what: Neuro as MG-class best-effort reservation (ADR 0060); never on DP cores
+    state: proposed
+  - id: policy-compiler
+    what: deterministic compiler -> HQPROP1 -> owner authorisation -> ADR 0053 action (doc 29)
+    state: proposed
+  - id: m3
+    what: sealed M3 confirmation (doc 31)
+    state: not_started
+  - id: L3-explainer
+    what: language tier, explain-only, off-device until R2-R8
+    state: proposed
+decisions:
+  D1: {what: accept el0-neuro window + ABI v1, recommendation: accept, status: open}
+  D2: {what: FP/SIMD in EL0, recommendation: per-server lease after R0 readouts; never global, status: open}
+  D3: {what: model signing authority, recommendation: decide before L1 (irreversible trust commitment), status: open}
+  D4: {what: persist behavioural memory, recommendation: no until privacy review, status: open}
+  D5: {what: owner "this is normal" feedback, recommendation: none for N0, status: open}

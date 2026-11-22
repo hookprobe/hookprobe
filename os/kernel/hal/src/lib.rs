@@ -1052,6 +1052,7 @@ pub mod saewire;
 pub mod rsnassoc;
 pub mod mgmtabi;
 pub mod hshabi;
+pub mod neuroabi;
 pub mod el0ring;
 pub mod flowevt;
 pub mod bcdc;

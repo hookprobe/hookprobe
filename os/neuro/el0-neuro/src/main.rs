@@ -25,9 +25,10 @@ const BASE: usize = BASE_QEMU;
 const BASE: usize = BASE_CM5;
 const IO: usize = BASE + IO_OFF;
 const SYS_EXIT_USER: u64 = 6;
+/// The engine revision INFO reports (bump when neuro-core's scoring changes; the golden vectors pin it).
+const ENGINE_REV: u32 = 1;
 
-/// Devices tracked. ~1.3 KiB each (`neuro_core::bytes_per_device`); 64 devices ≈ 85 KiB of .bss.
-pub const DEVICES: usize = 64;
+/// Devices tracked (`hal::neuroabi::DEVICES`). ~1.3 KiB each (`neuro_core::bytes_per_device`); 64 devices ≈ 85 KiB of .bss.
 const _: () = assert!(DEVICES * neuro_core::bytes_per_device() + 0x8000 <= IMAGE_MAX);
 
 struct Engine {
@@ -37,6 +38,8 @@ struct Engine {
     /// A slot is initialised on first use. The table is all-zero at load, so it lives in .bss and adds
     /// nothing to the ELF the kernel embeds (the kernel image has ~33 KB of headroom, research doc 00).
     init: [bool; DEVICES],
+    /// v1.1 CMD_HEALTH counters (wrapping; the kernel reads deltas).
+    health: Health,
 }
 
 impl Engine {
@@ -94,6 +97,7 @@ fn events(e: &mut Engine, inb: &[u8]) -> u32 {
         let (kind, flags, dev) = (rec[0], rec[1], le16(&rec[2..]) as usize);
         if dev >= DEVICES {
             bad = true;
+            e.health.events_bad = e.health.events_bad.wrapping_add(1);
             continue;
         }
         e.slot(dev);
@@ -107,12 +111,15 @@ fn events(e: &mut Engine, inb: &[u8]) -> u32 {
             EV_DNS => agg.add_dns(mem, fp, flags & 1 == 1),
             _ => {
                 bad = true;
+                e.health.events_bad = e.health.events_bad.wrapping_add(1);
                 continue;
             }
         }
+        e.health.events_ok = e.health.events_ok.wrapping_add(1);
         e.active[dev] = true;
     }
     if bad || !inb.len().is_multiple_of(EV_SIZE) {
+        e.health.batches_bad = e.health.batches_bad.wrapping_add(1);
         ST_BAD_INPUT
     } else {
         ST_OK
@@ -129,6 +136,7 @@ fn close_hour(e: &mut Engine, hr: usize, out: &mut [u8]) -> usize {
         e.agg[dev].reset();
         e.active[dev] = false;
         if n + RES_SIZE > out.len() {
+            e.health.reports_dropped = e.health.reports_dropped.wrapping_add(1);
             continue; // OUT full: the device was still scored and learned; only its report is dropped
         }
         let r = &mut out[n..n + RES_SIZE];
@@ -148,6 +156,7 @@ fn close_hour(e: &mut Engine, hr: usize, out: &mut [u8]) -> usize {
         r[18..20].copy_from_slice(&0u16.to_le_bytes());
         n += RES_SIZE;
     }
+    e.health.hours_closed = e.health.hours_closed.wrapping_add(1);
     n
 }
 
@@ -155,6 +164,11 @@ fn close_hour(e: &mut Engine, hr: usize, out: &mut [u8]) -> usize {
 pub extern "C" fn _start() -> ! {
     if rd32(H_MAGIC) != MAGIC {
         exit(ST_BAD_CMD, 0);
+    }
+    // v1.1: a kernel that names an ABI major we do not speak is refused (0 = a v1.0 kernel, no version word)
+    let abi = rd32(H_ABI);
+    if abi != 0 && abi >> 16 != ABI_MAJOR as u32 {
+        exit(ST_BAD_VERSION, 0);
     }
     let n = (rd32(H_IN_LEN) as usize).min(IN_MAX);
     // SAFETY: one excursion at a time, single-threaded server; ENGINE is only touched here.
@@ -188,11 +202,21 @@ pub extern "C" fn _start() -> ! {
             exit(ST_OK, 0)
         }
         CMD_INFO => {
-            let o = io(OUT_OFF, 8);
+            let o = io(OUT_OFF, INFO_LEN);
             o[0..2].copy_from_slice(&(DEVICES as u16).to_le_bytes());
             o[2..6].copy_from_slice(&(neuro_core::bytes_per_device() as u32).to_le_bytes());
-            o[6..8].copy_from_slice(&1u16.to_le_bytes());
-            exit(ST_OK, 8)
+            o[6..8].copy_from_slice(&ABI_MAJOR.to_le_bytes());
+            o[8..10].copy_from_slice(&ABI_MINOR.to_le_bytes());
+            o[10..12].copy_from_slice(&CAP_HEALTH.to_le_bytes());
+            o[12..16].copy_from_slice(&ENGINE_REV.to_le_bytes());
+            exit(ST_OK, INFO_LEN)
+        }
+        CMD_HEALTH => {
+            let mut h = e.health;
+            h.active = e.active.iter().filter(|a| **a).count() as u16;
+            h.slots_used = e.init.iter().filter(|a| **a).count() as u16;
+            io(OUT_OFF, HEALTH_LEN).copy_from_slice(&encode_health(&h));
+            exit(ST_OK, HEALTH_LEN)
         }
         CMD_SELFTEST_FAULT => panic!("requested fault"),
         _ => exit(ST_BAD_CMD, 0),
