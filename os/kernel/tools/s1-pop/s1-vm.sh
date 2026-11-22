@@ -134,7 +134,7 @@ evidence() {
     echo "qemu=$(qemu-system-aarch64 --version | head -1)"
     echo "netns_allowlist=$(nft list table inet hqs1 >/dev/null 2>&1 && echo present || echo MISSING)"
     echo "--- markers"
-    grep -aE '\[ITEST\]|\[G19|g19|\[NETCP\]|HwTrng|TRNG|entropy|refus|PANIC' "$log" | head -200 || echo "(no markers)"
+    grep -aE '\[ITEST\]|\[P-itest|\[G19|g19|\[NETCP\]|HwTrng|TRNG|entropy|refus|PANIC' "$log" | head -200 || echo "(no markers)"
   } >"$out"
   echo "s1-vm: wrote $out"
 }
