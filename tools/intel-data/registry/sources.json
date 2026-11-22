@@ -10276,6 +10276,59 @@
    "notes": "Active (last push 2026-11-17). Unstructured text; GPL-3.0 applied to data is unusual - shipping in proprietary images triggers GPL obligations (compatible with AGPL edition). Older pan-unit42/iocs repo also referenced by MISP feeds (licence not checked)."
   },
   {
+   "id": "unsw-iotraffic",
+   "name": "UNSW-IoTraffic (UNSW IoT traffic data with packets, flows, and protocols)",
+   "organisation": "UNSW Sydney (Wannigama, Sivanathan, Habibi Gharakheili)",
+   "country": "AU",
+   "geographic_coverage": "Lab testbed with 27 consumer IoT devices (UNSW Sydney)",
+   "source_url": "https://datadryad.org/dataset/doi:10.5061/dryad.w0vt4b94b",
+   "download_url": null,
+   "api_endpoint": "https://datadryad.org/api/v2/datasets/doi%3A10.5061%2Fdryad.w0vt4b94b",
+   "description": "Benign traffic of 27 consumer IoT devices over 203 days: 27 per-device PCAPs with full headers and payload (95.5 million packets), 27 per-device flow CSVs, and protocol-parameter CSVs for 25 protocols, plus Java extraction scripts. No ground-truth annotations of events or interactions (README).",
+   "category": "iot",
+   "subcategories": [
+    "benign",
+    "device_behaviour"
+   ],
+   "data_format": [
+    "pcap",
+    "csv"
+   ],
+   "machine_readable": true,
+   "records": "95.5 million packets, 27 devices, 203 days (Dryad abstract). Dryad version 9 file list: pcaps.zip 13,919,387,057 bytes, flows.zip 95,513,089, protocols.zip 186,960,396, UNSW-IoTraffic.zip 14,236,261,386 (28.47 GB in total).",
+   "collection_period": "203 days (dates not checked here)",
+   "publication_date": "2025-08-29 (Dryad)",
+   "last_update": "2025-08-29 (Dryad version 9)",
+   "update_frequency": "static",
+   "labels_available": false,
+   "label_quality": "No labels: all traffic is benign device activity; no ground-truth annotations (README).",
+   "known_limitations": "Lab testbed, not a lived-in home, so nuisance rates may be optimistic (Neuro doc 17). Benign only. Full payloads are included.",
+   "license_id": "cc0-1.0",
+   "license_class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "yes",
+   "redistribution": "yes",
+   "attribution": "Wannigama, Sivanathan, Habibi Gharakheili (2025). UNSW IoT traffic data with packets, flows, and protocols. Dryad. doi:10.5061/dryad.w0vt4b94b. Descriptor: IEEE Data Descriptions, Aug 2025 (citation requested in the README; CC0 does not require it).",
+   "personal_data": "payloads",
+   "sensitivity": "medium",
+   "access": "public_download",
+   "collaboration_route": null,
+   "recommended_use": "Benign device-behaviour baseline (temporal engine, benign windows). Used by Neuro: 301 anonymised benign windows in T0 v3 training and the D1 temporal experiments.",
+   "collections": [
+    "network_intelligence"
+   ],
+   "priority": 4,
+   "acquisition": null,
+   "verified_on": "2026-11-22",
+   "verification_status": "verified",
+   "evidence": [
+    "https://datadryad.org/dataset/doi:10.5061/dryad.w0vt4b94b",
+    "https://datadryad.org/api/v2/datasets/doi%3A10.5061%2Fdryad.w0vt4b94b",
+    "https://creativecommons.org/publicdomain/zero/1.0/"
+   ],
+   "notes": "Licence checked 2026-11-22 by reading pages only, no download. The Dryad API licence field is https://spdx.org/licenses/CC0-1.0.html, and the dataset page links 'Public domain' to creativecommons.org/publicdomain/zero/1.0/. The README on the page states no further terms; it asks for a citation of the IEEE descriptor. Anonymous curl/API file downloads returned 401/403 on 2026-11-22; the files were downloaded earlier by the operator through the page. personal_data is set to payloads because the PCAPs carry full payloads; the devices are lab devices (judgement). intel-data holds no acquisition: Neuro reads the operator's local copy."
+  },
+  {
    "id": "unsw-nb15",
    "name": "UNSW-NB15",
    "organisation": "UNSW Canberra (Cyber Range Lab, ACCS)",

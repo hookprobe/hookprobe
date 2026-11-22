@@ -5,7 +5,7 @@
 > RESEARCH = research/non-commercial; COMMERCIAL = paid licence; RESTRICTED = agreement/membership; UNKNOWN = not verified.
 > Gate columns are `licensing.decide()` for each purpose: ✅ allowed, — denied.
 
-Sources: COMMERCIAL 11, OPEN 89, RESEARCH 22, RESTRICTED 32, UNKNOWN 51 — total 205.
+Sources: COMMERCIAL 11, OPEN 90, RESEARCH 22, RESTRICTED 32, UNKNOWN 51 — total 206.
 
 ## attack_simulation
 
@@ -126,6 +126,7 @@ Sources: COMMERCIAL 11, OPEN 89, RESEARCH 22, RESTRICTED 32, UNKNOWN 51 — tota
 | `iot-23` | [IoT-23 (Aposemat)](https://www.stratosphereips.org/datasets-iot23) | Stratosphere Laboratory, CTU Prague (fun / CZ | OPEN | ✅ | ✅ | ✅ | public_download | 5 | verified |
 | `ciciot2023` | [CICIoT2023](https://www.unb.ca/cic/datasets/iotdataset-2023.html) | Canadian Institute for Cybersecurity, UN / CA | RESEARCH | — | ✅ | — | registration | 4 | verified |
 | `kitsune-network-attack` | [Kitsune Network Attack Dataset](https://archive.ics.uci.edu/dataset/516/kitsune+network+attack+dataset) | Ben-Gurion University of the Negev (Mirs / IL | OPEN | ✅ | ✅ | ✅ | public_download | 4 | verified |
+| `unsw-iotraffic` | [UNSW-IoTraffic (UNSW IoT traffic data with packets, flows, and protocols)](https://datadryad.org/dataset/doi:10.5061/dryad.w0vt4b94b) | UNSW Sydney (Wannigama, Sivanathan, Habi / AU | OPEN | ✅ | ✅ | ✅ | public_download | 4 | verified |
 | `ton-iot` | [TON_IoT datasets](https://research.unsw.edu.au/projects/toniot-datasets) | UNSW Canberra (Cyber Range and IoT Labs) / AU | RESEARCH | — | — | — | public_download | 3 | verified |
 | `bot-iot` | [Bot-IoT](https://research.unsw.edu.au/projects/bot-iot-dataset) | UNSW Canberra (Cyber Range Lab) / AU | RESEARCH | — | — | — | public_download | 2 | verified |
 
