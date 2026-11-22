@@ -31,15 +31,19 @@ the lease is needed only for L2 models.
 EL0 port needs fixed-point versions (lookup tables), and those must be checked bit-for-bit against the reference, as
 `neuro-core` was.
 
-## 2. Contract for P2 (data-plane hooks): one connection rule for kernel and benchmark
+## 2. P2 (data-plane hooks): the connection rule. Correction: no change asked of the kernel
 
-- **DNA v1 numbers are measured on Zeek-like connections** (`bench/unsw_to_dna.py`): a new connection on a TCP SYN
-  after FIN/RST, or after **300 s idle (TCP) / 60 s (UDP)**, attributed to the hour it starts.
-- **P2 proposes** SYN, or UDP idle ≥ 120 s.
-- **Ask:** pick one rule and record it in the ABI or design doc.
-  - If it is ≠ 300/60, Neuro re-runs the doc 28 benchmark with the kernel rule before L1 thresholds are set.
-  - The cleanest path is that the kernel adopts 300/60 for the flow-start event that feeds DNA.
-- **N0's peer key** (`peer_fp` V2/24) is unaffected. This concerns flow counting for the L1 features only.
+- **The P2 rule is Neuro's own.** "TCP SYN, or UDP idle ≥ 120 s" is the decided doc 20 rule (§ "New connection"),
+  also used by D1 (doc 17). The design doc implements it faithfully. **Keep it for N0.**
+- **The mismatch is inside Neuro.** The DNA v1 / L1 benchmark (docs 27, 28, 31) counts Zeek-like connections:
+  - a new connection after FIN/RST + SYN, or 300 s idle (TCP) / 60 s (UDP);
+  - this is because IoT-23 and CTU-13 come as Zeek `conn.log`, and `unsw_to_dna.py` mimics Zeek to match them.
+- **Neuro owns resolving this.** Before any L1 thresholds go on the device, Neuro will:
+  - re-measure DNA v1 home false alarms with the doc 20 rule on the UNSW pcaps;
+  - report how far the 300/60 vs 120 s difference moves the L1 features and the alert rate.
+
+  The malicious-side datasets exist only as Zeek logs, so they can't be re-cut. This step is tracked here, after M3.
+- **An earlier version of this section** asked the kernel to adopt 300/60. That is withdrawn.
 
 ## 3. Corrections to the design doc
 
@@ -85,7 +89,7 @@ to DET-01's 768/768 false positives.
 
 | Step | Who | Gate |
 |---|---|---|
-| Fix the P2 connection rule (§2 here) | HomePods, with Neuro re-benchmarking if ≠ 300/60 | before P2 hooks land |
+| Re-measure DNA v1 / L1 home false alarms under the doc 20 connection rule (§2) | Neuro | after M3, before any L1 threshold reaches the device |
 | M3 result → L1 go/no-go, and R-D1 recommendation | Neuro | running |
 | Fixed-point DNA v1 extractor + integer S1 scorer, host golden tests against the Python reference | Neuro (`os/neuro`, outside the kernel) | after M3 passes |
 | An EL0 L1 server, or extend el0-neuro behind a `caps` bit | HomePods | after D1–D3, M3, golden tests |
