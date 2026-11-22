@@ -78,3 +78,35 @@ criterion, and the CI is shown alongside.
    pinned here. Neuro converts the UNSW second half with the frozen converter.
 4. One scripted run (`bench/m3_run.py`, committed before step 3) writes the results.
 5. Results and per-device tables are published in `data/m3-results.md`.
+
+## Addendum A: corrections and pins before the run (2026-11-22)
+
+Written after the operator approved unsealing and **before any test window is scored**.
+
+**Correction: the IoT-23 test split is not virgin.**
+- The table above says "sealed, never exported". That is wrong.
+- The intel-data registry's seal reason reads "Neuro P2 test side (spent)": the IoT-23 test split was looked at
+  once in P2, for the temporal-engine evidence.
+- **None of the M3 systems, features or thresholds was fitted or tuned on it.** DNA v1, the doc 28 benchmark and
+  this pre-registration used only the dev split.
+- So IoT-23 test is a second look for the dataset, but a first look for these systems. CTU-13 test and the UNSW
+  second half are first looks.
+
+**Test split contents (intel-data registry):**
+- **CTU-13:** Dataset-43, 44, 45, 47, 48, 50, 52, 53, 54, which are scenarios 2, 3, 4, 6, 7, 9, 11, 12, 13. This
+  matches doc 22. Scenario 10 (Dataset-51) was never acquired; it is absent, not skipped.
+- **IoT-23:** 13 captures: Honeypot 4-1, 5-1; Malware 8-1, 9-1, 17-1, 20-1, 21-1, 33-1, 34-1, 35-1, 36-1, 39-1,
+  43-1.
+
+**Export format.** The test builds are made at the dev builds' code (intel-data commit `d9f0aaaf`), in a
+throwaway worktree. Intel-data first proves this by rebuilding CTU-13 dev byte-for-byte. The context snapshot is
+the same as dev: iptoasn `1634a0e4…`, warninglists `8a171664…`. The test windows therefore have the same format as
+dev. Build ids and manifest hashes will be pinned in Addendum B.
+
+**UNSW second half (converted with the frozen converter at commit `128b2520`):**
+- `unsw_m3_second.jsonl`, SHA-256 `c8adabb1d18964ca8c52d91c525b11d83d04909a19a44791f9d259038d81799c`;
+- 27 devices, 15,413 windows (15,299 unique device-hours), all benign;
+- 0 window ids shared with the dev half.
+
+**A converter artefact present in dev too.** 114 window ids occur twice: an hour split across two pcap files. The
+dev half has 66. `m3_run.py` is frozen and counts lines, as it did on dev, so this is reported, not changed.
