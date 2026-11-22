@@ -59,9 +59,10 @@ items:
     state: not_started
     plan: P2
   - id: cm5-metal
-    what: excursion cost, worst loop gap, IDS ns/pkt, metal fault injection, 24 h bench run
-    state: not_started
-    plan: P3
+    what: A/B on CM5 under Wi-Fi load — loop per-beat p50 equal, p95 +9 ms (2%), ap_poll equal, 14,935 events 0 dropped
+    state: metal_passed
+    evidence: [docs/design/metal-evidence/20261122-neuro-p3-cm5.md]
+    open: [per-excursion timing, IDS ns/pkt, fault injection on metal, multi-hour run, 64-device slot pressure]
   - id: sealed-snapshot
     what: behavioural memory survives reboot/OTA
     state: proposed
