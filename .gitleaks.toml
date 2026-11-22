@@ -52,6 +52,26 @@ paths = [
   # Production signing NEVER uses it (HSM keys + cosign keyless only, ADR 0002/0046).
   '''^legacy/linux-tier/builder/release\.key$''',
   '''^legacy/linux-tier/builder/release\.key\.mldsa$''',
+
+  # (e) legacy/v1 (the original HookProbe, frozen; restored 2026-11-21): documentation / example values that
+  # gitleaks reads as credentials. Each file and line was checked on 2026-11-22 (#1433, run 44893416809):
+  #   docs/dashboards/README.md:138,142, docs/IAM-INTEGRATION-GUIDE.md:293   `Authorization: Bearer YOUR_TOKEN` / `<access_token>`
+  #   docs/guides/clickhouse-quick-start.md:513                              `curl -u hookprobe:PASSWORD`
+  #   deploy/addons/n8n/README.md:436                                        `OPENAI_API_KEY="sk-proj-abc123..."`
+  #   core/neuro/audit/merkle_log.py:394                                     `'device_key': '0x1234...'` (docstring example)
+  #   docs/SECURITY.md:493,581                                               "# Key settings:", the PUBLIC PGP fingerprint
+  #   docs/HTP_SECURITY_ENHANCEMENTS.md:480                                  example code (validator.example.com)
+  #   deploy/edge/README.md:183                                              Cloudflare tunnel token example: decodes to
+  #                                                                          {"a":"abcdefghijklmnopqrstuvwxyz","t":"1234567890","s":<alphabet>}
+  # Exact files only (not all of legacy/v1), so a genuine key added anywhere else in the tree still fires.
+  '''^legacy/v1/docs/dashboards/README\.md$''',
+  '''^legacy/v1/docs/IAM-INTEGRATION-GUIDE\.md$''',
+  '''^legacy/v1/docs/guides/clickhouse-quick-start\.md$''',
+  '''^legacy/v1/deploy/addons/n8n/README\.md$''',
+  '''^legacy/v1/core/neuro/audit/merkle_log\.py$''',
+  '''^legacy/v1/docs/SECURITY\.md$''',
+  '''^legacy/v1/docs/HTP_SECURITY_ENHANCEMENTS\.md$''',
+  '''^legacy/v1/deploy/edge/README\.md$''',
 ]
 # (c) Cargo.lock dependency lists naming the `libcrux-secrets` crate: generic-api-key reads
 # "secrets" as a keyword and the NEXT package name ("libcrux-sha3") as its value. Matched on the
