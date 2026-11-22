@@ -30,6 +30,7 @@ updates:
       - "/os/build/kem-diff/nostd-check"
       - "/os/neuro/el0-neuro"
       - "/os/neuro/neuro-core"
+      - "/os/neuro/neuro-dp"
     schedule: { interval: "weekly", day: "monday" }
     labels: ["dependencies", "rust"]
     commit-message: { prefix: "chore(deps)", include: "scope" }
