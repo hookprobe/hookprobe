@@ -211,6 +211,60 @@ def f_fp(w, r, ro):
     return (["benign"], [f], [H.split("=")[0], R.split("=")[0]], mm + m, ["observe"], "fp-" + k)
 
 
+
+# ---- contrast twins of the false-positive kinds (doc 26): same role and detection, NO explaining context ---------
+def f_contrast(w, r, ro):
+    H, R = w.ref("H", g.ip_lan(r)), w.ref("R", g.ip_wan(r))
+    k = r.choice(["video", "torrent", "homeauto", "backup", "update", "game", "photos", "vpn", "camera_cloud", "scanner"])
+    EXF = ["exfiltration", "data theft", "upload", "leak", "exfiltrare"]
+    SCAN = ["scan", "scanning", "reconnaissance", "recon", "scanare"]
+    if k == "video":
+        m = role(w, H, "work laptop", ro)
+        f = w.card("%s->%s:%d n=%d out=%.1fGB novel det=exfiltration[T1048,sev2,PASS, observe]" % (H, R, r.choice([443, 8443, 2083]), r.randrange(40, 400), r.randrange(30, 90) / 10))
+        v, mm, nx = ["malicious", "suspicious"], EXF, ["isolate_review", "investigate"]
+    elif k == "torrent":
+        m = role(w, H, "home server", ro)
+        f = w.card("%s->*:%d n=%d fanout_hosts=%d fail=%d%% novel det=port_scan[T1046,sev3,PASS, observe]" % (H, r.choice([22, 23, 445, 3389]), r.randrange(300, 2000), r.randrange(100, 600), r.randrange(60, 95)))
+        v, mm, nx = ["malicious", "suspicious"], SCAN + ["worm", "lateral"], ["isolate_review", "investigate"]
+    elif k == "homeauto":
+        m = role(w, H, "home server", ro)
+        f = w.card("%s->%s:443 n=%d periodic=60s cv=0.01 novel det=beaconing[T1071,sev3,PASS, observe]" % (H, R, r.randrange(500, 3000)))
+        v, mm, nx = ["malicious", "suspicious"], ["beacon", "c2", "command and control", "comandă"], ["isolate_review", "investigate"]
+    elif k == "backup":
+        m = role(w, H, "NAS", ro)
+        f = w.card("%s->%s:443 n=%d out=%.1fGB novel det=exfiltration[T1048,sev2,PASS, observe]" % (H, R, r.randrange(20, 90), r.randrange(100, 600) / 10))
+        w.ctx_lines.append("CONTEXT the transfer started at 03:%02d and %s was never contacted before" % (r.randrange(0, 59), R.split("=")[0]))
+        v, mm, nx = ["malicious", "suspicious"], EXF, ["isolate_review", "investigate"]
+    elif k == "update":
+        m = role(w, H, r.choice(["game console", "smart TV", "work laptop"]), ro)
+        f = w.card("%s->%s:%d n=%d in=%dMB novel det=behaviour_change[T1105,sev3,PASS, observe]" % (H, R, r.choice([80, 8080, 4444]), r.randrange(1, 4), r.randrange(1, 40)))
+        w.ctx_lines.append("CONTEXT %s is not a known vendor or CDN address" % R.split("=")[0])
+        v, mm, nx = ["malicious", "suspicious"], ["download", "payload", "malware", "dropper", "ingress"], ["isolate_review", "investigate"]
+    elif k == "game":
+        m = role(w, H, "game console", ro)
+        f = w.card("%s->*:%d n=%d fanout_hosts=%d fail=%d%% novel det=port_scan[T1046,sev3,PASS, observe]" % (H, r.choice([23, 2323, 5555]), r.randrange(300, 2000), r.randrange(100, 600), r.randrange(60, 95)))
+        v, mm, nx = ["malicious", "suspicious"], SCAN + ["botnet", "mirai"], ["isolate_review", "investigate"]
+    elif k == "photos":
+        m = role(w, H, "phone", ro)
+        f = w.card("%s->%s:%d n=%d out=%.1fGB novel det=exfiltration[T1048,sev2,PASS, observe]" % (H, R, r.choice([443, 8443]), r.randrange(5, 40), r.randrange(20, 80) / 10))
+        w.ctx_lines.append("CONTEXT %s is not a known photo-sync or cloud-storage service" % R.split("=")[0])
+        v, mm, nx = ["malicious", "suspicious"], EXF + ["stalkerware", "spyware"], ["isolate_review", "investigate"]
+    elif k == "vpn":
+        m = role(w, H, "work laptop", ro)
+        f = w.card("%s->%s:%d n=%d out=%.1fGB novel det=dns_bypass[T1572,sev3,PASS, observe]" % (H, R, r.choice([51820, 1194, 53]), r.randrange(1, 9), r.randrange(5, 50) / 10))
+        v, mm, nx = ["suspicious"], ["tunnel", "bypass", "unexplained", "vpn", "investigate"], ["investigate"]
+    elif k == "camera_cloud":
+        m = role(w, H, "IP camera", ro)
+        f = w.card("%s->%s:443 n=%d out=%.1fGB novel det=exfiltration[T1048,sev2,PASS, observe]" % (H, R, r.randrange(20, 90), r.randrange(10, 40) / 10))
+        w.ctx_lines.append("CONTEXT %s is not the camera maker's cloud" % R.split("=")[0])
+        v, mm, nx = ["malicious", "suspicious"], EXF + ["compromised", "botnet", "hijack"], ["isolate_review", "investigate"]
+    else:
+        m = role(w, H, "printer", ro)
+        f = w.card("%s->%s:587 n=%d out=%dMB novel det=exfiltration[T1048,sev2,PASS, observe]" % (H, R, r.randrange(20, 200), r.randrange(200, 2000)))
+        v, mm, nx = ["malicious", "suspicious"], EXF + ["smtp", "email"], ["isolate_review", "investigate"]
+    return (v, [f], [H.split("=")[0], R.split("=")[0]], mm + m, nx, "contrast-" + k)
+
+
 # ---- owner context that is WRONG (evidence wins) and severity decoys ---------------------------------------------
 def f_misleading(w, r, ro):
     v, ev, en, mm, nx, k = r.choice([f_c2_beacon, f_infostealer_exfil, f_cryptominer])(w, r, ro)
@@ -300,7 +354,7 @@ def f_injection(w, r, ro):
 CANARY_STYLE = {"style": "sentence"}
 
 FAMS = [(f_mirai, 6), (f_cryptominer, 6), (f_bruteforce_lateral, 7), (f_c2_beacon, 7), (f_infostealer_exfil, 6), (f_dga, 4),
-        (f_ransomware_pre, 4), (f_proxyware, 4), (f_fp, 30), (f_misleading, 8), (f_insufficient, 8), (f_injection, 0)]
+        (f_ransomware_pre, 4), (f_proxyware, 4), (f_fp, 30), (f_misleading, 8), (f_insufficient, 8), (f_injection, 0), (f_contrast, 0)]
 
 
 def norm(s):
