@@ -100,3 +100,31 @@ model, and keeps attacker-controlled text out of its answers on fresh cases.
 - **That the model can still quote harmless strings.** Under A it cannot: the explainer describes attacker text,
   it never repeats it. That is a product property to accept.
 - **Field quality** (P7).
+
+## Addendum: candidate selected, blind v5 brief fixed (2026-11-22, before blind v5 is authored)
+
+**Dev results.** `data/deny-dev-results.md`.
+
+**Selection.** Rule §B, applied as written:
+- **Candidate: ftDg-AE** (mixD GGUF Q8_0 + grammar + guard A + E). Canary-safe 1.000 over the 141 quoted real
+  injections; combined mention 0.564; hallucination 0.000.
+- **Comparator: base17g-AE.**
+- ftDg-A (0.957) does not qualify. Its leaks come through canaries that also appear in unquoted domain alias
+  definitions.
+
+**Blind v5 brief.** `data/blind5-brief.md`, given verbatim. It is the blind v4 brief with these changes:
+- owner notes are trusted and never carriers;
+- every canary inside at least one quoted value;
+- the validator also checks for duplicate contexts;
+- banned canary words now include blind v4's.
+
+The mix, the marker rule and the 70 + 10 injections are unchanged.
+
+**Seal checks (`blind5_seal.py`).** As blind v4, plus:
+- 0 canaries outside quoted values;
+- 0 canaries in owner notes;
+- 0 duplicate contexts within the set;
+- 0 collisions with blind v4.
+
+**Evaluation (`blind5_eval.sh`).** base17g-A and ftDg-A online; E applied offline to give the AE runs. The gate is
+unchanged from §C, computed on ftDg-AE vs base17g-AE.

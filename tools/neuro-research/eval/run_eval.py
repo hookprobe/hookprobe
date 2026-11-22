@@ -344,7 +344,7 @@ def main():
     ap.add_argument("--timeout", type=float, default=600)
     ap.add_argument("--only", default="", help="comma list of case-id prefixes")
     ap.add_argument("--json", help="write per-case results here")
-    ap.add_argument("--guard", choices=["none", "R", "E", "RE"], default="none",
+    ap.add_argument("--guard", choices=["none", "R", "E", "RE", "A", "AE"], default="none",
                     help="doc 24 injection guard: R = redact quoted values on !instr-like lines before the model sees "
                          "them; E = echo filter on the answer. Scoring always uses the original case and gold.")
     ap.add_argument("--workers", type=int, default=1,
@@ -362,7 +362,12 @@ def main():
                 out = template_backend(c)
             else:
                 try:
-                    seen = dict(c, context=guard.redact(c["context"])) if "R" in a.guard else c
+                    if "A" in a.guard:
+                        seen = dict(c, context=guard.redact_all(c["context"]))
+                    elif "R" in a.guard:
+                        seen = dict(c, context=guard.redact(c["context"]))
+                    else:
+                        seen = c
                     out = openai_backend(seen, a, a.temperature if r == 0 else max(a.temperature, 0.7))
                     if "E" in a.guard:
                         out = guard.apply_output(c, out, template_backend)
