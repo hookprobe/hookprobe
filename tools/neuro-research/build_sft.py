@@ -64,6 +64,8 @@ def main():
     ap.add_argument("--no-echo", action="store_true", help="reject answers that reproduce attacker-controlled text")
     ap.add_argument("--redact", action="store_true", help="doc 24: render training prompts with guard R (redact quoted "
                     "values on !instr-like lines), so training matches guarded inference")
+    ap.add_argument("--redact-all", action="store_true", help="doc 26: render training prompts with guard A (withhold "
+                    "every quoted value), so training matches default-deny inference")
     ap.add_argument("--relabel-hedges", action="store_true",
                     help="a teacher 'suspicious' on a gold-'malicious' case is a hedge, not an error: keep it and write the "
                          "gold verdict (and its severity) into the target. Hybrid mode takes the verdict from L0. Any other "
@@ -98,7 +100,9 @@ def main():
             why["echo"] = why.get("echo", 0) + 1
         if bad:
             continue
-        system, user = messages(dict(c, context=guard.redact(c["context"])) if a.redact else c)
+        seen = dict(c, context=guard.redact_all(c["context"])) if a.redact_all else (
+            dict(c, context=guard.redact(c["context"])) if a.redact else c)
+        system, user = messages(seen)
         keep.append({"messages": [{"role": "system", "content": system}, {"role": "user", "content": user},
                                   {"role": "assistant", "content": json.dumps(ans, ensure_ascii=False)}],
                      "_id": c["id"], "_lang": c["lang"], "_family": c.get("family")})
