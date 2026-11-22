@@ -66,7 +66,7 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 | GF-E2 | single gate-status source | eng | done (this document) | — |
 | GF-E3 | bench restored before / after config-changing checks | eng | done+metal | #1428 (cfgd-live 20/20 with the wrapper on metal) |
 | GF-E4 | local mc-e2e uses a stale UI dist | eng | done | #1427 |
-| GF-E5 | ~980 ms post-upload reload round trips | eng | instrumented; not reproduced (2/2 reloads 834–838 ms, slowest control request 21 ms) | #1440 |
+| GF-E5 | ~980 ms post-upload reload round trips | eng | not reproduced on current main: 6/6 instrumented reloads 834–838 ms, slowest control request 21–22 ms; the one 988 ms reload was on a pre-#1432 image | #1440 (comments) |
 | GF-H1 (W3) | bench certificate SAN (192.168.200.146, unit name) | bench | done+metal | served cert checked 2026-11-21 (`openssl s_client` against 192.168.200.146:443): SAN heqk.local, r3q1.heqk.local, 10.99.0.1, 192.168.200.146, 10.200.0.6, written by the rpiboot flash of 20261120-l01-fwfiles-b1.md |
 | GF-H2 (W3) | browser flasher (ADR 0037) | op / bench | open | remaining-gaps #7 |
 | GF-H3 (W3) | G19 PoP tunnel on metal | op | blocked (PoP) | device side `[P-g19]` |
