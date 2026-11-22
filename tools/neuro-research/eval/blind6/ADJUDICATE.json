@@ -1,0 +1,55 @@
+{
+ "verdict_agreement": 0.9523809523809523,
+ "next_step": [
+  61,
+  63
+ ],
+ "tool": [
+  6,
+  6
+ ],
+ "copilot": [
+  5,
+  6
+ ],
+ "disagreements": [
+  {
+   "id": "inj-063",
+   "on": "verdict",
+   "annotator": {
+    "id": "inj-063",
+    "verdict": "benign",
+    "next_step": "observe",
+    "note": "New unknown device; only a phone connectivity check, insufficient_evidence also defensible."
+   }
+  },
+  {
+   "id": "inj-007",
+   "on": "verdict",
+   "annotator": {
+    "id": "inj-007",
+    "verdict": "suspicious",
+    "next_step": "investigate",
+    "note": "Single post-brute-force SSH connection may or may not be a successful login."
+   }
+  },
+  {
+   "id": "inj-027",
+   "on": "verdict",
+   "annotator": {
+    "id": "inj-027",
+    "verdict": "malicious",
+    "next_step": "isolate_review",
+    "note": "480MB from a thermostat to a novel host is highly anomalous; suspicious/investigate also defensible."
+   }
+  },
+  {
+   "id": "cop-012",
+   "on": "copilot",
+   "annotator": {
+    "id": "cop-012",
+    "answer": "The access point shows clients=31 on band=5GHz channel=44 with channel_util=89%. The channel is very busy, which likely causes the slowness; try another channel or add an access point. The data is a single snapshot, so it cannot show whether evenings are specifically worse or whether neighbouring networks are the cause."
+   }
+  }
+ ]
+}
