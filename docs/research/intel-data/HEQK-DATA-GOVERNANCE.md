@@ -16,12 +16,17 @@
    | Purpose | Allowed when |
    |---|---|
    | `commercial_training` | class not UNKNOWN/RESTRICTED, `commercial_use = yes`, `training_use = yes`, not share-alike |
-   | `evaluation` | commercial use yes; derivatives not forbidden (internal benchmarking of a commercial model is commercial use) |
+   | `evaluation` | class not UNKNOWN/RESTRICTED; commercial use yes **or unclear** (see rule 3); training and derivatives not both forbidden (internal benchmarking of a commercial model is commercial use) |
    | `research` | class not UNKNOWN/RESTRICTED, training not forbidden. Output never enters a shipped model |
    | `live_intel` | commercial use and redistribution yes (shipping indicators on devices) |
 
 3. **`unclear` means no.** A source becomes usable by changing its registry entry in a reviewed commit
    that cites the licence text or the signed agreement. The registry is the record of the decision.
+   **One exception (operator decision, 2026-11-22):** `evaluation` accepts a verified licence (class
+   OPEN, RESEARCH or COMMERCIAL) whose `commercial_use` is `unclear`. The operator accepts that
+   licence risk for internal benchmarks only. Such a build lists the sources in its manifest
+   (`licence_caveats`; `licence_caveat` on a windows export) and must never train or ship a model.
+   UNKNOWN, RESTRICTED, `no` and `requires_agreement` stay denied. **[enforced]**
 4. **Share-alike** (CC BY-SA, e.g. Tranco's CrUX component): whether model weights are "Adapted
    Material" is unresolved. Such sources are blocked from `commercial_training` until counsel decides.
    **[enforced]**

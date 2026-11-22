@@ -104,6 +104,30 @@ class LicenceGateTests(unittest.TestCase):
         l = dict(self.L["t-open"], training_use="unclear")
         self.assertFalse(licensing.decide(l, "commercial_training")[0])
 
+    def test_evaluation_accepts_unclear_commercial_use_only(self):
+        # operator decision 2026-11-22: verified licence, commercial_use unclear -> evaluation only
+        for cls in ("RESEARCH", "COMMERCIAL", "OPEN"):
+            l = dict(self.L["t-open"], **{"class": cls, "commercial_use": "unclear", "training_use": "unclear",
+                                          "derivatives": "unclear", "redistribution": "unclear"})
+            self.assertEqual(licensing.decide(l, "evaluation"), (True, licensing.EVALUATION_UNCLEAR))
+            for p in ("commercial_training", "live_intel"):
+                self.assertFalse(licensing.decide(l, p)[0], p)
+        base = dict(self.L["t-open"], commercial_use="unclear")
+        for cu in ("no", "requires_agreement"):
+            self.assertFalse(licensing.decide(dict(base, commercial_use=cu), "evaluation")[0], cu)
+        self.assertFalse(licensing.decide(dict(base, training_use="no", derivatives="no"), "evaluation")[0])
+        for cls in ("UNKNOWN", "RESTRICTED"):  # never verified / needs an agreement: still no
+            self.assertFalse(licensing.decide(dict(base, **{"class": cls}), "evaluation")[0], cls)
+        self.assertEqual(licensing.decide(self.L["t-open"], "evaluation"), (True, "commercial evaluation permitted"))
+
+    def test_manifest_schema_takes_licence_caveats(self):
+        from heqkdata import schema
+        v = schema.default()
+        m = {"schema": "heqk.manifest/1", "dataset_version": "2026.11.22-0123456789ab", "purpose": "evaluation",
+             "tool_version": "x", "schema_versions": {}, "created_at": "2026-11-22T00:00:00.000Z", "acquisitions": [],
+             "outputs": [], "counts": {}, "excluded": {}, "licence_caveats": {"cic-ids2017": licensing.EVALUATION_UNCLEAR}}
+        self.assertEqual(v.errors(m, "manifest.schema.json"), [])
+
 
 class SafeIOTests(unittest.TestCase):
     def _zip(self, members):

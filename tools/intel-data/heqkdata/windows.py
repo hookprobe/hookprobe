@@ -541,7 +541,7 @@ def export(store, registry, source_id, purpose, split_rule, out_root=None, windo
     """Windows for every FULL (unsampled) acquisition of `source_id`. Refuses sampled acquisitions (timelines
     need every flow), sealed scenarios unless unsealed, and anything the licence gate denies for `purpose`."""
     lic = registry.license_of(source_id)
-    licensing.require(lic, purpose)
+    why = licensing.require(lic, purpose)
     rule = SPLIT_RULES[split_rule]
     seal = sealed(registry_dir or registry.root)
     acqs = {}
@@ -571,6 +571,8 @@ def export(store, registry, source_id, purpose, split_rule, out_root=None, windo
                 "window": window, "split_rule": {"name": split_rule, "params": {"modulus": 3, "dev_if": 0}},
                 "splits": sorted(splits) if splits else None, "chunk_events": chunk_events,
                 "max_rows": max_rows if window == "scenario-hour" else None, "files": [], "skipped": {}, "unsealed": []}
+    if why == licensing.EVALUATION_UNCLEAR:  # never train or ship from this export
+        manifest["licence_caveat"] = f"{lic['id']}: {why}"
     if tables:
         manifest["context"] = context.manifest_entry(tables)
     for fn in sorted(acqs):

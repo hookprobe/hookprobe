@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """The licence gate. One function decides whether a source's data may be used for a purpose, from the
 licence registry alone. 'unclear' and 'requires_agreement' count as NO until an agreement is recorded
-by changing the registry entry (a reviewed commit).
+by changing the registry entry (a reviewed commit), with one exception: EVALUATION_UNCLEAR.
 
 Purposes:
   commercial_training  weights that ship in, or are sold with, HookProbe OS (the dual-licence model
@@ -11,6 +11,12 @@ Purposes:
   live_intel           shipping the indicators themselves on devices (redistribution)
 """
 PURPOSES = ("commercial_training", "evaluation", "research", "live_intel")
+
+# Operator decision, 2026-11-22: internal benchmarks may use a VERIFIED licence (class OPEN, RESEARCH or
+# COMMERCIAL) whose commercial_use is 'unclear'. The licence-ambiguity risk is accepted for evaluation only.
+# Never for training or shipping. UNKNOWN (never verified), RESTRICTED, commercial_use 'no' or
+# 'requires_agreement', and licences forbidding both training and derivatives all stay denied.
+EVALUATION_UNCLEAR = "evaluation only: commercial_use is unclear (operator decision 2026-11-22; never training, never shipped)"
 
 
 class LicenseDenied(Exception):
@@ -30,6 +36,14 @@ def decide(lic, purpose):
         if lic["training_use"] == "no":
             return False, f"licence {lic['id']} forbids training/derivative analysis"
         return True, f"{cls} licence permits research use"
+    if purpose == "evaluation":
+        if lic["commercial_use"] not in ("yes", "unclear"):
+            return False, f"licence {lic['id']} commercial_use={lic['commercial_use']}"
+        if lic["training_use"] == "no" and lic["derivatives"] == "no":
+            return False, f"licence {lic['id']} forbids derivative use"
+        if lic["commercial_use"] == "unclear":
+            return True, EVALUATION_UNCLEAR
+        return True, "commercial evaluation permitted"
     if lic["commercial_use"] != "yes":
         return False, f"licence {lic['id']} commercial_use={lic['commercial_use']}"
     if purpose == "live_intel":
@@ -42,10 +56,7 @@ def decide(lic, purpose):
         if lic["share_alike"]:
             return False, f"licence {lic['id']} is share-alike: whether model weights are an adaptation is unresolved; needs legal review"
         return True, "commercial training permitted"
-    # evaluation
-    if lic["training_use"] == "no" and lic["derivatives"] == "no":
-        return False, f"licence {lic['id']} forbids derivative use"
-    return True, "commercial evaluation permitted"
+    raise AssertionError(purpose)
 
 
 def require(lic, purpose):
