@@ -106,7 +106,7 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 | H-01 security headers | eng | done | #1161, #1168 |
 | L-01b PD loss withdraws | eng | done | #1176 |
 | L-02 SAN incl. mgmt IP | eng (code) / bench (cert) | done+metal (bench cert = GF-H1) | a2fcd1d21, 44754c2bc |
-| L-03 PQ TLS group from a PQ client | bench | open | pi4-assessment.md |
+| L-03 PQ TLS group from a PQ client | bench | done+metal (X25519MLKEM768 negotiated; device pq_hybrid=1) | metal-evidence/20261122-l03-pq-tls.md |
 | W-01 transition downgradable | op | accepted (shipping default) | — |
 | W-02 PMF in transition | eng | done+metal (WPA3-only); optional by design | 20261114-night.md |
 | W-04 RSNX / beacon protection / WPS capture | bench | open | — |
