@@ -75,7 +75,7 @@
 
 | Verdict | Datasets |
 |---|---|
-| **Train now** (explicit open grant incl. commercial) | **UMUDGA** (MIT, Mendeley; >30M DGA names, 50 families) · **360netlab DGA code** (MIT: generate DGA names locally) · **IoT-23** (CC BY 4.0) · **CTU-13** (CC BY) · **Kitsune** (CC BY 4.0) · **LANL 2015 multi-source** (CC0; includes DNS lookups + red-team labels) · **LANL 2017 unified host/network** (CC0) · **PhiUSIIL phishing URLs** (CC BY 4.0) |
+| **Train now** (explicit open grant incl. commercial) | **UMUDGA** (MIT, Mendeley; >30M DGA names, 50 families) · **360netlab DGA code** (MIT: generate DGA names locally) · **IoT-23** (CC BY 4.0) · **CTU-13** (CC BY) · ~~Kitsune~~ (CC BY 4.0; sealed 2026-11-23 as Neuro's M4 evaluation-only holdout, never train) · **LANL 2015 multi-source** (CC0; includes DNS lookups + red-team labels) · **LANL 2017 unified host/network** (CC0) · **PhiUSIIL phishing URLs** (CC BY 4.0) |
 | **After one e-mail to UNB CIC** | CIRA-CIC-DoHBrw-2020, CIC-Bell-DNS-2021, CIC-Bell-DNS-EXF-2021, CICIoT2023 |
 | **Commercial use needs the authors' agreement** | UNSW-NB15, Bot-IoT, TON_IoT ("should be agreed by the authors" / "allowable after asking"). The restriction carries into derivatives (UQ NF-* NetFlow sets) |
 | **Research or evaluation only** | MAWI/WIDE ("only research purposes"), MAWILab (discontinued Dec 2024), CAIDA (AUA: non-profit research or internal commercial evaluation, no redistribution), DGArchive (CC BY-NC-SA 3.0), CTIBench (CC BY-NC-SA 4.0), Tu et al. 2023 DNS-tunnelling PCAPs (no LICENSE: all rights reserved) |
