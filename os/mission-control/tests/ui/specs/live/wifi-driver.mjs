@@ -25,7 +25,7 @@ export default async function (t) {
   const radio = Array.isArray(caps?.granted) ? caps.granted.includes('wifi_ap') : Array.isArray(h?.capabilities) && h.capabilities.includes('wifi_ap');
   const idle = (x) => x.state === 'absent' && x.restarts === 0 && x.faults === 0;
   const quiet = !radio && idle(b) && (s === null || (idle(s) && s.full_wipes === 0));
-  const card = page.locator('[aria-label="Wi-Fi driver"]');
+  const card = page.locator('[aria-label="Wi-Fi health"]');
   if (quiet) {
     ok(await card.count() === 0, 'no Wi-Fi on this device (wifi_ap not granted, servers absent, no history): no Wi-Fi driver warning');
   } else {

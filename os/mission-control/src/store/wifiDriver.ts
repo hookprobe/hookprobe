@@ -62,3 +62,55 @@ export function driverLines(w: WifiDriver): DriverLine[] {
   }
   return out;
 }
+
+/**
+ * The Wi-Fi self-heal (kernel wifiheal.rs, /api/health): `wifi_heal` {state ok|recovering|degraded: …|rebooting, last_class,
+ * kicks, bounces, reloads, after_wifi_reboot}, `wifi_boot` ("ok" or why Wi-Fi has been off since power-on), and `wifi_files`
+ * ("ok", "not-loaded", "no-volume" or kind:file, only on builds that load the vendor files from the boot volume).
+ */
+export interface WifiHeal { state: string; last_class: string; kicks: number; bounces: number; reloads: number; after_wifi_reboot: boolean }
+export interface WifiSelfHeal { heal: WifiHeal | null; boot: string | null; files: string | null }
+export const [wifiSelfHeal, setWifiSelfHeal] = createSignal<WifiSelfHeal | null>(null);
+
+export function parseWifiSelfHeal(h: Record<string, unknown>): WifiSelfHeal | null {
+  const x = h.wifi_heal as Record<string, unknown> | undefined;
+  const heal = x && typeof x.state === 'string'
+    ? { state: x.state, last_class: typeof x.last_class === 'string' ? x.last_class : '', kicks: num(x.kicks), bounces: num(x.bounces), reloads: num(x.reloads), after_wifi_reboot: x.after_wifi_reboot === true }
+    : null;
+  const boot = typeof h.wifi_boot === 'string' ? h.wifi_boot : null;
+  const files = typeof h.wifi_files === 'string' ? h.wifi_files : null;
+  return heal || boot || files ? { heal, boot, files } : null;
+}
+
+/** wifiheal.rs BootFault::text, by name. */
+const BOOT: Record<string, string> = {
+  'no-chip': 'the Wi-Fi chip did not answer at power-on',
+  'firmware-not-started': 'the Wi-Fi firmware did not start',
+  'no-control': 'the Wi-Fi firmware started but does not answer control requests',
+  'ap-start-failed': 'the access point could not be started',
+  'vendor-files': "the Wi-Fi chip's vendor files are missing or were refused",
+};
+const CLASS: Record<string, string> = { congestion: 'congestion', 'station-sleep': 'a sleeping device', 'firmware-crash': 'a firmware crash', 'tx-freeze': 'a transmit freeze', 'bus-faults': 'bus faults' };
+const FILE_KIND: Record<string, string> = { missing: 'is missing', size: 'has the wrong size', digest: 'is not the expected file' };
+
+export function healLines(w: WifiSelfHeal): DriverLine[] {
+  const out: DriverLine[] = [];
+  const h = w.heal;
+  if (w.boot && w.boot !== 'ok') out.push({ level: 'warn', text: `Wi-Fi has been off since start-up: ${BOOT[w.boot] ?? w.boot}. Wired LAN, WAN and management keep running.` });
+  if (h) {
+    if (h.state.startsWith('degraded')) out.push({ level: 'warn', text: 'Wi-Fi is off after a failed recovery and stays off until the next restart. Wired LAN, WAN and management keep running.' });
+    else if (h.state === 'recovering') out.push({ level: 'warn', text: `Wi-Fi is recovering from ${CLASS[h.last_class] ?? h.last_class}; devices may drop for a moment.` });
+    else if (h.state === 'rebooting') out.push({ level: 'warn', text: 'Wi-Fi recovery is restarting the device.' });
+    else if (h.state !== 'ok') out.push({ level: 'warn', text: `Wi-Fi self-heal: ${h.state}.` });
+  }
+  if (w.files && !['ok', 'not-loaded'].includes(w.files)) {
+    const [kind, file] = w.files.split(':');
+    out.push({ level: 'warn', text: w.files === 'no-volume' ? 'The Wi-Fi vendor files could not be read: no firmware volume on the boot disk.' : `The Wi-Fi ${file ?? ''} file ${FILE_KIND[kind] ?? kind}.` });
+  }
+  if (h) {
+    const parts = [h.kicks && `${h.kicks} nudge${h.kicks === 1 ? '' : 's'}`, h.bounces && `${h.bounces} radio restart${h.bounces === 1 ? '' : 's'}`, h.reloads && `${h.reloads} firmware reload${h.reloads === 1 ? '' : 's'}`].filter(Boolean);
+    if (parts.length) out.push({ level: 'note', text: `Wi-Fi repaired itself since start-up: ${parts.join(', ')}${h.last_class && h.last_class !== 'healthy' ? ` (last: ${CLASS[h.last_class] ?? h.last_class})` : ''}.` });
+    if (h.after_wifi_reboot) out.push({ level: 'note', text: 'This start-up follows a restart by Wi-Fi recovery.' });
+  }
+  return out;
+}

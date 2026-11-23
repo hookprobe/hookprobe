@@ -7,7 +7,7 @@ import { fetchJson } from './api';
 import { createSignal } from 'solid-js';
 import { setDeployMode, setSubstrate, setDeviceStats, type DeployMode } from './mock';
 import { setDeviceCapabilities } from './capabilities';
-import { setWifiDriver, parseWifiDriver } from './wifiDriver';
+import { setWifiDriver, parseWifiDriver, setWifiSelfHeal, parseWifiSelfHeal } from './wifiDriver';
 
 const MODES: readonly DeployMode[] = ['standalone', 'cloud-linked', 'self-hosted'];
 let once: Promise<void> | null = null;
@@ -50,6 +50,7 @@ async function readHealth(): Promise<'ok' | 'absent' | 'error'> {
     if (h.substrate) setSubstrate(h.substrate);
     if (Array.isArray(h.capabilities)) setDeviceCapabilities(h.capabilities);
     setWifiDriver(parseWifiDriver(h.wifi_driver));
+    setWifiSelfHeal(parseWifiSelfHeal(h as unknown as Record<string, unknown>));
     if (h.mode && (MODES as readonly string[]).includes(h.mode)) setDeployMode(h.mode as DeployMode);
     if (typeof h.hosts_active === 'number' && typeof h.detections_cap === 'number') {
       setDeviceStats({

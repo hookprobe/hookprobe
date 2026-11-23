@@ -6,7 +6,7 @@ export default async function (t) {
   let health = { substrate: 'heqk', mode: 'standalone' };
   const json = (b) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(b) });
   await page.route('**/api/health', (r) => r.fulfill(json(health)));
-  const card = page.locator('[aria-label="Wi-Fi driver"]');
+  const card = page.locator('[aria-label="Wi-Fi health"]');
   const bus = (state, restarts = 0, faults = 0) => ({ state, restarts, faults, last_fault_ts: faults ? Math.floor(Date.now() / 1000) - 120 : null });
 
   await go('/mission', 1500);
