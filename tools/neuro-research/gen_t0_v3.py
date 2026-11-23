@@ -270,10 +270,13 @@ THIN = ["insufficient", "not enough", "inconclusive", "single", "cannot confirm"
         "insuficient", "insuficiente", "neconcludent", "neconcludentă", "nu ajunge", "nu este suficient"]
 
 
-def f_thin(w, r, ro):
+THIN_KINDS = ["small_upload", "dns_only", "blocked_once", "short_periodic", "two_failed_logins", "shared_cdn_ioc",
+              "new_device", "few_ports"]
+
+
+def f_thin(w, r, ro, kind=None):
     H, R = w.ref("H", g.ip_lan(r)), w.ref("R", g.ip_wan(r))
-    k = r.choice(["small_upload", "dns_only", "blocked_once", "short_periodic", "two_failed_logins", "shared_cdn_ioc",
-                  "new_device", "few_ports"])
+    k = kind or r.choice(THIN_KINDS)
     ents = [H.split("=")[0], R.split("=")[0]]
     if k == "small_upload":
         m = role(w, H, r.choice(DEVICES), ro)
@@ -317,6 +320,80 @@ def f_thin(w, r, ro):
         f = w.card("%s->%s:%s n=%d novel det=port_scan[T1046,sev1,PASS, observe]" % (H, N, ",".join(map(str, ports)), len(ports)))
         v, mm, nx, ents = ["insufficient_evidence", "benign"], ["ports", "few"], ["observe", "investigate"], [H.split("=")[0], N.split("=")[0]]
     return (v, [f], ents, THIN + mm + m, nx, "thin-" + k)
+
+
+# ---- sufficient twins of the thin kinds (doc 38): the SAME window start (device, role, peer), but the one signal is
+# repeated, sustained and corroborated, so the evidence IS enough; gold is malicious or suspicious ------------------
+SUFF = ["repeated", "sustained", "corroborat", "pattern", "persistent", "consistent", "repetat", "coroborat", "persistent"]
+EXF_W = ["exfiltration", "data theft", "upload", "leak", "exfiltrare"]
+
+
+def f_suff(w, r, ro, kind):
+    H, R = w.ref("H", g.ip_lan(r)), w.ref("R", g.ip_wan(r))
+    k = kind
+    ents = [H.split("=")[0], R.split("=")[0]]
+    v, nx = ["malicious", "suspicious"], ["isolate_review", "investigate"]
+    if k == "small_upload":
+        m = role(w, H, r.choice(DEVICES), ro)
+        f = w.card("%s->%s:443 n=%d out=%dMB periodic=%ds novel det=exfiltration[T1048,sev3,PASS, observe]" % (
+            H, R, r.randrange(40, 200), r.randrange(200, 2000), r.choice([300, 600, 900])))
+        w.ctx_lines.append("CONTEXT the uploads to %s continued for %d hours" % (R.split("=")[0], r.randrange(5, 20)))
+        mm = EXF_W
+    elif k == "dns_only":
+        m = role(w, H, r.choice(DEVICES), ro)
+        D = w.ref("D", "%s.example" % r.choice(["cdn-stat", "img-load", "track-px", "upd-chk", "metrics-io"]))
+        f = w.card("%s dns %s n=%d novel det=ioc_match[-,sev3,PASS, observe]" % (H, D, r.randrange(20, 80)))
+        f2 = w.card("%s->%s:443 n=%d periodic=%ds cv=0.0%d novel det=beaconing[T1071,sev3,PASS, observe]" % (
+            H, R, r.randrange(200, 1500), r.choice([60, 300, 600]), r.randrange(1, 5)))
+        w.ctx_lines.append("CONTEXT %s resolves to %s; each lookup was followed by a connection" % (D.split("=")[0], R.split("=")[0]))
+        ents = [H.split("=")[0], D.split("=")[0], R.split("=")[0]]
+        mm = ["beacon", "c2", "command and control", "comandă", "lookup"]
+        return (v, [f, f2], ents, SUFF + mm + m, nx, "suff-" + k)
+    elif k == "blocked_once":
+        m = role(w, H, r.choice(DEVICES), ro)
+        R2 = w.ref("R", g.ip_wan(r))
+        port = r.choice([443, 80, 8080])
+        f = w.card("%s->%s:%d n=%d novel det=ioc_match[-,sev3,DROP, framedrop]" % (H, R, port, r.randrange(40, 300)))
+        f2 = w.card("%s->%s:%d n=%d novel det=ioc_match[-,sev3,PASS, observe]" % (H, R2, port, r.randrange(5, 60)))
+        w.ctx_lines.append("CONTEXT %s kept retrying after the block, then reached %s on the same feed" % (H.split("=")[0], R2.split("=")[0]))
+        mm = ["retry", "retried", "persistent", "c2", "ioc", "feed"]
+        return (v, [f, f2], ents + [R2.split("=")[0]], SUFF + mm + m, nx, "suff-" + k)
+    elif k == "short_periodic":
+        m = role(w, H, r.choice(DEVICES), ro)
+        f = w.card("%s->%s:443 n=%d periodic=%ds cv=0.0%d novel det=beaconing[T1071,sev3,PASS, observe]" % (
+            H, R, r.randrange(300, 2000), r.choice([60, 300, 600]), r.randrange(1, 4)))
+        w.ctx_lines.append("CONTEXT the pattern has run for %d hours without a gap" % r.randrange(12, 72))
+        mm = ["beacon", "c2", "command and control", "comandă"]
+    elif k == "two_failed_logins":
+        m = role(w, H, r.choice(["NAS", "home server", "office desktop", "Raspberry Pi"]), ro)
+        N = w.ref("H", g.ip_lan(r))
+        svc, port = r.choice([("SSH", 22), ("RDP", 3389)])
+        f = w.card("%s->%s:%d n=%d fail=%d%% det=bruteforce[T1110,sev3,PASS, observe]" % (N, H, port, r.randrange(300, 3000), r.randrange(95, 100)))
+        w.ctx_lines.append("CONTEXT a %s login from %s succeeded after the failures" % (svc, N.split("=")[0]))
+        ents = [N.split("=")[0], H.split("=")[0]]
+        mm = ["brute force", "brute-force", "credential", "password", svc.lower(), "forță brută"]
+    elif k == "shared_cdn_ioc":
+        m = role(w, H, r.choice(["smart TV", "phone", "media box", "kids' tablet", "work laptop"]), ro)
+        f = w.card("%s->%s:443 n=%d out=%dMB periodic=%ds det=ioc_match[-,sev3,PASS, observe]" % (
+            H, R, r.randrange(200, 1500), r.randrange(20, 400), r.choice([60, 300])))
+        w.ctx_lines.append("CONTEXT %s is a dedicated host, not a shared CDN range, and is listed on two threat feeds" % R.split("=")[0])
+        mm = ["ioc", "dedicated", "threat feed", "c2", "beacon"]
+    elif k == "new_device":
+        m = role(w, H, r.choice(DEVICES), ro)
+        f = w.card("%s->*:%d n=%d fanout_hosts=%d fail=%d%% novel det=port_scan[T1046,sev3,PASS, observe]" % (
+            H, r.choice([23, 2323, 22]), r.randrange(500, 3000), r.randrange(150, 800), r.randrange(70, 98)))
+        w.ctx_lines.append("CONTEXT %s has a %d-week baseline; this behaviour is new" % (H.split("=")[0], r.randrange(3, 12)))
+        mm = ["scan", "scanning", "botnet", "worm", "mirai", "scanare"]
+        ents = [H.split("=")[0]]
+    else:
+        m = role(w, H, r.choice(DEVICES), ro)
+        N = w.ref("H", g.ip_lan(r))
+        f = w.card("%s->*:%d-%d n=%d fanout_hosts=%d fail=%d%% novel det=port_scan[T1046,sev3,PASS, observe]" % (
+            H, 1, r.choice([1024, 10000, 65535]), r.randrange(800, 5000), r.randrange(8, 40), r.randrange(70, 98)))
+        w.ctx_lines.append("CONTEXT %s probed every LAN host, including %s, in under ten minutes" % (H.split("=")[0], N.split("=")[0]))
+        ents = [H.split("=")[0], N.split("=")[0]]
+        mm = ["scan", "scanning", "reconnaissance", "recon", "lateral", "scanare"]
+    return (v, [f], ents, SUFF + mm + m, nx, "suff-" + k)
 
 
 # ---- owner context that is WRONG (evidence wins) and severity decoys ---------------------------------------------
@@ -415,6 +492,46 @@ def norm(s):
     return " ".join(s.split()).lower()
 
 
+def pairs(a, r, banned):
+    """Doc 38: each pair shares the random state up to the evidence card, so device, role, peer addresses and
+    distractors match; only the signal differs (one weak signal vs the same signal sustained and corroborated)."""
+    out, seen, coll, i = [], set(), 0, 0
+    while i < a.n:
+        ro = r.random() < a.ro
+        kind = r.choice(THIN_KINDS)
+        st = r.getstate()
+        rows = []
+        for fn in (f_thin, f_suff):
+            r.setstate(st)
+            w = g.Win(r)
+            for _ in range(r.choice([0, 0, 1])):
+                g.distractor(w)
+            verdict, ev, ents, mention, nxt, fam = fn(w, r, ro, kind)
+            for _ in range(r.choice([0, 1])):
+                g.distractor(w)
+            ctx = w.render()
+            rows.append((ctx, verdict, ev, ents, mention, nxt, fam))
+        hs = [hashlib.sha256(norm(c[0]).encode()).hexdigest() for c in rows]
+        if any(h in banned for h in hs):
+            coll += 1
+            continue
+        if any(h in seen for h in hs) or hs[0] == hs[1]:
+            continue
+        seen.update(hs)
+        q = r.choice(g.Q_RO if ro else g.Q_EN)
+        for (ctx, verdict, ev, ents, mention, nxt, fam), tag in zip(rows, "ts"):
+            gold = {"verdict": verdict, "evidence": ev, "entities": ents, "must_mention_any": sorted(set(mention)), "next_step": nxt}
+            out.append({"id": "%s-%05d-%s" % (a.id_prefix, i, tag), "lang": "ro" if ro else "en", "task": "triage", "context": ctx,
+                        "question": q, "gold": gold, "family": fam})
+        i += 1
+    with open(a.out, "w", encoding="utf-8") as f:
+        for c in out:
+            f.write(json.dumps(c, ensure_ascii=False) + "\n")
+    fams = collections.Counter(c["family"] for c in out)
+    print("wrote %d pairs = %d cases (%d RO); families %s; collisions rejected %d" % (
+        a.n, len(out), sum(c["lang"] == "ro" for c in out), dict(sorted(fams.items())), coll))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=3000)
@@ -426,6 +543,7 @@ def main():
     ap.add_argument("--canary-style", choices=["sentence", "identifier"], default="sentence",
                     help="f_injection canary style (doc 24 B); 'sentence' reproduces the earlier output exactly")
     ap.add_argument("--forbid-sets", nargs="*", default=[], help="extra case files whose contexts must not collide (dev v2, blind v2)")
+    ap.add_argument("--pairs", action="store_true", help="doc 38: --n PAIRS of (thin, sufficient) twins from the same window start")
     a = ap.parse_args()
     banned = set()
     for p in ["eval/cases.jsonl", "eval/blind/blind_cases.jsonl"] + a.forbid_sets:
@@ -435,6 +553,8 @@ def main():
                 banned.add(hashlib.sha256(norm(json.loads(l)["context"]).encode()).hexdigest())
     r = random.Random(a.seed)
     CANARY_STYLE["style"] = a.canary_style
+    if a.pairs:
+        return pairs(a, r, banned)
     pool = [f for f, wt in FAMS for _ in range(wt)]
     if a.fams:
         pool = [f for f, _ in FAMS if f.__name__ in a.fams.split(",")]
