@@ -52,3 +52,44 @@ first deviant hour per device: median 0 h, all within the first 6 h: 27 of 27 de
 - An engine-side novelty discount while slots are cold would change the bit-exact engine. It would need new golden
   vectors, a new el0-neuro image and a D1-style re-measurement of detection. That is not proposed now: the
   presentation rule removes the visible symptom at no detection cost.
+
+## Addendum, 2026-11-23: alignment with the shipped API (#1517, #1522)
+
+heqk implemented this proposal as written: `GET /api/neuro` labels every evidence record `learning` (first 24 h after
+the device's slot was assigned), `relearning` (14 d after an el0-neuro reset the device predates) or `warm`, and only
+`warm` records are ranked. Metal check: `docs/design/metal-evidence/20261123-neuro-api-cm5.md`. Slot eviction resets
+the slot in the server (RESET_DEV) and restarts `first_seen`, so an evicted device that returns is `learning` again,
+which matches the engine.
+
+**One correction to this note, from the measurements already in it.** A device's first sighting and an el0-neuro reset
+leave the engine in the same place: no history. The two curves agree:
+
+| Hours since history started | first sighting (this note) | after a reset at k = 7 / 14 / 21 days (`conn-rule-and-reset.md` §2) |
+|---|---|---|
+| 0–24 | 0.34 (0–6 h 0.547, 6–24 h 0.269, weighted) | 0.295 / 0.290 / 0.327 |
+| 24–72 | 0.117 | 0.081 / 0.127 / 0.098 |
+| 72–168 | 0.234 | 0.187 / 0.255 / 0.367 |
+| 168–336 | 0.232 | 0.275 / 0.375 / 0.456 |
+| steady state | 0.483 | about 0.48–0.52 |
+
+So the sensitivity gap that `relearning` describes also follows every first sighting. Under the shipped rule a new
+device turns `warm` after 24 h, although for the next ~2 weeks it flags fewer hours for the same reason a reset device
+does. The same holds after every reboot or OTA: the host's memory is not persisted (D4), so every device restarts as
+new (`learning` for 24 h, then `warm`, `relearning_since` null).
+
+**What it means.** Nothing unsafe: N0 is evidence only, and fewer flags is not a false-alarm risk. It only matters
+for how much "no evidence" means. A quiet device 3 days after first sighting is less informative than a quiet
+device after a month.
+
+**Suggested refinement (presentation only, the host's and UI owner's call).** One rule on one clock,
+`history_start = max(first_seen, reset_at)`:
+
+| state | rule | ranked |
+|---|---|---|
+| `learning` | < 24 h since `history_start` | no |
+| `settling` (or keep the name `relearning`) | 24 h – 14 d since `history_start` | as today's `relearning` |
+| `warm` | otherwise | yes |
+
+This needs no engine or ABI change and no new measurement: the 24 h and 14 d bounds are the ones above. Whether
+`settling` records are ranked is a product choice; the data only says they are fewer, not worse. Until then the API
+already carries `first_seen` and `hours_since_first_seen` on every record, so the UI can show the history age itself.
