@@ -68,7 +68,9 @@ The rules that keep production safe:
    dynamics".
 3. **Real silicon without a reboot.** VT-d is on and the spare I226 is in its own IOMMU
    group, so heqk can drive a *real* I226 as a KVM guest through VFIO (F2).
-4. **Metal boot work (X3) happens on a second, identical N100** (cheap; same 4×I226 box class).
+4. **No hardware purchase (operator 2026-11-23).** Real-silicon tests use what we own: VFIO of the idle
+   I226 and the idle USB-C xHCI with no window; the production QCN9274/EM9293 lent to a heqk guest in maintenance
+   windows; and CM5 (RP1 xHCI, a heqk STA client). See the radio plan §5a.
 5. Evidence classes stay unmixed (E1 QEMU / E2 QEMU→real peer / E3 metal), as with S1.
 
 Rejected alternatives:
@@ -185,13 +187,15 @@ The heqk guest (F2), and later the twin, consumes the live mirror port in **obse
 Compare detections against Suricata/Zeek, check resource behaviour, and run the
 0.7-separation-matrix rows. Production is unaffected.
 
-### F6 — Twin metal + swap
-- **X3 on the twin N100:** our own Secure Boot keys (as rehearsed in QEMU in F1), TPM measured
-  boot, NV anti-rollback counter, NVMe, igc, then soak.
-- **Cutover = move the cables** from the Linux box to the heqk twin in a maintenance
-  window. **Rollback = move them back** (minutes).
-- The freed original N100 then becomes the second twin, reflashed with heqk; or it is kept as the
-  dev host if D-A chooses that.
+### F6 — Metal + cutover on the production box (no twin; operator rule 2026-11-23)
+- **Rehearsal boots (D-G):** heqk on the existing ESP via one-shot `BootNext`. heqk arms the iTCO watchdog
+  first, so a hang resets back to Linux. A `metal-readonly` profile: no NVMe writes, no TPM NV writes, no key
+  enrolment. Each boot is a short, announced site outage.
+- **Cutover** is only after the rehearsals pass and Role B has moved: heqk becomes the default boot entry
+  and Linux stays as the fallback entry until a defined soak passes. Repartitioning or reclaiming the Linux LV
+  comes last, after the data is off-box.
+- Secure Boot with our own keys (rehearsed in QEMU in F1) is enrolled only at the very end, because Setup
+  Mode enrolment changes the box's boot policy.
 
 ## 6. Decisions needed (operator)
 
@@ -201,7 +205,11 @@ Compare detections against Suricata/Zeek, check resource behaviour, and run the
   control plane.
 - **D-C** — approve the F2 VFIO procedure on the production unit (operator-run, reversible).
 - **D-D** — interim Wi-Fi/5G at cutover: an external AP, with 5G deferred.
-- **D-E** — buy the twin N100 for X3/F6.
+- **D-E** — *(withdrawn: no purchases)*. Replaced by **D-G**: allow a one-shot `BootNext` + iTCO-watchdog
+  metal boot on the production box (read-only profile, site down during the boot), after all VFIO stages are green.
+- **Role B without new hardware** is the open gap. Candidates: cloud Claude Code sessions for code work; the
+  Pi4 bench (Linux, allowed as a dev host) for the bench consoles; the OCI A1 for some heavy services (capacity to
+  check). Until Role B has a home, everything up to F5 proceeds, and the final removal of Linux waits.
 
 ## 7. Flagged contradictions (not resolved here)
 

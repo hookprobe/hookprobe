@@ -136,12 +136,55 @@ post-soak X0 ─ drivers join the workspace; uplink/LAN integration through hal 
   work behind a new PCIe message-ring transport. The trade: 6E instead of 7, and a divergence from the ADR 0064
   choice. *Module availability and the PCIe FullMAC protocol must be verified before this is weighed.*
 
+## 5a. No-purchase test strategy (operator, 2026-11-23) — supersedes the twin/second-card steps above
+
+**Operator rule:** no new hardware; test on what we have. The "twin N100", "second QCN9274" and
+"second EM9293" steps in §3/§4 are replaced by the following. Read-only facts checked on the live box:
+
+| Asset we own | Fact | What it tests |
+|---|---|---|
+| Live box, **USB-C xHCI `00:0d.0`** | IOMMU group alone; **2 hotplug SuperSpeed ports, nothing plugged in**; no PCI reset method (xHCI HCRST suffices) | **real Intel xHCI silicon** through VFIO into a heqk KVM guest, **no window needed**. Devices: anything USB we own (a USB stick; a phone, whose USB tethering is an RNDIS/NCM cellular stand-in, to be verified per phone; and NCM framing is shared with MBIM data) |
+| Live box, **EM9293** (production 5G failover; PPPoE stays primary) | on xHCI `00:14.0` with the bench consoles, so not VFIO-able | **the real modem through QEMU `usb-host`** (libusb, device-level) into a heqk guest on emulated `qemu-xhci`, in a **maintenance window**: ModemManager releases the device, the guest drives MBIM/NTB, then exits; the kernel driver and MM re-probe. Cost: no 5G failover during the window. The host controller is never touched. |
+| Live box, **QCN9274** (production APs) | IOMMU group alone; reset method `bus` (SBR) | **the real card through VFIO** into a heqk guest, in a **maintenance window**: APs down (wired LAN/WAN stay up). It is gated on a rehearsal (below). |
+| Live box, **spare I226** | IOMMU group alone; `flr` + `bus` | igc on real silicon (main plan F2); also the guest's LAN uplink for Wi-Fi/5G tests |
+| **CM5 bench** (after the soak) | RP1 carries standard xHCI host controllers; heqk already drives RP1 | **xHCI on a second, real, non-production silicon**, the same arch-neutral driver on aarch64 metal. heqk CM5 is also a proven **WPA2 STA (P10)**, so it serves as a **test client** for the heqk-x86 AP. |
+| Phones/laptops we own | — | Wi-Fi clients (WPA2/WPA3) for association, DHCP and throughput tests |
+
+**Wi-Fi window prerequisite (rehearsal, Linux only, no heqk):** in one short window, stop
+`fts-hostapd-*`, unbind `ath12k`, rebind it, restart hostapd, and confirm the APs come back **with no
+reboot**. Repeat it with an SBR in between (the reset VFIO will perform). If either cycle needs a reboot
+to recover, the VFIO window carries a "Wi-Fi down until reboot" risk, and the operator decides whether
+to accept it. In the same window, capture `ath12k` WMI/HTT tracepoints during the driver restart. That
+gives the full boot-time host↔firmware exchange as an offline fixture for a **replay simulator**, so the
+MHI→WLFW→WMI layers can be exercised offline (E1) before any VFIO window.
+
+**Window discipline:**
+- Each window is announced and time-boxed, with a written rollback.
+- One radio per window.
+- The guest gets only its device and a vfio-bound I226 (it never shares the production bridge).
+- The guest runs observe-only toward production traffic.
+- Windows follow the bench time-share pattern (a lock and a log).
+
+**The metal step without a twin:** the only x86 metal we own is the production box. The first heqk metal
+boot there (X3) can be made **low-risk but not zero-risk**:
+- The heqk image goes on the existing ESP (777 MB free): a file copy, with no repartitioning.
+- It is booted with a one-shot `BootNext` (the next reset returns to Linux by default).
+- heqk arms the **iTCO watchdog** (present) first thing, so a hang self-resets back to Linux.
+- A `metal-readonly` profile: no NVMe writes, no TPM NV/PCR-policy writes, no Secure Boot key
+  enrolment, and Setup Mode is left untouched.
+- The whole site (WAN, LAN, Wi-Fi, and every dev session on the box) is down for the boot's duration.
+
+This conflicts with the earlier "no boot/EFI tests on production" rule, so it needs **an explicit
+operator decision (D-G)**, and it comes only after every VFIO stage is green.
+
 ## 6. Decisions + hardware asks
 
 - **D-F** — QCN9274 native (recommended: it matches ADR 0064, and the board needs it anyway), or a FullMAC 6E
   module as the first on-device AP.
-- **Hardware for the twin N100:** a second QCN9274 card, a second EM9293 + SIM (a data plan) and an
-  M.2-to-USB-C carrier for the modem. Plus `swtpm` on the dev host (from the main plan).
+- **No hardware purchase** (operator 2026-11-23). Tools only: `swtpm` (apt) on the live box.
+- **D-G** — whether, and when, the one-shot `BootNext` + watchdog metal boot on the production box is allowed.
+- **D-H** — approval for the maintenance windows: the Wi-Fi rehearsal, the Wi-Fi VFIO window and the
+  modem `usb-host` window.
 - **Clean-room protocol** for MHI, QRTR/QMI-TLV, xHCI and MBIM: who reads the GPL behaviour, and who writes the code.
 - **ADR:** the EL0 DMA ABI + VT-d confinement is a security boundary. It needs a short ADR (an ADR 0065
   extension) and a `security-auditor` pass before the first DMA-capable EL0 driver.
