@@ -32,6 +32,7 @@ updates:
       - "/os/neuro/el0-neuro"
       - "/os/neuro/neuro-core"
       - "/os/neuro/neuro-dp"
+      - "/os/neuro/neuro-l1"
     schedule: { interval: "weekly", day: "monday" }
     labels: ["dependencies", "rust"]
     commit-message: { prefix: "chore(deps)", include: "scope" }
