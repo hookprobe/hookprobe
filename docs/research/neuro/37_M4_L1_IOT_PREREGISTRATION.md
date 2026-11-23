@@ -225,3 +225,44 @@ vectors are sub-millisecond rounding (periodicity CV ≤ 0.003, mean duration �
 has.
 
 **Unchanged:** the homes set, the bars and minimums, the model, one look.
+
+## 12. Intake (2026-11-23), recorded before the look
+
+**Data.** The final malware side is Kitsune only: MCFP was unreachable (§8) and CICIoT2023 was dropped by the
+operator (§9–10, subset final and empty). The home side is the 12 homes. All 43 files matched their `sealed.json`
+hashes (#1541) before reading.
+
+**Aborted first run.** It was started and stopped within minutes when the operator weighed holding M4 for
+CICIoT2023. It had converted only the first, non-gated capture (Active Wiretap). Its partial output was set aside
+unread and the operator then chose to run now; the run below is the full one.
+
+**Conversion.**
+- Kitsune: 9 captures, every frame-label file aligned with its capture; no router MAC excluded.
+- Homes: 12 CSVs, 32.1 M rows through `homes_ml_to_yaf.py`, then 502 devices and 188,707 device-hours from
+  `ipfix_to_dna.py`. Broadcast and multicast peers and non-TCP/UDP/ICMP rows were skipped, as frozen.
+
+**Counts** (`m4_gate.py --counts`; windows with ≥ 3 events):
+
+| Set | Malicious windows | Benign windows |
+|---|---|---|
+| **Kitsune Mirai (gated)** | **18** | 30 |
+| Kitsune, other 8 captures (reported only) | 1–5 each | 1–10 each |
+| **Homes** | — | **175,145** (474 devices) |
+
+**Power.** The gated malware side has **18 < 20** windows, so condition 1 cannot reach PASS: by §4, recall ≥ 0.90
+gives INCONCLUSIVE, and recall < 0.90 is a FAIL. The home side has 175,145 ≥ 2,400 windows, about 7,300
+device-days, so condition 2 is decided.
+
+**Output hashes (SHA-256).**
+- `kitsune.jsonl` = `malware.jsonl`: `ba2817cb45408e2c6c2f3569048c693912c390c6b2bf46659a7250c224362c42`
+- `homes.jsonl`: `9be55bc233df2d2d7ba04b1170d731a24373019af0338d105b6570c04044149f`
+
+**Next.** One look with `m4_gate.py malware.jsonl homes.jsonl`, unchanged.
+
+## 13. Result (one look, 2026-11-23): FAIL
+
+- **Condition 1:** Mirai recall 4 / 18 = **0.222** (Wilson 95% 0.09–0.45). It fails, and is also underpowered
+  (18 < 20).
+- **Condition 2:** home false alerts **0.101** per device-day over 175,145 windows and 474 devices. It passes.
+
+S1 is closed as the L1-IoT candidate. Full output and reading: `data/m4-results.md`.
