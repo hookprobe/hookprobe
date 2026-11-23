@@ -3743,6 +3743,8 @@ fn cm5_p10_probe() {
                             let group_keys_later = cfg!(all(feature = "apmc", feature = "wpa3"));
                             if ap.serve_ready() && (ap.gtk_set || group_keys_later) {
                                 chosen_cs = ap_cs;
+                                // 802.11h spectrum management in force (never set by heqk: the firmware default) — Infineon case
+                                kprint!("   [P11-AP] spect (802.11h) = {:?} on chanspec {:#06x} (dfs={})\n", cyw43::spect_mode(), ap_cs, hal::chanspec_is_dfs(ap_cs));
                                 if hal::chanspec_is_dfs(ap_cs) {
                                     dfs_watch = Some(hal::DfsWatch::new());
                                     kprint!("   [P11-DFS] AP on DFS chanspec {:#06x}: the firmware runs the CAC (~60 s, AP silent) — watching; fallback {:#06x}\n", ap_cs, dfs_fallback_cs);
