@@ -1,0 +1,16 @@
+# HookProbe Neuro L1 (candidate, research artefact): the DNA v1 host-hour vector in fixed point + the frozen M3 S1
+# model's integer twin (docs/research/neuro/31, 35). No float, no allocation, no unsafe. Not used by the kernel;
+# no model reaches a device without a sealed gate (doc 35 M4) and a signed package (heqk D3).
+[package]
+name = "neuro-l1"
+version = "0.0.1"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

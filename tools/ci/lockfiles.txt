@@ -25,3 +25,4 @@ cargo os/build/kem-diff/nostd-check
 cargo os/neuro/el0-neuro
 cargo os/neuro/neuro-core
 cargo os/neuro/neuro-dp
+cargo os/neuro/neuro-l1
