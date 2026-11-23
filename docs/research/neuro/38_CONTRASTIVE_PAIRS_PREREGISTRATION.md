@@ -120,3 +120,17 @@ So expect some pairs to be lost to the filter. The doc 33 run kept about 86% of 
    so a template shortcut would show up there as a failure of condition 7.
 2. **One candidate.** No dose search: the pair count is fixed at 600 before any result.
 3. **Dev v8 and blind v7 share a brief.** They are different authors, with collision and canary checks between them.
+
+## Addendum: dev v8 sealed (2026-11-23), before any model has seen it
+
+- **SHA-256** `d0edb3538bc5703c2e1fbe899a91cb8c797f2d591eaf8b99d7e64374fc0f2e07` (320 cases: mal 50, sus 35, ben 45, ins 40, cor 20, inj 80, cop 25, tool 25; 37 Romanian).
+- **Seal checks** (`blind7_seal.py`): PASS. No context collision with dev v1–v2, blind v1–v6, T0 v1–v3 or the doc 33
+  thin set; 70 canaries, none found elsewhere; marker rule 0 violations. Separately, 0 collisions with the doc 38
+  pair set.
+- **Second annotator** (isolated, 80-case stratified sample, no gold): verdict 67/68, next step 67/68, tool 6/6,
+  copilot facts 2/6.
+- **Author adjudication** of the 5 disagreements: inj-056 and cop-024 changed, cop-001, cop-012 and cop-023 kept,
+  reasons in the set's README. After it: verdict 68/68, copilot facts 3/6. The remaining copilot misses are the
+  annotator's free-text answers omitting required DEVICE facts.
+- Nobody but the author has read the case content. The chain evaluates only if the file still hashes to the value
+  above.
