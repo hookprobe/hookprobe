@@ -696,6 +696,9 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         }
         "/api/devices" => json(scratch, |w| st.render_devices(limit(200, 256), w)),
         "/api/lan-access" => json(scratch, render_lan_access),
+        // HookProbe Neuro N0 (`neuro`): behaviour evidence, read-only, evidence only (operator 2026-11-23: in the MVP)
+        #[cfg(feature = "neuro")]
+        "/api/neuro" => json(scratch, |w| crate::neuro::render(w, limit(32, 64))),
         "/api/recoveries" => json(scratch, |w| crate::superv::render(w, limit(64, 64))), // autoheal harness H1
         "/api/capabilities" => json(scratch, crate::capabilities::render),
         "/api/planner/status" => json(scratch, |w| w.raw("{\"configured\":false,\"endpoint\":null,\"model\":null,\"message\":\"No AI planner is configured on this device\"}")),

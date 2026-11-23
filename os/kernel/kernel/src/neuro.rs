@@ -263,6 +263,43 @@ mod el0 {
         pub driver: u8,
         pub score_q8: u32,
         pub parts: [u16; 5],
+        /// UTC seconds this device's slot was assigned (its behavioural history starts no earlier). 0 = unknown.
+        pub dev_first_seen: u32,
+        /// UTC seconds of the last el0-neuro reset after its first load (doc 34 §3: every device it knew relearns
+        /// from here). 0 = no reset since the load.
+        pub reset_at: u32,
+    }
+
+    /// How Mission Control should present a record (research `data/n0-cold-start.md`, presentation only — no engine
+    /// or ABI change): a device's first `LEARNING_H` hours are `Learning` (0–6 h: 0.55 of hours deviant; 6–24 h tail);
+    /// for `RELEARNING_H` after a reset that the device predates it is `Relearning` (fewer flags: a sensitivity gap,
+    /// doc 34 §3); otherwise `Warm`. Learning / relearning evidence is kept but not ranked into incidents.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum DevState {
+        Learning,
+        Relearning,
+        Warm,
+    }
+    pub const LEARNING_H: u32 = 24;
+    pub const RELEARNING_H: u32 = 14 * 24;
+
+    impl Evidence {
+        fn hour_end(&self) -> u32 {
+            self.utc_hour.saturating_add(1).saturating_mul(3600)
+        }
+        /// Whole hours since the device was first seen, to the scored hour's end.
+        pub fn hours_since_first_seen(&self) -> u32 {
+            if self.dev_first_seen == 0 { 0 } else { self.hour_end().saturating_sub(self.dev_first_seen) / 3600 }
+        }
+        pub fn state(&self) -> DevState {
+            if self.dev_first_seen == 0 || self.hours_since_first_seen() < LEARNING_H {
+                DevState::Learning
+            } else if self.reset_at > self.dev_first_seen && self.hour_end().saturating_sub(self.reset_at) / 3600 < RELEARNING_H {
+                DevState::Relearning
+            } else {
+                DevState::Warm
+            }
+        }
     }
 
     pub const EVIDENCE_RING: usize = 64;
@@ -294,6 +331,12 @@ mod el0 {
         slots: [[u8; 6]; DEVICES],
         used: u64,
         last_seen: [u32; DEVICES],
+        /// UTC seconds each slot was (re)assigned to its device.
+        first_seen: [u32; DEVICES],
+        /// UTC seconds of the last server reset after the first load (0 = none); `reset_pending` = a reset happened and
+        /// waits for the next timed event to be stamped.
+        pub reset_at: u32,
+        reset_pending: bool,
         batch: [u8; IN_MAX],
         nb: usize,
         /// Devices with at least one delivered event in the open hour (the only ones a CLOSE_HOUR may report).
@@ -340,7 +383,7 @@ mod el0 {
                 TRIED = true;
                 match load() {
                     Ok(s) => {
-                        (*core::ptr::addr_of_mut!(HOST)).write(Host { srv: s, slots: [[0; 6]; DEVICES], used: 0, last_seen: [0; DEVICES], batch: [0; IN_MAX], nb: 0, fed: 0, pending: 0, hour: None, c: Counters::default(), ev: [Evidence::default(); EVIDENCE_RING], nev: 0, seen_restarts: 0, out: [0; OUT_MAX], vol: [0; DEVICES], obuf: [None; neuro_dp::PEND_N] });
+                        (*core::ptr::addr_of_mut!(HOST)).write(Host { srv: s, slots: [[0; 6]; DEVICES], used: 0, last_seen: [0; DEVICES], first_seen: [0; DEVICES], reset_at: 0, reset_pending: false, batch: [0; IN_MAX], nb: 0, fed: 0, pending: 0, hour: None, c: Counters::default(), ev: [Evidence::default(); EVIDENCE_RING], nev: 0, seen_restarts: 0, out: [0; OUT_MAX], vol: [0; DEVICES], obuf: [None; neuro_dp::PEND_N] });
                         HOST_OK = true;
                         let h = host_opt()?;
                         h.handshake();
@@ -407,6 +450,38 @@ mod el0 {
             x[0].0, avg(x[0]), us(x[0].2), x[1].0, avg(x[1]), us(x[1].2), x[2].0, avg(x[2]), us(x[2].2));
     }
 
+    /// `GET /api/neuro` (owner session, read-only): N0 behaviour evidence for Mission Control. Evidence only — never an
+    /// alert, a verdict or an action. Each record carries its device's presentation state (research
+    /// `data/n0-cold-start.md`): `learning` (first 24 h after first seen), `relearning` (14 d after an el0-neuro reset
+    /// the device predates), `warm`; only `warm` records are candidates for ranking (`rank`). The UI owner decides the
+    /// presentation.
+    pub fn render(w: &mut crate::mcstate::JsonBuf, limit: usize) {
+        use core::fmt::Write;
+        let Some(h) = host_opt() else {
+            w.raw("{\"enabled\":false,\"state\":\"off\",\"evidence\":[]}");
+            return;
+        };
+        let c = h.c;
+        let state = if !h.srv.ready() { "held_off" } else if c.events_fed == 0 { "waiting_for_clock" } else { "running" };
+        let _ = write!(w, "{{\"enabled\":true,\"tier\":\"N0\",\"kind\":\"evidence_only\",\"state\":\"{}\",\"relearning_since\":", state);
+        if h.reset_at == 0 { w.raw("null"); } else { let _ = write!(w, "{}", h.reset_at as u64 * 1000); }
+        let _ = write!(w, ",\"learning_hours\":{},\"relearning_hours\":{},\"devices_tracked\":{},\"counters\":{{\"events_fed\":{},\"events_dropped\":{},\"hours_closed\":{},\"hours_failed\":{},\"results\":{},\"deviant\":{},\"server_resets\":{},\"slot_evictions\":{}}},\"evidence\":[",
+            LEARNING_H, RELEARNING_H, h.used.count_ones(), c.events_fed, c.events_dropped, c.hours_closed, c.hours_failed, c.results, c.deviant, c.server_resets, c.slot_evictions);
+        for (i, e) in h.evidence().take(limit).enumerate() {
+            if i > 0 {
+                w.raw(",");
+            }
+            let m = e.mac;
+            let st = e.state();
+            let _ = write!(w, "{{\"mac\":\"{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\",\"hour_start\":{},\"driver\":", m[0], m[1], m[2], m[3], m[4], m[5], e.utc_hour as u64 * 3_600_000);
+            w.string(hal::neuroabi::DRIVERS.get(e.driver as usize).copied().unwrap_or("unknown"));
+            let _ = write!(w, ",\"score_q8\":{},\"parts_q8\":[{},{},{},{},{}],\"first_seen\":{},\"hours_since_first_seen\":{},\"device_state\":\"{}\",\"rank\":{}}}",
+                e.score_q8, e.parts[0], e.parts[1], e.parts[2], e.parts[3], e.parts[4], e.dev_first_seen as u64 * 1000, e.hours_since_first_seen(),
+                match st { DevState::Learning => "learning", DevState::Relearning => "relearning", DevState::Warm => "warm" }, st == DevState::Warm);
+        }
+        w.raw("]}");
+    }
+
     /// The AP loop's once-a-second tick: releases timed-out DNS queries and closes the UTC hour when it is over.
     #[cfg_attr(not(feature = "apmode"), allow(dead_code))] // the AP loop (apmode) calls it; QEMU mcserve has no AP loop
     pub fn ap_tick() {
@@ -443,10 +518,18 @@ mod el0 {
         /// The server's state is gone (reset): the open hour and the pending batch cannot be scored any more.
         fn server_lost(&mut self) {
             self.c.server_resets += 1;
+            self.reset_pending = true; // stamped with the next timed event
             self.nb = 0;
             self.fed = 0;
             self.pending = 0;
             self.vol = [0; DEVICES];
+        }
+
+        fn stamp_reset(&mut self, now_s: u32) {
+            if self.reset_pending {
+                self.reset_pending = false;
+                self.reset_at = now_s;
+            }
         }
 
         /// The slot of `mac` if it has one (never assigns).
@@ -459,9 +542,11 @@ mod el0 {
             for i in 0..DEVICES {
                 if self.used & (1u64 << i) != 0 && self.slots[i] == *mac {
                     self.last_seen[i] = now_s;
+                    self.stamp_reset(now_s);
                     return Some(i as u16);
                 }
             }
+            self.stamp_reset(now_s);
             let i = if self.used != u64::MAX {
                 (!self.used).trailing_zeros() as usize
             } else {
@@ -487,6 +572,7 @@ mod el0 {
             self.slots[i] = *mac;
             self.used |= 1u64 << i;
             self.last_seen[i] = now_s;
+            self.first_seen[i] = now_s;
             Some(i as u16)
         }
 
@@ -673,11 +759,12 @@ mod el0 {
                     let mut keep = [Evidence::default(); DEVICES];
                     let mut nk = 0;
                     let slots = self.slots;
+                    let (first, reset_at) = (self.first_seen, self.reset_at);
                     match parse_close_reply(&self.out[..n], fed, |d| {
                         res += 1;
                         if d.deviant {
                             dev += 1;
-                            keep[nk] = Evidence { mac: slots[d.dev as usize], utc_hour: h, driver: d.driver, score_q8: d.score_q8, parts: d.parts };
+                            keep[nk] = Evidence { mac: slots[d.dev as usize], utc_hour: h, driver: d.driver, score_q8: d.score_q8, parts: d.parts, dev_first_seen: first[d.dev as usize], reset_at };
                             nk += 1;
                         }
                     }) {
@@ -1130,6 +1217,28 @@ mod el0 {
         kprint!(" [P-neuro-host] {} — no clock -> dropped+counted={}; {} UTC hours closed by the hour roll ({} results, {} deviant, 0 failed={}); the burst of 400 novel peers on device 2 is a behaviour-deviation evidence record for hour 30={} (driver {} score {}/256); evidence only — no alert, no verdict, no action\n",
             if path { "PASS" } else { "FAIL" }, no_clock, closed, h.c.results - c0.results, h.c.deviant - c0.deviant, h.c.hours_failed == c0.hours_failed, novel_flagged,
             DRIVERS.get(top.driver as usize).copied().unwrap_or("?"), top.score_q8);
+        // MVP evidence API (doc 34 §3, research data/n0-cold-start.md): records know their device's state; the JSON carries it
+        let first_ok = top.dev_first_seen == (base_s + 60) as u32;
+        let hours = top.hours_since_first_seen();
+        let warm = hours == 30 && top.state() == DevState::Warm;
+        // the rule on its own: 5 h after first sight = learning; a device seen 30 d before a reset, 3 d after it =
+        // relearning; 20 d after the reset = warm; a device first seen after the reset is never "relearning"
+        let t0 = (base_s / 3600) as u32;
+        let ev = |first_h: u32, reset_h: u32, at_h: u32| Evidence { utc_hour: t0 + at_h, dev_first_seen: (t0 + first_h) * 3600, reset_at: if reset_h == 0 { 0 } else { (t0 + reset_h) * 3600 }, ..Default::default() };
+        let rule = ev(1, 0, 5).state() == DevState::Learning
+            && ev(1, 30 * 24, 33 * 24).state() == DevState::Relearning
+            && ev(1, 30 * 24, 50 * 24).state() == DevState::Warm
+            && ev(31 * 24, 30 * 24, 33 * 24).state() == DevState::Warm;
+        let mut jb = [0u8; 4096];
+        let mut w = crate::mcstate::JsonBuf::new(&mut jb);
+        render(&mut w, 8);
+        let body = core::str::from_utf8(w.bytes()).unwrap_or("");
+        let json_ok = !w.overflow && body.starts_with("{\"enabled\":true,\"tier\":\"N0\",\"kind\":\"evidence_only\"") && body.contains("\"relearning_since\":")
+            && body.contains("\"learning_hours\":24,\"relearning_hours\":336") && body.contains("\"mac\":\"02:00:00:00:00:02\"")
+            && body.contains("\"hours_since_first_seen\":30,\"device_state\":\"warm\",\"rank\":true") && body.ends_with("]}");
+        let api = first_ok && warm && rule && json_ok;
+        kprint!(" [P-neuro-api] {} — evidence carries the device's first sighting={}; hour-30 record {} h after first seen is warm={}; learning 24 h / relearning 14 d after a reset the device predates / warm (research n0-cold-start)={}; GET /api/neuro JSON ({} B) evidence_only with relearning_since, per-record device_state + rank={}\n",
+            if api { "PASS" } else { "FAIL" }, first_ok, hours, warm, rule, w.len, json_ok);
 
         // backpressure: a held-off server (a counted fault streak past the grace) drops events, never blocks
         let saved2 = crate::superv::swap(hal::superv::Journal::new()); // the drill's entries are not this boot's
@@ -1148,9 +1257,9 @@ mod el0 {
         let _ = crate::superv::swap(saved2);
 
         let dpok = dp_selftest(h);
-        let pass = abi && gold && fault && validate && path && bp && dpok;
-        kprint!(" [P-neuro] {} — el0-neuro hosted by heqk (QEMU): abi={} golden={} fault={} validate={} host={} backpressure={} data-plane={} (CM5 metal: not run)\n",
-            if pass { "PASS" } else { "FAIL" }, abi, gold, fault, validate, path, bp, dpok);
+        let pass = abi && gold && fault && validate && path && api && bp && dpok;
+        kprint!(" [P-neuro] {} — el0-neuro hosted by heqk (QEMU): abi={} golden={} fault={} validate={} host={} api={} backpressure={} data-plane={} (CM5 metal: not run)\n",
+            if pass { "PASS" } else { "FAIL" }, abi, gold, fault, validate, path, api, bp, dpok);
         pass
     }
 }
