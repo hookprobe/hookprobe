@@ -71,9 +71,25 @@ pub fn v6_len() -> usize {
 pub fn dom_len() -> usize {
     unsafe { DOMN }
 }
-/// Set the wall clock used for expiry (call when SNTP syncs).
+/// The counter reading when NOW_UNIX was set (pre-soak finding 6: the expiry clock used to stand still between
+/// SNTP replies; it now advances with the hardware counter from the last accepted time).
+static mut NOW_TICKS: u64 = 0;
+/// Set the wall clock used for expiry (call when the time source is ACCEPTED: board RTC at boot, an SNTP step the
+/// Mission Control clock took).
 pub fn set_now_unix(t: u32) {
-    unsafe { NOW_UNIX = t };
+    unsafe {
+        NOW_UNIX = t;
+        NOW_TICKS = crate::clock::ticks();
+    }
+}
+/// The expiry clock now: the last accepted time plus the counter time since (0 = never set).
+fn now_unix() -> u32 {
+    let (t, at) = unsafe { (NOW_UNIX, NOW_TICKS) };
+    if t == 0 {
+        return 0;
+    }
+    let el = crate::clock::ticks().wrapping_sub(at) / crate::clock::freq().max(1);
+    t.saturating_add(el.min(u32::MAX as u64) as u32)
 }
 
 fn fnv(name: &[u8]) -> u64 {
@@ -86,7 +102,7 @@ fn fnv(name: &[u8]) -> u64 {
 }
 
 fn live(exp: u32) -> bool {
-    let now = unsafe { NOW_UNIX };
+    let now = now_unix();
     exp == 0 || now == 0 || now < exp
 }
 

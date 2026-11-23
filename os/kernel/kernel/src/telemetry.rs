@@ -26,6 +26,10 @@ static COUNTS: [AtomicU32; N] = [
     AtomicU32::new(0),
 ];
 static SCORE: AtomicU32 = AtomicU32::new(0);
+/// The same lifetime score in 64 bits (pre-soak finding 5): `SCORE` saturates at u32::MAX (about 4×10⁸ severity
+/// points), after which its delta — what the QSecBit risk is computed from — is always 0 and risk reads "all clear".
+/// This one never saturates in practice; the risk window reads it.
+static SCORE_WIDE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 fn weight(e: Event) -> u32 {
     match e {
@@ -44,6 +48,7 @@ pub fn emit(e: Event) {
     let _ = SCORE.try_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
         Some(s.saturating_add(weight(e)))
     });
+    SCORE_WIDE.fetch_add(weight(e) as u64, Ordering::Relaxed);
 }
 
 /// DET-10: record an event for the COUNT/telemetry WITHOUT adding to the QSecBit
@@ -66,6 +71,11 @@ pub fn score() -> u32 {
     SCORE.load(Ordering::Relaxed)
 }
 
+/// The lifetime score in 64 bits (never saturates in practice) — for the risk window (`sample_qsecbit`).
+pub fn score_wide() -> u64 {
+    SCORE_WIDE.load(Ordering::Relaxed)
+}
+
 // --- P8: live QSecBit scoring from the detection plane -----------------------
 // A signed BPF rule firing on real traffic is a first-class threat signal. Each
 // hit adds its rule's SEVERITY (not a flat weight) to the score, and the per-rule
@@ -79,6 +89,7 @@ pub fn emit_rule_hit(severity: u32) {
     let _ = SCORE.try_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
         Some(s.saturating_add(severity))
     });
+    SCORE_WIDE.fetch_add(severity as u64, Ordering::Relaxed);
 }
 
 /// Total signed-rule hits observed on live traffic.
