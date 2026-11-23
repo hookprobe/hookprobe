@@ -2125,6 +2125,59 @@
    "notes": "The official page (tic.itefi.csic.es, a CNAME to www.isi.csic.es) timed out from this host, so I could not read licence terms. The Kaggle mirror ispangler/csic-2010-web-application-attacks lists its licence as 'Data files © Original Authors', meaning no grant."
   },
   {
+   "id": "ctid-mappings-explorer",
+   "name": "CTID Mappings Explorer (incl. KEV CVE-to-ATT&CK mappings)",
+   "organisation": "MITRE Center for Threat-Informed Defense (CTID)",
+   "country": "US",
+   "geographic_coverage": "global",
+   "source_url": "https://github.com/center-for-threat-informed-defense/mappings-explorer",
+   "download_url": "https://github.com/center-for-threat-informed-defense/mappings-explorer/tree/main/mappings/kev",
+   "api_endpoint": null,
+   "description": "Curated mappings of security capabilities and vulnerabilities to ATT&CK techniques. The KEV set maps CISA KEV CVEs to ATT&CK (exploitation technique, primary and secondary impact) as JSON per ATT&CK version and domain.",
+   "category": "taxonomy",
+   "subcategories": [
+    "cve_to_attack",
+    "kev",
+    "adversary_techniques"
+   ],
+   "data_format": [
+    "json"
+   ],
+   "machine_readable": true,
+   "records": "KEV mappings in the repo tree 2026-11-23: kev-07.28.2025 / ATT&CK 16.1: enterprise 1,210,128 bytes, mobile 47,719; kev-02.13.2025 / ATT&CK 15.1: enterprise 926,647, mobile 11,123. Row counts not read.",
+   "collection_period": null,
+   "publication_date": null,
+   "last_update": "2026-11-18 (repo push)",
+   "update_frequency": "irregular (versioned releases)",
+   "labels_available": true,
+   "label_quality": "Hand-curated by CTID analysts; covers KEV entries up to the set's date only.",
+   "known_limitations": "Newest KEV mapping set is kev-07.28.2025 (ATT&CK 16.1), so later KEV entries are unmapped; the CVE->CWE->CAPEC->ATT&CK chain covers the rest (doc 39). Predecessor attack_to_cve repo is archived.",
+   "license_id": "apache-2.0",
+   "license_class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "yes",
+   "redistribution": "yes",
+   "attribution": "Apache-2.0: keep the licence and the README notice ('© 2024 MITRE. Approved for public release. Document number(s) CT0104.'). ATT&CK names inside the mappings also carry mitre-attack-stix's attribution.",
+   "personal_data": "none",
+   "sensitivity": "low",
+   "access": "public_download",
+   "collaboration_route": null,
+   "recommended_use": "Doc 39 entry-path graph: where CTID maps a KEV CVE directly, its mapping wins over the CWE->CAPEC->ATT&CK chain.",
+   "collections": [
+    "attack_intelligence"
+   ],
+   "priority": 4,
+   "acquisition": null,
+   "verified_on": "2026-11-23",
+   "verification_status": "verified",
+   "evidence": [
+    "https://api.github.com/repos/center-for-threat-informed-defense/mappings-explorer",
+    "https://github.com/center-for-threat-informed-defense/mappings-explorer/blob/main/LICENSE.txt",
+    "https://github.com/center-for-threat-informed-defense/mappings-explorer/blob/main/README.md"
+   ],
+   "notes": "Read 2026-11-23 via the GitHub API, nothing downloaded: repo licence Apache-2.0 (LICENSE.txt is the Apache 2.0 text); the README Notice repeats the Apache grant under '© 2024 MITRE'. The README line 'The mappings data can be used internally inside your organization' is about mappings users make with the Mappings Editor, not a limit on CTID's published data. The data files sit in the Apache-licensed repo with no separate data licence. The older center-for-threat-informed-defense/attack_to_cve is Apache-2.0 too and archived."
+  },
+  {
    "id": "ctu-13",
    "name": "CTU-13 botnet dataset",
    "organisation": "Stratosphere Laboratory, Czech Technical University in Prague",
@@ -6992,13 +7045,14 @@
    ],
    "priority": 3,
    "acquisition": null,
-   "verified_on": "2026-11-21",
-   "verification_status": "partially_verified",
+   "verified_on": "2026-11-23",
+   "verification_status": "verified",
    "evidence": [
     "https://github.com/d3fend/d3fend-ontology",
-    "https://api.github.com/repos/d3fend/d3fend-ontology"
+    "https://api.github.com/repos/d3fend/d3fend-ontology",
+    "https://github.com/d3fend/d3fend-ontology/blob/master/LICENSE"
    ],
-   "notes": "GitHub licence detection MIT; LICENSE text and d3fend.mitre.org site terms not read."
+   "notes": "GitHub licence detection MIT; LICENSE text and d3fend.mitre.org site terms not read. 2026-11-23: LICENSE read via the GitHub API on d3fend/d3fend-ontology: MIT License, 'Copyright (c) 2022 The MITRE Corporation'. Ontology exports at d3fend.mitre.org/ontologies/: d3fend.json 4,833,645 bytes, d3fend.owl 6,728,377 (HTTP Content-Length). The d3fend.mitre.org site terms page was not read."
   },
   {
    "id": "mitre-emb3d",
