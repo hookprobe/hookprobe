@@ -18,6 +18,8 @@ Labels (--labels, optional): a CSV with one row per frame of the pcap, in frame 
 or non-zero (attack); a header row is allowed. Every frame counts for alignment, parsed or not. A device-hour's
 "attack_pkts_sent" is the number of attack-labelled IP frames (IPv4/IPv6, any protocol) that device SENT in that hour. The tool stops if the row count differs from
 the frame count: the alignment is then unknown, and nothing is scored.
+--labels infected:IP[,IP...] instead labels by HOST, for captures whose documentation names the infected device(s)
+(Stratosphere MCFP): a frame is an attack frame if its IP source is one of those addresses.
 
 Connection rule: --rule doc20 (the kernel's N0 rule; the M4 default) or zeek (the frozen M3 cut), as in
 unsw_to_dna_conn.py.
@@ -85,6 +87,11 @@ def one(args):
     TCP_IDLE, UDP_IDLE, SYN_ALWAYS = RULES[rule]
     if not m.LOOK:
         m.load_lookup(lookup_dir)
+    inf = None
+    if labels_path and labels_path.startswith("infected:"):
+        import ipaddress
+        inf = {ipaddress.ip_address(x.strip()).packed for x in labels_path[len("infected:"):].split(",") if x.strip()}
+        labels_path = None
     lab = read_labels(labels_path) if labels_path else None
     cap = os.path.basename(path).split(".")[0]
     name = "%s|%s" % (cap, mac_str(mac))
@@ -117,7 +124,7 @@ def one(args):
         a.add({"events": evs, "remote_context": ctx, "baseline": {"pairs": [list(p) for p in base]}, "labels": {"benign": len(evs)}})
         prev_pairs.append(pairs)
         v = a.vector(); v["hour_index"] = hr; v["device_mac"] = mac_str(mac)
-        if lab is not None:
+        if lab is not None or inf is not None:
             v["attack_pkts_sent"] = atk[hr]
         out.append(v)
 
@@ -138,7 +145,7 @@ def one(args):
             if p is None:
                 continue
             smac, dmac, ver, src, dst, proto, sp, dp, flags, payload, ip_len = p
-            if lab is not None and smac == mac and idx < len(lab) and lab[idx]:
+            if smac == mac and ((lab is not None and idx < len(lab) and lab[idx]) or (inf is not None and bytes(src) in inf)):
                 atk[int(ts // 3600)] += 1
             if proto not in (1, 6, 17) or (smac != mac and dmac != mac):
                 continue
