@@ -1,9 +1,13 @@
 {
  "schema": "heqk.sealed/1",
- "note": "Holdouts the windows export refuses unless `--unseal <source_id>` is given; every unseal is written to the audit log. A source may be sealed by name before it is in the registry: no data, no hashes, never opened.",
+ "note": "Holdouts the windows export refuses unless `--unseal <source_id>` is given; every unseal is written to the audit log. A source may be sealed by name before it is in the registry: no data, no hashes, never opened. `unsealed` lists each approved one-look export (date, reason, build, manifest SHA-256); a `status` of spent means the split has been looked at and can no longer serve as a fresh holdout.",
  "sealed": [
-  {"source_id": "iot-23", "scope": "split:test@neuro-sha256-mod3", "reason": "Neuro P2 test side (spent); never train on it", "sealed_on": "2026-11-20"},
+  {"source_id": "iot-23", "scope": "split:test@neuro-sha256-mod3", "reason": "Neuro P2 test side (spent); never train on it", "sealed_on": "2026-11-20",
+   "unsealed": [{"on": "2026-11-22", "reason": "M3 one-look confirmation (doc 31)", "purpose": "evaluation", "approved_by": "operator", "build": "windows-f1677e2e31b2", "manifest_sha256": "5a26578dbbb6546deb2cda7b86a366ce4dfa264dbefae5e61c9671463f394226", "code": "d9f0aaaf + cb58dc7b (plain-file size cap only)"}],
+   "status": "spent 2026-11-22: looked at once in P2 and once by M3; stays sealed, so any later export still needs --unseal and is audited; never train on it"},
   {"source_id": "deakin-iot-traffic-v2", "name": "Deakin IoT Traffic v2 (Figshare 28013234, v2)", "scope": "*", "reason": "Neuro's fresh confirmation set for a pre-registered temporal-engine test (docs/research/neuro/18, 19); deliberately unopened", "sealed_on": "2026-11-20"},
-  {"source_id": "ctu-13", "scope": "split:test@neuro-sha256-mod3", "reason": "Neuro CTU-13 test split (scenarios 2,3,4,6,7,9,11,12,13 by mirror name CTU-13.Dataset-<capture>), frozen with the Neuro session before any window was exported; dev = 1,5,8; 10 missing (would be test)", "sealed_on": "2026-11-21"}
+  {"source_id": "ctu-13", "scope": "split:test@neuro-sha256-mod3", "reason": "Neuro CTU-13 test split (scenarios 2,3,4,6,7,9,11,12,13 by mirror name CTU-13.Dataset-<capture>), frozen with the Neuro session before any window was exported; dev = 1,5,8; 10 missing (would be test)", "sealed_on": "2026-11-21",
+   "unsealed": [{"on": "2026-11-22", "reason": "M3 one-look confirmation (doc 31)", "purpose": "evaluation", "approved_by": "operator", "build": "windows-3a93dfd92bed", "manifest_sha256": "c3d04c2ae56588cfa4ebbbbfe317f7acc7bd76807bc52e278abd29c20f77dd43", "code": "d9f0aaaf"}],
+   "status": "spent 2026-11-22: stays sealed, so any later export still needs --unseal and is audited; never train on it"}
  ]
 }

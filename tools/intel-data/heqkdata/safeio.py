@@ -95,6 +95,8 @@ def open_text(path, compression=None, max_bytes=MAX_TOTAL):
     raw = open(path, "rb")
     if compression == "gzip" or (compression is None and path.endswith(".gz")):
         raw = gzip.GzipFile(fileobj=raw)
+    else:  # a plain file cannot inflate: its own size bounds it (IoT-23 39-1 is 10.9 GB, over 8 GiB)
+        max_bytes = max(max_bytes, os.fstat(raw.fileno()).st_size)
     return io.TextIOWrapper(_Capped(raw, max_bytes), encoding="utf-8", errors="replace", newline="")
 
 
