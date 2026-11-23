@@ -2192,6 +2192,21 @@
    "verified_on": "2026-11-18"
   },
   {
+   "id": "unsw-iotanalytics-mit0-terms",
+   "name": "MIT-0 block on the UNSW IoT Analytics dataset pages",
+   "spdx": "MIT-0",
+   "url": "https://iotanalytics.unsw.edu.au/homedataset.html",
+   "class": "RESEARCH",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "derivatives": "unclear",
+   "share_alike": false,
+   "attribution_required": false,
+   "notes": "The page's 'License' section is the MIT-0 text ('SPDX-License-Identifier: MIT-0', Copyright 2023 IoT Traffic Analytics Research Group, UNSW Sydney), which grants rights over 'this software and associated documentation files (the \"Software\")'. It is the only licence on the dataset page, but it is worded for software, and the page says the data 'was collected and supplied by KDDI Research Inc., Japan', so whether UNSW could license the data, and whether MIT-0 covers it, are unresolved. Everything is set to unclear: the gate then allows evaluation only (operator decision 2026-11-22), never training or redistribution, until UNSW/KDDI confirm in writing. Classed RESEARCH, not OPEN: the open text is not a clear grant over the data (same treatment as CIC's permissive FAQ).",
+   "verified_on": "2026-11-23"
+  },
+  {
    "id": "unsw-nb15-terms",
    "name": "UNSW custom terms: 'Free use of the UNSW-NB15 dataset for academic research purposes is hereby granted in perpetuity. Use for commercial purposes should be agreed by the authors.'",
    "spdx": null,

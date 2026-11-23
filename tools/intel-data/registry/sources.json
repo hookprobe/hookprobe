@@ -10276,6 +10276,110 @@
    "notes": "Active (last push 2026-11-17). Unstructured text; GPL-3.0 applied to data is unusual - shipping in proprietary images triggers GPL obligations (compatible with AGPL edition). Older pan-unit42/iocs repo also referenced by MISP feeds (licence not checked)."
   },
   {
+   "api_endpoint": "https://datadryad.org/api/v2/datasets/doi%3A10.5061%2Fdryad.7h44j1098",
+   "category": "benign_baseline",
+   "machine_readable": true,
+   "update_frequency": "static",
+   "labels_available": false,
+   "collaboration_route": null,
+   "collections": [
+    "network_intelligence"
+   ],
+   "priority": 3,
+   "acquisition": null,
+   "verified_on": "2026-11-23",
+   "verification_status": "verified",
+   "id": "unsw-data2025-iot-flows",
+   "name": "DATA2025v1/v2 IoT Custom Flow datasets and encoder models (UNSW, Dryad)",
+   "organisation": "UNSW Sydney (Sivanathan, Habibi Gharakheili)",
+   "country": "AU",
+   "geographic_coverage": "v1: university laboratory (18 IoT device types); v2: a separate deployment environment (10 overlapping device types)",
+   "source_url": "https://datadryad.org/dataset/doi:10.5061/dryad.7h44j1098",
+   "download_url": null,
+   "description": "About 16.5 million Custom Flow records from physical IoT devices in live networks during 2025, in two datasets (DATA2025v1, DATA2025v2), plus five pretrained encoder models and the processing pipeline. Companion of the DATA2016 release (doi:10.5061/dryad.6q573n6c1), which documents the Custom Flow format.",
+   "subcategories": [
+    "benign",
+    "device_behaviour"
+   ],
+   "data_format": [
+    "Custom Flow records",
+    "models",
+    "code"
+   ],
+   "records": "~16.5 million Custom Flow records (Dryad abstract); storageSize 22,522,812,834 bytes (Dryad API, version 4)",
+   "collection_period": "2025",
+   "publication_date": "2026-07-13 (Dryad API)",
+   "last_update": "2026-07-13 (Dryad version 4)",
+   "label_quality": "Device-type labels for identification; no attack labels stated.",
+   "known_limitations": "v1 is a university lab from the same group as unsw-iotraffic (both UNSW halves are spent by Neuro), so v1 may share that testbed: not independent. v2 is a different deployment but is not stated to be a home. Custom Flow format, not PCAP.",
+   "license_id": "cc0-1.0",
+   "license_class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "yes",
+   "redistribution": "yes",
+   "attribution": "Sivanathan, Habibi Gharakheili. Dryad doi:10.5061/dryad.7h44j1098 (CC0 does not require it).",
+   "personal_data": "unknown",
+   "sensitivity": "medium",
+   "access": "public_download",
+   "recommended_use": "v2 only as a candidate unseen-network benign set; check v2 environment and overlap with unsw-iotraffic before use.",
+   "evidence": [
+    "https://datadryad.org/api/v2/datasets/doi%3A10.5061%2Fdryad.7h44j1098",
+    "https://creativecommons.org/publicdomain/zero/1.0/"
+   ],
+   "notes": "Dryad API read 2026-11-23, no download: license https://spdx.org/licenses/CC0-1.0.html, authors Sivanathan and Habibi Gharakheili (UNSW Sydney). personal_data unknown: v2 mentions 'background traffic, and user activity patterns'."
+  },
+  {
+   "api_endpoint": null,
+   "category": "benign_baseline",
+   "machine_readable": true,
+   "update_frequency": "static",
+   "labels_available": false,
+   "collaboration_route": null,
+   "collections": [
+    "network_intelligence"
+   ],
+   "priority": 3,
+   "acquisition": null,
+   "verified_on": "2026-11-23",
+   "verification_status": "verified",
+   "id": "unsw-iot-homes-ipfix",
+   "name": "UNSW IPFIX ML Instances (12 home networks, KDDI Research)",
+   "organisation": "UNSW Sydney IoT Traffic Analytics Research Group; data collected and supplied by KDDI Research Inc., Japan",
+   "country": "AU",
+   "geographic_coverage": "12 home networks (location not stated on the page)",
+   "source_url": "https://iotanalytics.unsw.edu.au/homedataset.html",
+   "download_url": "https://iotanalytics.unsw.edu.au/homedataset.html",
+   "description": "Per-home CSVs of IPFIX (YAF) flow instances, local and remote flows of the devices, from 12 home networks, collected for an IEEE IoT Journal 2023 paper; per-home download links and All.zip; a device/MAC address list is linked from the page.",
+   "subcategories": [
+    "benign",
+    "device_behaviour",
+    "home_network"
+   ],
+   "data_format": [
+    "csv (IPFIX/YAF flow instances)"
+   ],
+   "records": null,
+   "collection_period": "not stated on the page",
+   "publication_date": "2023 (paper year on the page)",
+   "last_update": null,
+   "label_quality": "No attack labels; whether every home is benign-only is not stated on the page.",
+   "known_limitations": "Flow instances, not PCAPs: a DNA-style converter would work from IPFIX fields. Size, dates and device counts not on the page. Same research group as unsw-iotraffic (different networks: real homes supplied by KDDI).",
+   "license_id": "unsw-iotanalytics-mit0-terms",
+   "license_class": "RESEARCH",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "attribution": "Cite the IEEE IoT Journal 2023 paper linked from the page ('Cite our data').",
+   "personal_data": "unknown",
+   "sensitivity": "medium",
+   "access": "public_download",
+   "recommended_use": "Candidate evaluation-only benign home set (Neuro M4 gap). Real homes, so seal by name before any download if chosen as a holdout.",
+   "evidence": [
+    "https://iotanalytics.unsw.edu.au/homedataset.html"
+   ],
+   "notes": "Page read 2026-11-23, no download. Licence: MIT-0 text worded for 'the Software'; acknowledgement says KDDI Research collected and supplied the data (see the licence entry). personal_data unknown: real households, and the page publishes a device/MAC list; flows include remote endpoints. Not HookProbe telemetry."
+  },
+  {
    "id": "unsw-iotraffic",
    "name": "UNSW-IoTraffic (UNSW IoT traffic data with packets, flows, and protocols)",
    "organisation": "UNSW Sydney (Wannigama, Sivanathan, Habibi Gharakheili)",
