@@ -881,6 +881,14 @@ pub fn wifi_inject(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resu
     if kind == "neuro-fault" {
         return crate::neuro::bench_fault();
     }
+    // `neuro-slots-N[-BASE]`: N synthetic devices (MAC range from BASE) through the Neuro host (slot pressure)
+    #[cfg(feature = "neuro")]
+    if let Some(rest) = kind.strip_prefix("neuro-slots-") {
+        let mut it = rest.split('-');
+        let n = it.next().and_then(|v| v.parse::<u16>().ok()).filter(|n| (1..=128).contains(n)).ok_or("neuro-slots-N[-BASE]: 1 <= N <= 128")?;
+        let base = it.next().map_or(Some(0), |v| v.parse::<u16>().ok()).ok_or("neuro-slots-N[-BASE]: BASE is a number")?;
+        return crate::neuro::bench_slots(n, base);
+    }
     // Pre-soak item 2 (bench only): `evlog-burst-N` pushes N synthetic detections into the event ring in one go
     // (rule 199, sources 192.0.2.x TEST-NET-1) so the evidence log's paced full-batch write + `dropped` accounting
     // is exercised on the real eMMC path. N <= 60 (the event ring holds 64).

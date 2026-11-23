@@ -433,6 +433,32 @@ mod el0 {
         }
     }
 
+    /// BENCH ONLY (`wifi-inject` + `neuro`, `POST /api/bench/wifi-inject kind=neuro-slots-N`, owner re-auth): feed
+    /// three flow events for each of N synthetic devices (MACs 02:4e:00:00:<base+i>, locally administered) through
+    /// the real host path at the current UTC time — slot pressure on metal (status register: "64-device slot
+    /// pressure"). With every slot fed in the open hour, devices past 64 are DROPPED and counted (a device with an
+    /// open hour is never evicted); after the hour closes, new devices evict the least recently seen (RESET_DEV).
+    /// `base` picks the MAC range so a second call can use fresh devices.
+    #[cfg(feature = "wifi-inject")]
+    pub fn bench_slots(n: u16, base: u16) -> Result<&'static str, &'static str> {
+        let Some(h) = host() else { return Err("el0-neuro is not loaded") };
+        let Some(us) = utc_us() else { return Err("the wall clock is not synced yet") };
+        let t = us / 1_000_000;
+        let (c0, used0) = (h.c, h.used.count_ones());
+        for i in 0..n {
+            let d = base.wrapping_add(i);
+            let mac = [0x02, 0x4e, 0, 0, (d >> 8) as u8, d as u8];
+            for k in 0..3u32 {
+                h.observe_flow(&mac, Some(t), 0x4e00_0000 | (d as u32) << 4 | k, 1_500, 1);
+            }
+        }
+        h.flush();
+        let c = h.c;
+        kprint!(" [NEURO] bench slots: {} synthetic devices from {:#06x}: tracked {} -> {} (of {}), events fed +{} dropped +{}, evictions +{}, resets +{}\n",
+            n, base, used0, h.used.count_ones(), DEVICES, c.events_fed - c0.events_fed, c.events_dropped - c0.events_dropped, c.slot_evictions - c0.slot_evictions, c.server_resets - c0.server_resets);
+        Ok("neuro-slots pushed")
+    }
+
     /// One heartbeat line (every minute on the AP): host + server counters, so a metal run shows what Neuro did.
     #[cfg_attr(not(feature = "apmode"), allow(dead_code))] // the AP loop (apmode) calls it; QEMU mcserve has no AP loop
     pub fn beat_line() {
