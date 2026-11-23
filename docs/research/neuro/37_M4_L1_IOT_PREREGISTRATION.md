@@ -178,3 +178,23 @@ other categories are reported only. `pcap_to_dna.py` is unchanged: `--labels inf
 
 **Limit added.** CICIoT2023's Mirai captures are volumetric floods from lab devices. S1 learnt Mirai from IoT-23's
 scanning and C2. Recall per source stays reported, so the reader can see which lab drives the pooled number.
+
+## 10. Amendment C (2026-11-23, before any CICIoT2023 file is downloaded): which Mirai files
+
+**Why.** The CICIoT2023 PCAP folder is about 500 GB, and each Mirai variant is split by tcpdump into files of at most
+2 GB: `Mirai-greeth_flood` holds the base file plus `…1` to `…28`. Downloads are one click each, in the operator's
+registered browser session. §9.2's "listing order until 100 GB" would take one variant and skip the others. So it
+is replaced, before any file or count exists, by:
+
+**Rule.** For each of the three Mirai variants (`Mirai-greeth_flood`, `Mirai-greip_flood`, `Mirai-udpplain`), take
+the base file plus files `1` to `15` in numeric order: at most 16 files per variant, and at most 96 GB in the 2 GB
+worst case. A variant with fewer files contributes all of them.
+
+**If a download stops early.** The subset is whatever was complete, in that numeric order, when the operator
+stopped. It is recorded with the hashes before intake. No file is added after intake counts exist.
+
+**Unchanged:** §9.3's Raspberry Pi MAC rule (labels), gating on the Mirai category, the bars and minimums, one look.
+
+**Power note, stated now.** Device-hour windows depend on how long each capture runs, not on its size. A 2 GB file
+of flood traffic may span minutes, so more files may add few new hours. Whether the gated minimum of 20 is reached
+is known only at intake; if not, the verdict is INCONCLUSIVE (§4).
