@@ -12,7 +12,8 @@ Inputs (both produced by the pinned converters; see doc 37):
 Rules (all fixed in doc 37 before either set is acquired):
   - a window is scored only with >= 3 events (bench.load's rule, as M3);
   - malicious window: attack_pkts_sent >= 1. GATED recall pools (a) the Kitsune captures whose name contains "mirai"
-    (the infected IoT devices) and (b) every MCFP capture (each is an infected IoT device). The other Kitsune captures'
+    (the infected IoT devices), (b) every MCFP capture (each is an infected IoT device) and (c) the CICIoT2023 captures
+    whose name contains "mirai" (doc 37 amendment B; dataset "ciciot2023", labels by the attacking devices' addresses). The other Kitsune captures'
     attacker hosts are reported, not gated (an attacking laptop is out of L1-IoT's scope). Recall is also reported per
     source, not gated;
   - benign windows in the malware captures (attack_pkts_sent == 0) are reported, not gated (a lab, not a home);
@@ -30,11 +31,13 @@ RECALL_MIN, FA_MAX, N_MAL_MIN, N_HOME_MIN = 0.90, 0.14, 20, 2400
 
 
 def source(r):
-    """-> 'kitsune-mirai', 'mcfp', or None (reported only)."""
+    """-> 'kitsune-mirai', 'mcfp', 'ciciot2023-mirai' (doc 37 amendment B), or None (reported only)."""
     if r.get("dataset") == "mcfp":
         return "mcfp"
     if r.get("dataset") == "kitsune" and "mirai" in r["capture"].lower():
         return "kitsune-mirai"
+    if r.get("dataset") == "ciciot2023" and "mirai" in r["capture"].lower():
+        return "ciciot2023-mirai"
     return None
 
 
