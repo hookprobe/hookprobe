@@ -35,6 +35,9 @@ RULES = [
         r"error\[(?:rejected|unlicensed|unmaintained|banned|wildcard|source-not-allowed|unsound|notice)\]",
         r"failed to satisfy license requirements"]),
     ("ci_wiring", "human", "g0", [r"FAIL: W[1-7] "]),
+    # ADR 0067 D11: a heqk driver file without a row in docs/security/driver-provenance.md (#1495). A person must
+    # read the file's cited sources and assign its class, so this is a decision, not an autofix.
+    ("driver_provenance", "human", "g0", [r"provenance: FAIL driver files with no row"]),
     ("shell_lint", "autofix", "g0", [r"\bSC\d{4} \((?:error|warning)\)"]),
     ("phase_downgrade", "human", "g1", [r"RATCHET VIOLATION: phase \S+ (?:was downgraded|.*GONE)"]),
     ("clippy_regression", "autofix", "g1", [r"RATCHET VIOLATION(?: \([^)]*\))?: [\w@.-]+: ", r"ERROR-LEVEL: "]),

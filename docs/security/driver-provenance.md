@@ -20,7 +20,7 @@ Classes (the worst class in a file wins: D > C > B > A):
 - **C** — cites GPL-2.0 code only as a behaviour or register-value reference ("as Linux does", "Linux uses X").
 - **D** — says it was transcribed, ported, mirrored or copied from GPL-2.0 code, or quotes its lines.
 
-Scope: every `.rs` file in `os/kernel/arch-aarch64/src` and `os/kernel/hboot/src` (57 files), plus the
+Scope: every `.rs` file in `os/kernel/arch-aarch64/src` and `os/kernel/hboot/src` (59 files; `fwcfg.rs` and `virtio_rng.rs` added 2026-11-23), plus the
 files in `hal/src`, `sae/src`, `el0-wifi/src`, `el0-wpa/src` and `kernel/src` that cite an external code
 base (14 files). Paths are relative to `os/kernel`. "Linux" in a comment that means HookProbe's own
 legacy Linux tier (parity notes, rule numbers, `legacy/linux-tier` ports) is not provenance and is not listed.
@@ -100,6 +100,7 @@ Citations give our file:line. Quotes are the comment's own words.
 | `arch-aarch64/src/dhcpd.rs` | DHCP server lease table, client fingerprint | none ("Linux" at :212–:231 is a fingerprint label) | no external source cited | — | A |
 | `arch-aarch64/src/emmc.rs` | eMMC block device on the second BCM2712 SDHCI | SD/eMMC specification (:14); own `sdhci.rs` (:15) | "structured off the SD/eMMC spec + the metal-proven SDHCI primitives" (:14) | — | A |
 | `arch-aarch64/src/exception.rs` | Unexpected-fault handler | none | no external source cited | — | A |
+| `arch-aarch64/src/fwcfg.rs` | QEMU fw_cfg reader (per-VM KEK), QEMU integration-test profile only (`qemu-itest`) | QEMU `docs/specs/fw_cfg.rst` (:6), an interface specification | specification facts (selector/data registers, file-directory layout) | — | A |
 | `arch-aarch64/src/gem.rs` | RP1 Cadence GEM Ethernet (MAC, PHY, rings, MSI-X, PCIe windows) | `drivers/net/ethernet/cadence/macb_main.c` (:6, :128, :137, :146, :243, :265, :291, :331, :440, :900, :1053, :1062, :1064, :1089, :1171, :1967, :1992); `drivers/mfd/rp1.c` (:1363, :1530); `pcie-brcmstb.c` (:185, :210, :224, :1403, :1464, :1533, :1656); `irq-bcm2712-mip.c` (:1653, :1668); `broadcom.c` (:586), `bcm-phy-lib.h` (:601), `bcm54xx_config_clock_delay()` (:569); U-Boot macb (:137); `bcm2712.dtsi`, `rp1.dtsi` (:221, :803, :1527); RP1 datasheet (:975, :1598, :1770, :1838, :1873) | "mirroring Linux drivers/mfd/rp1.c EXACTLY (not a guess)" (:1363); "Match the Linux reference EXACTLY" (:1559); "Grounded in the reference driver for this exact controller" (:1052); "exactly as Linux bcm54xx_config_clock_delay()" (:569); "Register map + descriptor format confirmed vs the Linux `macb` driver" (:5). Upstream source lines are quoted in comments at :245–:246, :1055–:1058, :1994–:1999 | `macb_main.c` GPL-2.0-only; `rp1.c` GPL-2.0 (raspberrypi/linux); `pcie-brcmstb.c` GPL-2.0+; `irq-bcm2712-mip.c` GPL-2.0-only; `broadcom.c` GPL-2.0+; `bcm-phy-lib.h` GPL-2.0; U-Boot `macb.c` GPL-2.0+; DT (GPL-2.0 OR MIT) | D |
 | `arch-aarch64/src/gic.rs` | GICv2 | Arm GIC register layout | register facts | — | A |
 | `arch-aarch64/src/gic_v3.rs` | GICv3 (cloud tier) | Arm GICv3 register layout; measured OCI A1 | register facts | — | A |
@@ -134,6 +135,7 @@ Citations give our file:line. Quotes are the comment's own words.
 | `arch-aarch64/src/virtio.rs` | virtio-net one-shot (QEMU / cloud) | virtio specification | specification facts | — | A |
 | `arch-aarch64/src/virtio_blk.rs` | virtio-blk | virtio specification | specification facts | — | A |
 | `arch-aarch64/src/virtio_net.rs` | virtio-net, persistent | virtio specification | specification facts | — | A |
+| `arch-aarch64/src/virtio_rng.rs` | virtio-rng entropy leaf, QEMU integration-test profile only (`qemu-itest`), fail-closed | virtio specification; NIST SP 800-90B repetition-count idea (:11) | specification facts | — | A |
 | `arch-aarch64/src/virtio_transport.rs` | virtio-mmio v2 / virtio-pci modern transport | virtio 1.x specification | specification facts | — | A |
 | `arch-aarch64/src/wan6eth.rs` | IPv6 on an Ethernet WAN | RFC 4861, RFC 4443 (:5) | standards | — | A |
 | `arch-aarch64/src/wanparse.rs` | WAN control parser dispatch (kernel / EL0) | none | no external source cited | — | A |

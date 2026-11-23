@@ -48,6 +48,10 @@ REAL = {
                        "heqk QEMU gate\tRun\t2026-11-22T18:30:01.1Z npm error ERESOLVE could not resolve\n"
                        "heqk QEMU gate\tRun\t2026-11-22T18:30:01.2Z npm error While resolving: @astrojs/solid-js@7.1.6\n"
                        "heqk QEMU gate\tRun\t2026-11-22T18:30:01.3Z npm error Could not resolve dependency:",
+    # #1495 (2026-11-22): g0's driver provenance check, triaged `unknown` (shipping-guard self-test lines share the log)
+    "driver_provenance": "g0\tRun\t2026-11-22T20:39:01.0Z provenance: FAIL driver files with no row in docs/security/driver-provenance.md:\n"
+                         "g0\tRun\t2026-11-22T20:39:01.1Z   arch-aarch64/src/fwcfg.rs\n"
+                         "g0\tRun\t2026-11-22T20:39:01.2Z shipping-guard: FAIL kernel feature \"crashtest\" is active in the shipping flavour",
     "toolchain_env#apt": "heqk QEMU gate\tInstall qemu-system-aarch64\t2026-11-16T18:44:54.0Z Package mtools is not available, but is referred to by another package.\n"
                          "heqk QEMU gate\tInstall qemu-system-aarch64\t2026-11-16T18:44:54.1Z E: Unable to locate package qemu-system-arm\n"
                          "heqk QEMU gate\tInstall qemu-system-aarch64\t2026-11-16T18:44:54.2Z E: Package 'mtools' has no installation candidate",
