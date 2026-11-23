@@ -68,6 +68,9 @@ services:
       # Additional initialization (executed after schema)
       - ./configs/clickhouse/init.sql:/docker-entrypoint-initdb.d/99-init.sql:ro
       - ./configs/clickhouse/users.xml:/etc/clickhouse-server/users.d/users.xml:ro
+      # Bound ClickHouse's own logs (log level + 7-day TTL on system.* tables).
+      # Without it the image logs at trace and system.text_log etc. grow forever.
+      - ./configs/clickhouse/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
     environment:
       CLICKHOUSE_DB: aiochi
       CLICKHOUSE_USER: aiochi
