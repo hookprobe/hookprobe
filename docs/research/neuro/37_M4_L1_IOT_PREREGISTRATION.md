@@ -21,6 +21,7 @@ devices on a new lab's captures while staying quiet in new real homes?
 | Role | Source | What is used | Cut |
 |---|---|---|---|
 | IoT malware | `kitsune-network-attack` (UCI 516; licence OPEN) | all 9 captures; the **gated** part is the capture(s) whose name contains `mirai` | the kernel's doc 20 rule, from PCAP (`pcap_to_dna.py --rule doc20`) |
+| IoT malware | `ciciot2023` (CIC, UNB; RESEARCH, evaluation use only; amendment B, §9) | the Mirai-category captures are **gated**; every other category is reported only | doc 20 rule, from PCAP |
 | IoT malware | `stratosphere-mcfp-captures`: the `CTU-IoT-Malware-Capture-*` captures **not** among IoT-23's 20 malware captures (selection rules in §8) | every selected capture is **gated** | doc 20 rule, from PCAP |
 | Home benign | `unsw-iot-homes-ipfix` (12 homes, KDDI; RESEARCH, evaluation use only) | every home and device | the **exporter's** YAF cut; flow records cannot be re-cut (`data/ipfix-to-dna.md` §2) |
 
@@ -33,7 +34,7 @@ its own directory, and records file hashes in `sealed.json` **before** any Neuro
 |---|---|---|
 | Kitsune and MCFP PCAP → device-hour vectors, with per-frame or per-host labels | `bench/pcap_to_dna.py` | `90ff273cfe07742e5daa2290ea96d39191fba5ae7dd7763d5ba61d39d1df6e2f` |
 | Home IPFIX CSV → device-hour vectors | `bench/ipfix_to_dna.py` | `941a32b26e6d7e5d2efcf67b204579d546663dd0186c9b1ae6ec5ccbabacafde` |
-| Intake counts (model never loaded) and the one look | `bench/m4_gate.py` | `7e3b6b6e591087a11ec8101240fbb18bad8f16cc947346fd2dce006d841254b0` |
+| Intake counts (model never loaded) and the one look | `bench/m4_gate.py` | `9d406bd3e08c47820df95aab3bc50acf7ed27c58ff65c7bd92f7a46e42b03ce6` |
 | Frozen helpers | `bench/unsw_to_dna.py`, `unsw_to_d1.py`, `bench/dna_features.py`, `bench/s1_apply.py` | unchanged at `b4611dea` (#1526) |
 
 **Commands.**
@@ -149,3 +150,31 @@ operator chose MCFP over CICIoT2023. Nothing had been downloaded, so no count or
   windows is INCONCLUSIVE, not FAIL.
 
 **Unchanged:** the model, the bars (0.90, 0.14), the minimums (20, 2,400), the home side, one look.
+
+## 9. Amendment B (2026-11-23, before any count exists): CICIoT2023 replaces MCFP as the second malware source
+
+**Why.** MCFP could not pass §8: its host still times out, and the only known mirror holds CTU-13, not the IoT
+captures (intel-data, 2026-11-23). The four MCFP candidates stay sealed by name (#1530) and enter only if the host
+returns before intake. The operator chose CICIoT2023 and registers for it. No intake count existed when this was
+written: the intake is held until amendment B is merged.
+
+**Selection (intel-data applies it and records the result in `sealed.json` before any Neuro read).**
+1. Source: `ciciot2023`, PCAPs only. Gated: every capture of the **Mirai** category. All other categories may be
+   reported, not gated; their PCAPs are fetched only if the size cap allows after the Mirai ones.
+2. Size: at most 100 GB in total for CICIoT2023, Mirai captures first, then in the site's listing order.
+3. Labels: by host. Every IP frame sent from an attacking device's address is an attack frame. The paper (Sensors
+   23(13):5941) names no attacking address. It says Mirai ran from five of the testbed's Raspberry Pis, and its
+   Table 1 lists the ten Raspberry Pi MACs (recorded by intel-data, #1534). So intake applies this rule, to counts
+   only and before scoring: in each Mirai capture, an **attacker** is one of those ten MACs that sends at least 10%
+   of the capture's IP frames; its IPv4 source addresses in that capture are passed as `--labels infected:`. If no
+   Pi qualifies in a capture, that capture is reported, not gated.
+4. Each capture is hashed into the sealed CICIoT2023 directory. Nothing is opened beyond hashing until intake.
+
+**Code.** `m4_gate.py` gains a third gated source, `ciciot2023-mirai`, so condition 1 now pools Kitsune-Mirai,
+MCFP and CICIoT2023-Mirai (§3 re-pinned). A dry run with stand-ins checks that CICIoT2023 Mirai is gated and its
+other categories are reported only. `pcap_to_dna.py` is unchanged: `--labels infected:` already labels by host.
+
+**Unchanged:** the model, the bars (0.90, 0.14), the minimums (20, 2,400), the home side, one look.
+
+**Limit added.** CICIoT2023's Mirai captures are volumetric floods from lab devices. S1 learnt Mirai from IoT-23's
+scanning and C2. Recall per source stays reported, so the reader can see which lab drives the pooled number.
