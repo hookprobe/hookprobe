@@ -117,3 +117,45 @@ will be trained and judged once the environment is rebuilt with the same version
 
 **Fix for the rerun.** The chain must stop if training produces no adapter. `mixH_chain.sh` is unchanged; the rerun
 command checks this between steps.
+
+## Result: run 2 (2026-11-23 19:18). ftHg is not eligible; stop. ftFg stays the candidate
+
+**The run.**
+- The environment was rebuilt with the pinned versions (mlx 0.32.4, mlx-lm 0.32.2).
+- `mixH_chain.sh` was hash-checked (`c2fd1057…`) and run unchanged under a wrapper. The wrapper would have voided the
+  run if no adapter or no GGUF existed before evaluation; neither check fired.
+- Data: 4,577 train / 230 valid (129 + 6 thin rows, a quarter, seed 36). 2,289 iterations.
+- Checkpoint 2289 was chosen by lowest T0-valid loss (0.214; start 1.577).
+- **ftHg** GGUF Q8_0 SHA-256 `10037d399d8fae66a01eb2d7e75c4bccdc1f842ac56c6d349868ebbb1d08b73d`; adapter
+  `1c23f0aebe4eaa5fc58458e387804323887454943c93b470e5ba89622c9cb0b6`.
+
+**`mixH_select.py` output (one run, unedited):**
+
+| config | mention (1,170) | per set d2/b3/b4/b5/b6 | McNemar vs base17g-AE | canary-safe (281) | halluc | thin ack (80) | thin called malicious | benign on mal | insufficient on mal | insufficient on sus | fallback |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| base17g-AE | 0.485 | 0.537/0.392/0.436/0.604/0.472 | — | 1.000 | 0.0000 | 0.025 | 9 | 7.3% | 0.0% | 0.0% | 4.6% |
+| ftFg-AE | 0.582 | 0.634/0.478/0.584/0.676/0.552 | p = 1.8e-10 (214 vs 101) | 1.000 | 0.0026 | 0.113 | 33 | 1.0% | 0.0% | 0.7% | 6.1% |
+| ftGg-AE | 0.573 | 0.663/0.494/0.532/0.644/0.556 | p = 9e-09 (208 vs 106) | 1.000 | 0.0026 | 0.725 | 5 | 1.5% | 22.4% | 27.6% | 6.2% |
+| **ftHg-AE** | **0.605** | 0.657/0.555/0.556/0.696/0.576 | p = 7.4e-16 (224 vs 84) | 1.000 | 0.0009 | 0.725 | 2 | **2.4%** | **8.3%** | **32.4%** | 7.3% |
+
+**Verdict per §3.**
+- ftHg-AE meets conditions 1–5.
+- It fails 6 (benign on malicious 2.4% > 2%) and 7 (`insufficient_evidence` on malicious 8.3% > 5%, on suspicious
+  32.4% > 10%).
+- **Decision: stop.** Blind v7 is not authored. ftFg stays the explainer candidate (doc 26), with thin-evidence
+  handling as its recorded limitation.
+
+**Reading (descriptive, spent data).**
+- **The thin-evidence fix itself worked.** ftHg acknowledges thin evidence as often as ftGg (0.725 vs ftFg's 0.113)
+  and calls thin cases malicious least often (2). Its mention score is the highest of any configuration.
+- **The over-correction did not shrink with the dose.** With a quarter of the thin data instead of all of it,
+  `insufficient_evidence` on malicious fell from 22.4% to 8.3%, but on suspicious it **rose**, from 27.6% to 32.4%.
+  The student learns "retreat to insufficient" from the thin rows, and lowering their share does not separate thin
+  from sufficient evidence.
+- **The limits are not re-tuned.** They stand as pinned, and these 5 sets are not used for a further dose search.
+
+**What a next attempt would need (not started; new pre-registration required).**
+- Contrastive pairs: each thin case paired with a near-identical case whose evidence *is* sufficient and whose gold
+  verdict is `malicious` / `suspicious`.
+- Fresh dev data. These 5 sets have now informed four decisions (mixF, mixG, mixH, this stop).
+- Blind v7 stays unbuilt and unseen, so it remains available for a future candidate.
