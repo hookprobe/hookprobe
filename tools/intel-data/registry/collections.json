@@ -278,6 +278,8 @@
         "ton-iot",
         "tor-collector-exit-lists",
         "ugr16",
+        "unsw-data2025-iot-flows",
+        "unsw-iot-homes-ipfix",
         "unsw-iotraffic",
         "unsw-nb15",
         "uq-netflow-nids"

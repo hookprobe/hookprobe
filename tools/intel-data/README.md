@@ -42,14 +42,14 @@ JSONL line per host per UTC hour (chunked at 50,000 events), in the event schema
 `tools/neuro-research/synth_events.py`, with the host's previous-24 h baseline. Addresses and domains are
 pseudonymised per capture into reserved ranges (no .0 or .255 octets). The split rule is pluggable and
 recorded in the manifest. `neuro-sha256-mod3` is `replay_iot23.split_of()`. Holdouts in
-`registry/sealed.json` (the IoT-23 and CTU-13 test splits, spent by Neuro's M3 one-look run; Deakin IoT v2 and
-Kitsune, sealed by name before any download) are refused unless `--unseal <source>` is given, and each unseal is audited. `--window scenario-hour` reproduces
+`registry/sealed.json` (the IoT-23 and CTU-13 test splits, spent by Neuro's M3 one-look run; Deakin IoT v2,
+Kitsune and the UNSW 12-homes IPFIX set, sealed by name before any download) are refused unless `--unseal <source>` is given, and each unseal is audited. `--window scenario-hour` reproduces
 `gen_t0_iot23.py`'s windows, and `neuro_acceptance.py` checks that the rendered cards match. Details and
 choices are in `heqkdata/windows.py`.
 
 | Path | What |
 |---|---|
-| `registry/sources.json` | 205 catalogued sources: datasets, feeds, knowledge bases, CERTs, programmes |
+| `registry/sources.json` | 208 catalogued sources: datasets, feeds, knowledge bases, CERTs, programmes |
 | `registry/licenses.json` | 118 licence decisions (`commercial_use`, `training_use`, `redistribution`, `derivatives`, share-alike) |
 | `registry/sealed.json` | holdouts the `windows` export refuses unless explicitly unsealed |
 | `registry/collections.json` | the six training collections (DNS, network, attack, malware, vulnerability, SOC reasoning) |

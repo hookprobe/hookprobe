@@ -5,7 +5,7 @@
 > RESEARCH = research/non-commercial; COMMERCIAL = paid licence; RESTRICTED = agreement/membership; UNKNOWN = not verified.
 > Gate columns are `licensing.decide()` for each purpose: ✅ allowed, — denied.
 
-Sources: COMMERCIAL 11, OPEN 90, RESEARCH 22, RESTRICTED 32, UNKNOWN 51 — total 206.
+Sources: COMMERCIAL 11, OPEN 91, RESEARCH 23, RESTRICTED 32, UNKNOWN 51 — total 208.
 
 ## attack_simulation
 
@@ -36,6 +36,8 @@ Sources: COMMERCIAL 11, OPEN 90, RESEARCH 22, RESTRICTED 32, UNKNOWN 51 — tota
 | `misp-warninglists` | [MISP Warninglists](https://github.com/MISP/misp-warninglists) | MISP Project (CIRCL) / LU | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `nist-nsrl-rds` | [NIST NSRL Reference Data Set (RDSv3)](https://www.nist.gov/itl/ssd/software-quality-group/national-software-reference-library-nsrl) | NIST Software Quality Group / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
 | `tranco` | [Tranco top-sites list](https://tranco-list.eu/) | KU Leuven DistriNet / TU Delft et al. / BE | UNKNOWN | — | — | — | public_download | 3 | verified |
+| `unsw-data2025-iot-flows` | [DATA2025v1/v2 IoT Custom Flow datasets and encoder models (UNSW, Dryad)](https://datadryad.org/dataset/doi:10.5061/dryad.7h44j1098) | UNSW Sydney (Sivanathan, Habibi Gharakhe / AU | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
+| `unsw-iot-homes-ipfix` | [UNSW IPFIX ML Instances (12 home networks, KDDI Research)](https://iotanalytics.unsw.edu.au/homedataset.html) | UNSW Sydney IoT Traffic Analytics Resear / AU | RESEARCH | — | ✅ | — | public_download | 3 | verified |
 | `mawi-wide` | [MAWI Working Group Traffic Archive (WIDE backbone)](https://mawi.wide.ad.jp/mawi/) | MAWI Working Group, WIDE Project / JP | RESEARCH | — | — | — | public_download | 2 | verified |
 | `caida-anonymized-passive-traces` | [CAIDA Anonymized Internet Traces (passive_dataset)](https://www.caida.org/catalog/datasets/passive_dataset/) | CAIDA, UC San Diego / US | RESTRICTED | — | — | — | agreement | 1 | partially_verified |
 
@@ -463,6 +465,7 @@ Sources: COMMERCIAL 11, OPEN 90, RESEARCH 22, RESTRICTED 32, UNKNOWN 51 — tota
 | `uk-cisp-terms` | RESTRICTED | requires_agreement | no | no | no | Per-source terms from the regional research pass. |
 | `uk-ncsc-annual-review-acd-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
 | `uk-ncsc-github-terms` | OPEN | yes | unclear | yes | no | Per-source terms from the regional research pass. |
+| `unsw-iotanalytics-mit0-terms` | RESEARCH | unclear | unclear | unclear | no | The page's 'License' section is the MIT-0 text ('SPDX-License-Identifier: MIT-0', Copyright 2023 IoT Traffic Analytics Research Group, UNSW Sydney), which grant |
 | `unsw-nb15-terms` | RESEARCH | requires_agreement | requires_agreement | unclear | no | Per-source terms from the academic research pass. |
 | `uq-netflow-nids-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
 | `volexity-threat-intel-terms` | OPEN | yes | yes | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
