@@ -294,8 +294,10 @@ The other 24 boot self-tests in the same boot passed.
 | **P4** | Sealed snapshot of the behavioural memory (survives reboot/OTA) — privacy review first (§10 D4) | proposed |
 | **P5** | L1 behind M3 + the FP lease or integer quantisation; HNX verify in kernel | proposed, gated |
 
-**Not in scope until the soak and release gates are done:** any change to the shipping AP image. The `neuro` feature
-is off everywhere and adds nothing to the AP payload.
+**Shipping image (updated 2026-11-23):** the operator put Neuro into the MVP. `neuro` joins the shipping flavour as N0
+only — evidence, no model (P5 stays gated after M3), no persistence (D4), no owner feedback (D5) — with the read-only
+`GET /api/neuro` (learning / relearning / warm per the research note `data/n0-cold-start.md`). Payload with `neuro`:
+3,072,184 / 3,137,736 B after the .bss fix (#1519). The release gates (REL-05 soak etc.) still apply to the whole image.
 
 ## 9b. Neuro-side alignment (doc 32, 2026-11-22)
 

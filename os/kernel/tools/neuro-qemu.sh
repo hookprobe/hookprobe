@@ -3,7 +3,7 @@
 #
 #   tools/neuro-qemu.sh [max seconds]        (default 900)
 #
-# Builds the Mission Control kernel with the `neuro` feature (never shipped) and boots it once. The el0-neuro tests run
+# Builds the Mission Control kernel with the `neuro` feature (in the shipping flavour since 2026-11-23) and boots it once. The el0-neuro tests run
 # in the boot self-tests after the other EL0 servers: ABI v1.1 handshake, the 1,200 golden hour closes bit-exact
 # through the real ABI, fault containment + journal, reply validation (complaint + reset), the host path (MAC
 # attribution, batching, UTC hour roll, behaviour-deviation evidence) and backpressure. QEMU only: CM5 metal evidence
