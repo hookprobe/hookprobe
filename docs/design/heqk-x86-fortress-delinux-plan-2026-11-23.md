@@ -178,6 +178,8 @@ VFIO-I226 guest first, then on the twin. Parity checklist, each item versus the 
 **Interim for the long poles (decision D-D):** an external AP on a LAN port, and 5G
 failover deferred or provided by an external router, so cutover does not wait on ath12k.
 
+Driver plan for the two long poles (QCN9274 Wi-Fi 7, EM9293 5G): `heqk-radio-drivers-qcn9274-em9293-plan-2026-11-23.md`.
+
 ### F5 — Shadow run on real traffic (E2/E3)
 The heqk guest (F2), and later the twin, consumes the live mirror port in **observe-only** mode.
 Compare detections against Suricata/Zeek, check resource behaviour, and run the
