@@ -198,3 +198,30 @@ stopped. It is recorded with the hashes before intake. No file is added after in
 **Power note, stated now.** Device-hour windows depend on how long each capture runs, not on its size. A 2 GB file
 of flood traffic may span minutes, so more files may add few new hours. Whether the gated minimum of 20 is reached
 is known only at intake; if not, the verdict is INCONCLUSIVE (§4).
+
+## 11. Amendment D (2026-11-23, intake plumbing, before any count): the homes export is not IE-named
+
+**Found at intake** (stage "headers": file names and CSV header lines only, plus summaries of plumbing columns on
+200,000 rows of one home; no window, count or score). The 12 home CSVs are UNSW's "ML instance" export, not YAF/IPFIX
+information elements:
+- `start` is a millisecond datetime;
+- `duration` is in seconds, capped at exactly 1,800, YAF's active timeout, which confirms §6.2's exporter cut;
+- `src` is always the initiator (`deviceInitiated` = 1 when the device's MAC is `srcMac`, 0 when it is `destMac`,
+  in 100% of the sampled rows);
+- byte and packet counts are from the device's side (out/in);
+- each row names its device, whose MAC is on every one of its rows.
+
+**Fix (plumbing, §6.5).** `bench/homes_ml_to_yaf.py` (SHA-256 `012c8c1cfbfe062854078571dabb7098ab3cbe9e154bb403547267705e39388f`) rewrites each row into the YAF biflow CSV that
+`ipfix_to_dna.py` reads:
+- end = start + duration;
+- initiator/responder counts from out/in, by `deviceInitiated`;
+- device = its MAC (`--device-cols deviceMac,deviceAddress`), as §3 prefers when the export carries one.
+
+No row is dropped. `ipfix_to_dna.py` is unchanged.
+
+**Check on spent data.** A spent UNSW YAF-cut flow file was rewritten into the ML-instance layout and passed back
+through the adapter and `ipfix_to_dna.py`: 1,880 device-hours, **0 S1 decision differences**. The 209 differing
+vectors are sub-millisecond rounding (periodicity CV ≤ 0.003, mean duration ≤ 2e-5), the precision the export itself
+has.
+
+**Unchanged:** the homes set, the bars and minimums, the model, one look.
