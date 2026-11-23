@@ -1,0 +1,63 @@
+<!--
+  AIOCHI ClickHouse: bound ClickHouse's OWN diagnostics (not AIOCHI security data).
+
+  Why this exists: the upstream clickhouse-server image logs at `trace` and keeps
+  its system.* log tables forever. On Fortress that grew to 31 GB of
+  system.text_log/query_log/trace_log/... next to <100 MB of real AIOCHI data,
+  and twice filled the root disk. A runtime `ALTER TABLE system.x MODIFY TTL`
+  does NOT survive: ClickHouse recreates system log tables on upgrade.
+  The TTL therefore lives here, in config.d, where it is re-applied on every start.
+
+  When ClickHouse sees a system-log table whose definition no longer matches
+  this config, it renames the old table to <name>_0 and creates a new one;
+  any such *_0 table can be dropped.
+
+  Mounted by podman-compose.aiochi.yml at
+  /etc/clickhouse-server/config.d/system-logs.xml.
+-->
+<clickhouse>
+    <!-- Server's own log files: warnings and up, size-rotated.
+         (image default: level=trace, 1000M x 10 files) -->
+    <logger>
+        <level>warning</level>
+        <size>100M</size>
+        <count>3</count>
+    </logger>
+
+    <!-- system.* log tables: keep 7 days (3 for the high-volume profilers). -->
+    <text_log>
+        <level>warning</level>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </text_log>
+    <query_log>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </query_log>
+    <query_thread_log>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </query_thread_log>
+    <query_views_log>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </query_views_log>
+    <part_log>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </part_log>
+    <metric_log>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </metric_log>
+    <asynchronous_metric_log>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </asynchronous_metric_log>
+    <error_log>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </error_log>
+    <trace_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </trace_log>
+    <processors_profile_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </processors_profile_log>
+    <!-- opentelemetry_span_log is deliberately absent: the image defines it with an
+         explicit <engine>, and ClickHouse refuses to start ("BAD_ARGUMENTS") if
+         <ttl> is combined with <engine>. It is low-volume and stays empty unless
+         tracing is enabled. -->
+</clickhouse>
