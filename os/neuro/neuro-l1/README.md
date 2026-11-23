@@ -23,7 +23,7 @@
 
 ## Parity with the Python reference
 
-| Set | Windows | S1 decisions differing | u8 features off (all by 1) |
+| Set | Windows | S1 decisions differing | u8 features off |
 |---|---|---|---|
 | `tests/fixture.txt`, CI: 70 IoT-23 dev + 70 CTU-13 dev windows (≤ 1,500 connections each) | 140 | **0** | 5 of 3,920 |
 | every CTU-13 dev window (local, `gen_fixture.py --all`) | 171 | **0** | 9 of 4,788 |
