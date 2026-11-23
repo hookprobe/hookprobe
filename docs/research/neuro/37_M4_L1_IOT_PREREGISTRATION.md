@@ -238,7 +238,7 @@ unread and the operator then chose to run now; the run below is the full one.
 
 **Conversion.**
 - Kitsune: 9 captures, every frame-label file aligned with its capture; no router MAC excluded.
-- Homes: 12 CSVs, 13.1 M rows through `homes_ml_to_yaf.py`, then 502 devices and 188,707 device-hours from
+- Homes: 12 CSVs, 32.1 M rows through `homes_ml_to_yaf.py`, then 502 devices and 188,707 device-hours from
   `ipfix_to_dna.py`. Broadcast and multicast peers and non-TCP/UDP/ICMP rows were skipped, as frozen.
 
 **Counts** (`m4_gate.py --counts`; windows with ≥ 3 events):
