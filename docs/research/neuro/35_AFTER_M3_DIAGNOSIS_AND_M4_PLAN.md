@@ -31,6 +31,38 @@ to **0.558** per device-day.
 malicious and benign, against 1.65 at home. The CTU-13 export carries no packet counts. The feature is therefore a
 dataset marker, not behaviour.
 
+**E. Retraining for IoT alone makes home false alerts worse, not better** (`m4_diag.py iot`).
+
+Setup:
+- trained on IoT-23 (dev + test), with and without CTU-13 benign windows, plus the home windows of a hash-chosen
+  device group A (17 devices, first half);
+- threshold at a home quantile on group A;
+- false alerts measured on the other 10 devices' second half, cut with the doc 20 rule.
+
+Result:
+- every variant reaches about **0.50–0.55 false alerts per device-day** at best (quantile 0.995–0.999);
+- the worst device is SamsungSmartThings at about 2.2;
+- leave-one-capture-out IoT-23 recall is 1.000.
+
+The frozen M3 S1 model, by contrast, scored **0.003** on all 27 unseen home devices (Zeek cut) and **0.000** under
+the doc 20 cut (doc 34 §2).
+
+So S1's low home rate depends on its training composition: the CTU-13 lab hosts push the boundary away from
+ordinary traffic. It is not a property any retrain inherits. Refitting would mean re-earning the home side on new
+data.
+
+```
+doc20-cut home: threshold on device group A (first half), FA on held-out group B (second half)
+| training | home quantile | LOCO IoT-23 recall | held-out home FA/dev-day | worst device |
+|---|---|---|---|---|
+| IoT-23 + home A | 0.990 | 1.000 | 4.681 | AugustDoorBell 15.69 |
+| IoT-23 + home A | 0.995 | 1.000 | 0.541 | SamsungSmartThings 2.23 |
+| IoT-23 + home A | 0.999 | 0.997 | 0.501 | SamsungSmartThings 2.19 |
+| IoT-23 + CTU-13 benign + home A | 0.990 | 1.000 | 0.551 | SamsungSmartThings 2.23 |
+| IoT-23 + CTU-13 benign + home A | 0.995 | 1.000 | 0.516 | SamsungSmartThings 2.21 |
+| IoT-23 + CTU-13 benign + home A | 0.999 | 1.000 | 0.501 | SamsungSmartThings 2.19 |
+```
+
 **Conclusion.** DNA v1 + logistic regression is a good **IoT-device** detector:
 - 0.993 recall on unseen IoT-23 malware captures;
 - 0.003 home false alerts per device-day on unseen devices.
@@ -44,7 +76,7 @@ threshold for both device classes made M3 fail on the second class and would mak
 
 | Track | Scope | Candidate | What M4 would test |
 |---|---|---|---|
-| **L1-IoT** | IoT and embedded devices (N0 already classes peers and devices) | the S1 recipe, trained on all spent IoT-23 + CTU-13 + UNSW material, with the confound features removed | recall ≥ 0.90 on **new sealed IoT malware captures**; ≤ 0.14/device-day on a **new home set** |
+| **L1-IoT** | IoT and embedded devices (N0 already classes peers and devices) | **the frozen M3 S1 model, unchanged** (same weights and threshold, `m3_run.py` at `128b2520`). §1E shows that a refit loses S1's measured home behaviour | recall ≥ 0.90 on **new sealed IoT malware captures**, and ≤ 0.14/device-day on a **new home set**, both cut with the doc 20 rule |
 | **L1-PC** | laptops and desktops | not ready. Host-hour DNA is insufficient. It needs DNS and TLS-level features and inference-time feed values (allowed by the licence rule) | dev research only; no M4 gate yet |
 
 **Data needed** (intel-data registry; licences as of 2026-11-18):
@@ -63,7 +95,7 @@ threshold for both device classes made M3 fail on the second class and would mak
    three captures) was off by 0.5.
 2. **The threshold population must match the deployment population.** The 1% FPR is set on IoT-class benign
    windows, not on lab workstations.
-3. **Confound screen before freezing features.** Any feature whose distribution is degenerate in one source (D) is
+3. **Confound screen before freezing features** (for a future refit; the M4 candidate is frozen). Any feature whose distribution is degenerate in one source (D) is
    dropped or rebuilt.
 4. **The kernel's connection rule.** The benign side is cut with the doc 20 rule (`unsw_to_dna_conn.py --rule doc20`,
    doc 34 §2). The malicious PCAP sources (Kitsune, MCFP) can be cut the same way, closing the gap doc 34 records.
