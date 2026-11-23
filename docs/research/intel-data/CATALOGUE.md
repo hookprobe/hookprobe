@@ -5,7 +5,7 @@
 > RESEARCH = research/non-commercial; COMMERCIAL = paid licence; RESTRICTED = agreement/membership; UNKNOWN = not verified.
 > Gate columns are `licensing.decide()` for each purpose: ✅ allowed, — denied.
 
-Sources: COMMERCIAL 11, OPEN 91, RESEARCH 23, RESTRICTED 32, UNKNOWN 51 — total 208.
+Sources: COMMERCIAL 11, OPEN 92, RESEARCH 23, RESTRICTED 32, UNKNOWN 51 — total 209.
 
 ## attack_simulation
 
@@ -216,13 +216,14 @@ Sources: COMMERCIAL 11, OPEN 91, RESEARCH 23, RESTRICTED 32, UNKNOWN 51 — tota
 | id | name | org / country | class | train | eval | ship | access | P | verified |
 |---|---|---|---|---|---|---|---|---|---|
 | `mitre-attack-stix` | [MITRE ATT&CK (STIX 2.1 data)](https://github.com/mitre-attack/attack-stix-data) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 5 | verified |
+| `ctid-mappings-explorer` | [CTID Mappings Explorer (incl. KEV CVE-to-ATT&CK mappings)](https://github.com/center-for-threat-informed-defense/mappings-explorer) | MITRE Center for Threat-Informed Defense / US | OPEN | ✅ | ✅ | ✅ | public_download | 4 | verified |
 | `mitre-attack-ics` | [MITRE ATT&CK for ICS (STIX 2.1 data)](https://github.com/mitre-attack/attack-stix-data) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 4 | verified |
 | `mitre-attack-mobile` | [MITRE ATT&CK for Mobile (STIX 2.1 data)](https://github.com/mitre-attack/attack-stix-data) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 4 | verified |
 | `misp-galaxy` | [MISP Galaxy clusters](https://github.com/MISP/misp-galaxy) | MISP Project (CIRCL) / LU | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `misp-taxonomies` | [MISP Taxonomies](https://github.com/MISP/misp-taxonomies) | MISP Project (CIRCL) / LU | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `mitre-atlas` | [MITRE ATLAS data](https://atlas.mitre.org/) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `mitre-cwe` | [CWE - Common Weakness Enumeration](https://cwe.mitre.org/) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
-| `mitre-d3fend` | [MITRE D3FEND ontology](https://d3fend.mitre.org/) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
+| `mitre-d3fend` | [MITRE D3FEND ontology](https://d3fend.mitre.org/) | The MITRE Corporation / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | verified |
 | `mitre-emb3d` | [MITRE EMB3D (embedded device threat model)](https://emb3d.mitre.org/) | The MITRE Corporation / US | RESTRICTED | — | — | — | public_download | 3 | verified |
 | `nvd-cpe-dictionary` | [CPE Dictionary / CPE Match (NVD)](https://nvd.nist.gov/products/cpe) | NIST NVD / US | OPEN | ✅ | ✅ | ✅ | api_key | 3 | unverified |
 | `oasis-stix-taxii` | [OASIS STIX 2.1 / TAXII 2.1 specifications (+ JSON schemas)](https://www.oasis-open.org/) | OASIS Open CTI Technical Committee / US | OPEN | ✅ | ✅ | ✅ | public_download | 3 | partially_verified |
