@@ -63,8 +63,8 @@ items:
   - id: cm5-metal
     what: A/B on CM5 under Wi-Fi load — loop per-beat p50 equal, p95 +9 ms (2%), ap_poll equal, 14,935 events 0 dropped
     state: metal_passed
-    evidence: [docs/design/metal-evidence/20261122-neuro-p3-cm5.md, docs/design/metal-evidence/20261123-neuro-6h-cm5.md, docs/design/metal-evidence/20261123-neuro-excursion-cm5.md]
-    open: [IDS ns/pkt, 64-device slot pressure]
+    evidence: [docs/design/metal-evidence/20261122-neuro-p3-cm5.md, docs/design/metal-evidence/20261123-neuro-6h-cm5.md, docs/design/metal-evidence/20261123-neuro-excursion-cm5.md, docs/design/metal-evidence/20261123-neuro-slots-cm5.md]
+    open: []
   - id: cm5-fault
     what: el0-neuro faulted on metal through the supervised path (1 + burst of 10) under Wi-Fi load
     state: metal_passed
