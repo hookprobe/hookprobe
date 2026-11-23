@@ -185,3 +185,18 @@ therefore expected to be nil. In any case, S1 does not use that feature (it is o
 dropped above); only S2's beacon gate uses warninglists.
 
 One raw address, 239.255.255.250 (SSDP multicast), is kept by design, as in the dev code.
+
+## Result (2026-11-23): all three systems FAIL; stop rules applied
+
+| System | Recall | Home false alerts / device-day | Verdict |
+|---|---|---|---|
+| S1 | 0.680 [0.621, 0.735] | 0.003 | FAIL (recall) |
+| S2 | 0.425 | 0.042 | FAIL (recall) |
+| S3 | 0.404 | 0.002 | FAIL (recall) |
+
+- IoT-23 test S1 recall is 0.993; CTU-13 test is 0.320. The models do not generalise from 27 dev CTU-13 windows to
+  the other C2 scenarios.
+- Nothing is deployed in these roles. There is no `rules_ver = 2`, R-D1 is not recommended, and heqk P5 stays
+  gated.
+- A next attempt needs new sealed data.
+- Full output: `data/m3-results.md`.
