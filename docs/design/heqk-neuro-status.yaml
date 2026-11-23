@@ -99,7 +99,7 @@ items:
     what: language tier, explain-only, off-device until R2-R8
     state: proposed
 decisions:
-  D1: {what: accept el0-neuro window + ABI v1, recommendation: accept, status: open}
+  D1: {what: accept el0-neuro window + ABI v1, recommendation: accept, status: accepted, by: "operator merge of PR 1522 (2026-11-23, Neuro N0 in the MVP shipping flavour)"}
   D2: {what: FP/SIMD in EL0, recommendation: per-server lease after R0 readouts; never global, status: open}
   D3: {what: model signing authority, recommendation: decide before L1 (irreversible trust commitment), status: open}
   D4: {what: persist behavioural memory, recommendation: no until privacy review, status: open}
