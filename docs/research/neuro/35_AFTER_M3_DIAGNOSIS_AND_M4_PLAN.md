@@ -111,3 +111,15 @@ threshold for both device classes made M3 fail on the second class and would mak
 
 Nothing on the device. heqk P5 stays gated (doc 34). The integer scorer and extractor plans (doc 32 §1) apply
 unchanged to an L1-IoT model, if one passes M4.
+
+## 4. The frozen candidate (artefact)
+
+`tools/neuro-research/models/s1/` holds the M3 S1 model (`s1_model.json`, SHA-256 `20f38f33…`) and its integer twin,
+made by `bench/s1_freeze.py`.
+
+**Checks.**
+- The float artefact reproduces `m3_run.py`'s S1 decisions exactly.
+- The integer twin (u8 / i16 / i32) makes the **same decisions on all 44,704 windows checked**: IoT-23 and CTU-13
+  test, both UNSW halves, and the doc 20 cut.
+
+**Use.** M4 pre-registers exactly this file. The 95 golden vectors are the acceptance test for a no_std port.
