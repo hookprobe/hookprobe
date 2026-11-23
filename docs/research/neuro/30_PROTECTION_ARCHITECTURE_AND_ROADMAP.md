@@ -1,6 +1,6 @@
 # 30: Working protection model: architecture, CM5 budget and milestones (proposal, 2026-11-22)
 
-**Status: PROPOSAL.** It builds on the audit of 2026-11-22, the literature review summarised in §6, and the
+**Status: PROPOSAL** (rows updated 2026-11-23: N0 ships in the MVP, M3 failed, M4 = the L1-IoT test). It builds on the audit of 2026-11-22, the literature review summarised in §6, and the
 benchmark in doc 28. It respects ADR 0023 / C9, 0053, 0055, 0058, 0059, and docs 09, 13 and 20. It supersedes
 none of them.
 
@@ -10,10 +10,10 @@ none of them.
 |---|---|---|---|---|
 | L0 detection (kernel EL1) | ✅ rule catalogue `rulecat.rs`, behavioural thresholds, ratelimit, IOC/JA4/DGA, devbase | — | detbench (synthetic); **DET-01: 768/768 false positives in 24 h at home**; no precision/recall on public data before doc 28 | DET-01 fixes |
 | Enforcement | ✅ HQCFG1 signed bundles, cfgd trial/revert, per-device classes, ADR 0053 TTL actions, owner journal | — | metal-proven | expiry, evidence refs, deltas (doc 29 §7) |
-| Temporal DNA | `neuro-core` (Rust, host-tested, not in product) | `behavioural_memory`, `dna_fixed`, `dna_features` (v1, doc 27) | evidence-only (D1/D1b/D1c, P2) | on-device record (doc 27) |
+| Temporal DNA | ✅ **N0 in the MVP shipping flavour** (operator 2026-11-23, #1522): `neuro-core` in `el0-neuro`, evidence only; read-only `GET /api/neuro` with learning / relearning / warm (#1517) | `behavioural_memory`, `dna_fixed`, `dna_features` (v1, doc 27) | evidence-only (D1/D1b/D1c, P2); CM5 metal: 6 h load, fault containment, per-excursion timing, API | on-device record (doc 27) |
 | Supervised classifier | — | `bench.py` (LightGBM etc.) | dev benchmark (doc 28) | on-device scorer |
 | Policy compiler | — | `tools/neuro_policy` (HQPROP1, 8 property tests) | tests only | doc 29 |
-| Explainer (LLM) | — | ftDg + guard A/E | explanation gain on 2 of 3 blind sets; injection safety solved (doc 25) | doc 26 retrain running |
+| Explainer (LLM) | — | ftFg + guard A/E (candidate, doc 26) | explanation gain on 2 of 3 blind sets; injection safety solved (doc 25) | thin-evidence fix: mixH → blind v7 (doc 36) |
 
 **Why fine-tuning has not consistently beaten the base model** (docs 23–26):
 - an over-benign shortcut learned from template data (role ⇒ benign);
@@ -56,7 +56,7 @@ Measured figures are marked **M**; the rest are estimates.
 | L0 (existing) | EL1 | existing tables (IOC 16 MiB file; devpolicy 256; devbase 64 × 16) | **M** 398–441 ns/pkt; 2.3–2.5 Mpps per A76 core |
 | DNA v1: current records + baselines, 256 devices | EL0 server or companion | ≈ 90 KiB resident (doc 27 §5) | O(1) per flow; one vector per device-hour |
 | DNA history, 7 days | storage / companion | ≈ 4 MiB | — |
-| neuro-core (existing Rust, 64 devices) | EL0 (not wired) | **M** 83–85 KiB `.bss`; 1,296 B per device | **M** (QEMU) 51–88 ns/event; 148 µs per 64-device hour close |
+| neuro-core (existing Rust, 64 devices) | EL0 (`el0-neuro`, shipping as N0 since #1522) | **M** 83–85 KiB `.bss`; 1,296 B per device | **M** (QEMU) 51–88 ns/event; 148 µs per 64-device hour close. **M** (CM5 metal, 1–2 devices): EVENTS batch 0.6 µs avg / 3 µs max, CLOSE_HOUR 3.6–4 µs |
 | LightGBM, 200 trees × 15 leaves | companion tier (FP available) | ≈ 0.2–1 MB model | microseconds per vector; 256 vectors/h is negligible |
 | Policy compiler | companion | < 1 MB | per incident |
 | Explainer 1.7B Q8 | language tier (4 GB SKU and up) | ≈ 1.8 GB | seconds per explanation; off the protection path |
@@ -72,11 +72,12 @@ fixed-point tree port possible later.
 | **M1** | **Measure real L0 on public data.** Replay IoT-23 and CTU-13 dev captures through heqk's detectors (QEMU or host harness) and score kernel output with the doc 28 protocol. | A kernel-measured row replaces the "kernel-style" approximation. | Neuro + HomePods (harness only) |
 | **M2** | **Home-IoT false-alarm rate on dev.** **Met on dev (doc 28 v1.2):** logistic regression gives 0.031 false alerts per device-day at recall 0.983, on 27 home devices it never saw. Per-device deviation features and incident aggregation did not help. | ≤ 0.14 false alerts per device-day at recall ≥ 0.9 on dev. | Neuro (done; M3 next) |
 | **R-D1** | **Request to HomePods: gate the beacon detector** (novel peer AND not a known service). On dev it cuts home-IoT false alarms from 5.43 to 0.071 per device-day at recall 0.955 → 0.876. | Confirmed on the M3 sealed test first. | HomePods (after M3) |
-| **M3** | **Sealed confirmation.** Pre-register thresholds and decision rule, then run once on the IoT-23 + CTU-13 test splits (intel-data) and the UNSW second half (home false alerts). Deakin IoT v2 stays sealed (doc 31). | Pre-registered precision / FPR / per-device-day targets met or reported failed. | Neuro + intel-data |
-| **M4** | **Policy compiler integration.** HQPROP1 proposals rendered in the owner app; approval through HQMGMT1 → ADR 0053 actions. No kernel change. | End-to-end on QEMU: incident → proposal → owner approve → TTL action → expiry. | Neuro + app |
+| **M3** | **Sealed confirmation.** Pre-register thresholds and decision rule, then run once on the IoT-23 + CTU-13 test splits (intel-data) and the UNSW second half (home false alerts). Deakin IoT v2 stays sealed (doc 31). | Pre-registered precision / FPR / per-device-day targets met or reported failed. **Done 2026-11-23: failed** (S1 recall 0.680 < bar; `data/m3-results.md`, #1507). Stop rules applied: nothing deployed, R-D1 not recommended, heqk P5 stays gated. | Neuro + intel-data |
+| **M4** | **L1-IoT sealed test (doc 35).** The frozen M3 S1 model (`tools/neuro-research/models/s1/`, integer twin `os/neuro/neuro-l1`) on new sealed IoT data (Kitsune, sealed by name in intel-data, #1515), IoT devices only. Pre-registered before any download. | Recall and home false alarms against the pre-registered bars, one look. | Neuro + intel-data |
+| **M8** | **Policy compiler integration** (was M4 in the first version of this doc; renumbered 2026-11-23 so M4 means the same everywhere). HQPROP1 proposals rendered in the owner app; approval through HQMGMT1 → ADR 0053 actions. No kernel change. | End-to-end on QEMU: incident → proposal → owner approve → TTL action → expiry. | Neuro + app |
 | **M5** | **Kernel requests R-P1…R-P4** (doc 29 §7). | HomePods decision recorded. | HomePods |
 | **M6** | **Field study (P7).** One lived-in home, 2+ weeks, observe-only. | Alerts per device-week and owner-rated precision. | operator |
-| **M7** | **Explainer:** doc 26 result → blind v6 or ship guard + base. | Gate result recorded. | Neuro (running) |
+| **M7** | **Explainer:** doc 26 result → blind v6 or ship guard + base. | Gate result recorded. **Status 2026-11-23:** ftFg is the candidate; its thin-evidence weakness is being addressed by doc 36 (mixH → blind v7, one look). | Neuro (running) |
 | **Research (after M3)** | DNA v2 (DNS features), 10-min windows, drift detection (ADWIN), fixed-point trees in EL0 | — | — |
 
 ## 5. Dataset and licence register
