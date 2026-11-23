@@ -258,3 +258,11 @@ device-days, so condition 2 is decided.
 - `homes.jsonl`: `9be55bc233df2d2d7ba04b1170d731a24373019af0338d105b6570c04044149f`
 
 **Next.** One look with `m4_gate.py malware.jsonl homes.jsonl`, unchanged.
+
+## 13. Result (one look, 2026-11-23): FAIL
+
+- **Condition 1:** Mirai recall 4 / 18 = **0.222** (Wilson 95% 0.09–0.45). It fails, and is also underpowered
+  (18 < 20).
+- **Condition 2:** home false alerts **0.101** per device-day over 175,145 windows and 474 devices. It passes.
+
+S1 is closed as the L1-IoT candidate. Full output and reading: `data/m4-results.md`.
