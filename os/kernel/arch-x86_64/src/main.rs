@@ -16,13 +16,20 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
+mod acpi;
 mod apic;
 mod cpu;
 #[allow(dead_code)]
 mod efi;
+mod frames;
 mod io;
 mod paging;
+mod pci;
 mod rng;
+mod virtio;
+
+/// run-qemu.sh writes this at the start of the virtio-blk backing file; X2 must read it back.
+const BLK_PATTERN: &[u8] = b"HEQK-X2-VIRTIO-BLK-SECTOR0";
 
 use core::sync::atomic::Ordering;
 use efi::*;
@@ -43,8 +50,21 @@ fn fail(why: &str) -> ! {
 struct MapBuf([u8; 32768]);
 static mut MAP: MapBuf = MapBuf([0; 32768]);
 
+/// What ExitBootServices leaves us: descriptor count, usable MiB, and the saved map (bytes used, descriptor size).
+struct Ebs {
+    descs: usize,
+    mib: u64,
+    size: usize,
+    dsz: usize,
+}
+
+fn saved_map(e: &Ebs) -> &'static [u8] {
+    // MAP is written only by GetMemoryMap before ExitBootServices; from here on it is read-only.
+    unsafe { core::slice::from_raw_parts((&raw const MAP) as *const u8, e.size.min(core::mem::size_of::<MapBuf>())) }
+}
+
 /// Memory-map census + ExitBootServices (retried once: the map key changes if the firmware allocates in between).
-fn exit_boot_services(image: Handle, bs: &BootServices) -> (usize, u64) {
+fn exit_boot_services(image: Handle, bs: &BootServices) -> Ebs {
     for attempt in 0..2 {
         let buf = &raw mut MAP;
         let mut size = core::mem::size_of::<MapBuf>();
@@ -69,7 +89,7 @@ fn exit_boot_services(image: Handle, bs: &BootServices) -> (usize, u64) {
             if attempt > 0 {
                 kprintln!("[X1-ebs] map key changed once; retried");
             }
-            return (n, conv_pages * 4096 / (1 << 20));
+            return Ebs { descs: n, mib: conv_pages * 4096 / (1 << 20), size, dsz };
         }
     }
     fail("ExitBootServices refused twice")
@@ -121,8 +141,17 @@ pub extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> Status {
     );
     (bs.set_watchdog_timer)(0, 0, 0, core::ptr::null());
 
-    let (descs, mib) = exit_boot_services(image, bs);
-    kprintln!("[X1-mem] firmware map: {} descriptors, {} MiB usable after boot services", descs, mib);
+    // The ACPI 2.0 RSDP comes from the UEFI configuration table — the only time we can ask the firmware.
+    let mut rsdp: *const u8 = core::ptr::null();
+    for i in 0..st.number_of_table_entries.min(64) {
+        let e = unsafe { &*st.configuration_table.add(i) };
+        if e.guid == ACPI20_GUID {
+            rsdp = e.table;
+        }
+    }
+
+    let ebs = exit_boot_services(image, bs);
+    kprintln!("[X1-mem] firmware map: {} descriptors, {} MiB usable after boot services", ebs.descs, ebs.mib);
     kprintln!("[X1-ebs] ExitBootServices OK — the firmware is gone; COM1 + own tables from here");
 
     cpu::load_gdt_tss();
@@ -135,13 +164,60 @@ pub extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> Status {
     }
     kprintln!("[X1-idt] own IDT loaded; int3 self-test handled and resumed");
 
-    let f = paging::install();
+    let (f, uc) = paging::install(saved_map(&ebs), ebs.dsz);
     kprintln!(
-        "[X1-paging] own PML4 live: identity 0-4 GiB supervisor-only (2 MiB pages, MMIO uncached), user window at {:#x}; NX={} SMEP={} SMAP={}",
+        "[X1-paging] own PML4 live: identity 0-4 GiB supervisor-only (2 MiB pages; {} non-RAM pages uncached), user window at {:#x}; NX={} SMEP={} SMAP={}",
+        uc,
         paging::USER_BASE,
         f.nx,
         f.smep,
         f.smap
+    );
+
+    // ---- X2: platform discovery from firmware tables (ACPI), physical memory, interrupt controllers ----
+    let tables = acpi::tables(rsdp).unwrap_or_else(|e| fail(e));
+    let madt = acpi::madt(&tables.find(b"APIC").unwrap_or_else(|| fail("no MADT")));
+    let ecam = acpi::mcfg(&tables.find(b"MCFG").unwrap_or_else(|| fail("no MCFG"))).unwrap_or_else(|| fail("bad MCFG"));
+    kprintln!(
+        "[X2-acpi] {} tables verified; MADT: {} CPU(s) ({} x2APIC entries), LAPIC {:#x}, {} IOAPIC(s), {} IRQ overrides, 8259={}; MCFG: ECAM {:#x} seg {} buses {}-{}",
+        tables.count,
+        madt.cpus,
+        madt.x2apic_entries,
+        madt.lapic_addr,
+        madt.n_ioapic,
+        madt.overrides,
+        madt.has_8259,
+        ecam.base,
+        ecam.segment,
+        ecam.bus_start,
+        ecam.bus_end
+    );
+    if madt.cpus == 0 || madt.n_ioapic == 0 {
+        fail("MADT lists no CPU or no IOAPIC");
+    }
+
+    let mut frames = frames::Frames::from_map(saved_map(&ebs), ebs.dsz);
+    let image_lo = efi_main as *const () as u64;
+    let mut prev = 0u64;
+    for k in 0..64 {
+        let pa = frames.alloc().unwrap_or_else(|| fail("frame allocator exhausted"));
+        let p = pa as *mut u64;
+        unsafe {
+            p.write_volatile(0xF4A3_0000_0000 | k);
+            if p.read_volatile() != 0xF4A3_0000_0000 | k {
+                fail("frame not writable");
+            }
+        }
+        if pa & 0xFFF != 0 || pa < 0x10_0000 || pa == prev || (image_lo >= pa && image_lo < pa + 4096) {
+            fail("frame allocator handed out a bad frame");
+        }
+        prev = pa;
+    }
+    kprintln!(
+        "[X2-frames] allocator from the saved map: {} merged ranges ({} dropped), {} free 4 KiB frames (≤4 GiB); 64 allocated, aligned, distinct, writable, none overlaps this image",
+        frames.ranges(),
+        frames.dropped,
+        frames.total,
     );
 
     match rng::health(64) {
@@ -158,7 +234,19 @@ pub extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> Status {
         }
     }
 
-    let apic_base = apic::init_timer(0x8_0000);
+    let mut ioapics = 0;
+    for io in &madt.ioapics[..madt.n_ioapic] {
+        let (ver, entries) = apic::ioapic_mask_all(io.addr);
+        kprintln!("[X2-ioapic] IOAPIC id {} at {:#x}: version {:#x}, {} inputs (GSI {}..), all masked", io.id, io.addr, ver, entries, io.gsi_base);
+        ioapics += (entries > 0) as usize;
+    }
+    if ioapics == 0 {
+        fail("no usable IOAPIC");
+    }
+
+    let lapic = apic::init_timer(0x8_0000, false);
+    kprintln!("[X2-lapic] local APIC mode: {} (APIC ID {})", if lapic.x2apic { "x2APIC (MSR)" } else { "xAPIC (MMIO; CPU has no x2APIC)" }, apic::id());
+    let apic_base = lapic.base;
     unsafe { core::arch::asm!("sti") };
     let t0 = rdtsc();
     while cpu::TICKS.load(Ordering::SeqCst) < 10 {
@@ -201,5 +289,59 @@ pub extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> Status {
     }
 
     kprintln!("[X1] PASS — x86_64 substrate: UEFI exit, GDT/TSS, IDT, paging, LAPIC timer, RDSEED, ring 3 + isolation");
+
+    // ---- X2: PCIe through ECAM, virtio-pci discovery (read-only) ----
+    let s = pci::scan(&ecam);
+    kprintln!("[X2-pci] ECAM scan: {} functions ({} bridges), {} virtio", s.functions, s.bridges, s.n_virtio);
+    let (mut net, mut blk) = (false, false);
+    for v in &s.virtio[..s.n_virtio] {
+        kprintln!(
+            "[X2-pci]   virtio-{} {:02x}:{:02x}.{} id {:#06x} — {} transport (virtio caps mask {:#07b})",
+            v.kind,
+            v.bus,
+            v.dev,
+            v.func,
+            v.device_id,
+            if v.modern { "modern 1.x" } else { "legacy-only" },
+            v.caps
+        );
+        net |= v.kind == "net" && v.modern;
+        blk |= v.kind == "blk" && v.modern;
+    }
+    if s.functions == 0 || !net || !blk {
+        fail("PCIe scan did not find a modern virtio-net and virtio-blk");
+    }
+    let find = |k: &str| {
+        s.virtio[..s.n_virtio].iter().find(|v| v.kind == k && v.modern).map(|v| virtio::Func { bus: v.bus, dev: v.dev, func: v.func })
+    };
+
+    // ---- X2: real I/O through the modern virtio-pci transport (polled) ----
+    let b = virtio::blk_read_sector0(&ecam, find("blk").unwrap(), &mut frames).unwrap_or_else(|e| fail(e));
+    if !b.sector0.starts_with(BLK_PATTERN) {
+        fail("virtio-blk: sector 0 does not carry the runner's pattern");
+    }
+    kprintln!(
+        "[X2-blk] virtio-blk READ sector 0 OK: {} sectors, pattern \"{}\" matched{}",
+        b.capacity_sectors,
+        core::str::from_utf8(BLK_PATTERN).unwrap(),
+        if b.high_bars { " (BAR above 4 GiB, mapped on demand)" } else { "" }
+    );
+
+    // xid only pairs our DISCOVER with its OFFER; it is not a secret, so the TSC is fine here.
+    let xid = (rdtsc() as u32) | 1;
+    let n = virtio::net_dhcp_probe(&ecam, find("net").unwrap(), &mut frames, xid).unwrap_or_else(|e| fail(e));
+    let (o, sv) = (n.offered, n.server);
+    kprintln!(
+        "[X2-net] virtio-net TX DHCPDISCOVER → RX DHCPOFFER {}.{}.{}.{} from {}.{}.{}.{} (MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}, xid {:#010x}){}",
+        o[0], o[1], o[2], o[3], sv[0], sv[1], sv[2], sv[3],
+        n.mac[0], n.mac[1], n.mac[2], n.mac[3], n.mac[4], n.mac[5],
+        xid,
+        if n.high_bars { " (BAR above 4 GiB, mapped on demand)" } else { "" }
+    );
+    if n.offered == [0; 4] {
+        fail("virtio-net: DHCPOFFER without an address");
+    }
+
+    kprintln!("[X2] PASS — ACPI MADT/MCFG, frame allocator, IOAPIC, {} local APIC, PCIe ECAM, virtio-pci blk READ + net TX/RX", if lapic.x2apic { "x2APIC" } else { "xAPIC" });
     qemu_exit(EXIT_PASS)
 }
