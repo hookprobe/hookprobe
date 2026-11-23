@@ -27,9 +27,16 @@ use ed25519_compact::KeyPair;
 pub const HS_PORT: u16 = 7654;
 /// Max on-wire datagram = eth(14)+ip(20)+udp(8)+[chunk-hdr(4)+chunk(≤1024)].
 const DGRAM_CAP: usize = 14 + 20 + 8 + 4 + 1024;
-/// Retransmit interval + attempt cap (bounded — the air-gap invariant as code).
+/// Retransmit interval + attempt cap (bounded — the air-gap invariant as code). The interval doubles per attempt
+/// (0.5 / 1 / 2 / 4 s, 7.5 s budget): a fixed 500 ms re-sent msg1 before a slow path's msg2 could arrive, and a PoP
+/// that answers every copy with a NEW session leaves the device on the first, already-replaced sid (S1 F-S1-1).
 const RETX_MS: i64 = 500;
 const MAX_ATTEMPTS: u8 = 4;
+
+/// How long to wait for msg2 after sending msg1 for the `attempts`-th time (1-based).
+fn retx_after(attempts: u8) -> i64 {
+    RETX_MS << (attempts.saturating_sub(1).min(5) as u32)
+}
 /// A transport session lives at most this long, then the device re-handshakes with FRESH ephemerals
 /// (X25519 + ML-KEM from the TRNG) — post-compromise healing + forward secrecy for long uptimes (BOI
 /// review Q1 M2: a key used to live until reboot). Counter-based too: well before the 2^64 nonce wall.
@@ -250,7 +257,7 @@ impl ControlPlane {
                 }
             }
             CpState::SentMsg1 => {
-                if now_ms - self.last_tx_ms >= RETX_MS {
+                if now_ms - self.last_tx_ms >= retx_after(self.attempts) {
                     if self.attempts >= MAX_ATTEMPTS {
                         // no responder in budget (air-gap: the sensor is unaffected) — back off, then retry
                         self.fail(now_ms);
@@ -464,11 +471,16 @@ pub fn cp_selftest() {
     ));
     cp.tick(t3, true, &mut || third.take());
     let mut t = t3;
-    for _ in 0..MAX_ATTEMPTS + 1 {
-        t += RETX_MS;
+    // the retransmit interval backs off: still waiting just before 0.5 s + 1 s, i.e. no third copy yet
+    t += RETX_MS;
+    cp.tick(t, true, &mut || None); // 2nd copy at 0.5 s
+    cp.tick(t + 2 * RETX_MS - 1, true, &mut || None);
+    let backs_off = cp.state() == CpState::SentMsg1 && cp.attempts == 2;
+    for a in 2..=MAX_ATTEMPTS {
+        t += retx_after(a);
         cp.tick(t, true, &mut || None);
     }
-    let failed = cp.state() == CpState::Failed;
+    let failed = backs_off && cp.state() == CpState::Failed;
     cp.tick(t + 1_000, true, &mut || None);
     let held = cp.state() == CpState::Failed; // still backing off
     cp.tick(t + RETRY_BASE_MS + 1, true, &mut || None);
