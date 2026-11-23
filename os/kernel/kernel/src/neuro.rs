@@ -54,6 +54,9 @@ mod el0 {
         pub faults: u64,
         pub complaints: u64,
         pub restarts: u64,
+        /// Per-excursion timing on the real hardware clock, per command class (0 = EVENTS, 1 = CLOSE_HOUR,
+        /// 2 = the rest): (calls, total ticks, worst ticks). Status-register open item "per-excursion timing".
+        pub exc: [(u64, u64, u64); 3],
         sup: hal::superv::Sup,
         pub info: Option<Info>,
     }
@@ -78,7 +81,7 @@ mod el0 {
         let parsed = crate::elf::parse(NEURO_ELF).map_err(|_| "ELF parse")?;
         let aspace = crate::el0as::El0As::new().ok_or("no address space")?;
         let entry = hal::superv::entry(NAME).ok_or("no supervisor entry")?;
-        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, complaints: 0, restarts: 0, sup: hal::superv::Sup::new(entry), info: None };
+        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, complaints: 0, restarts: 0, exc: [(0, 0, 0); 3], sup: hal::superv::Sup::new(entry), info: None };
         for g in parsed.segs[..parsed.nsegs].iter() {
             if g.vaddr < BASE || g.vaddr + g.memsz > BASE + IMAGE_MAX {
                 return Err("segment outside the window");
@@ -186,6 +189,9 @@ mod el0 {
             let t0 = crate::clock::ticks();
             let how = crate::el0as::excursion(&self.aspace, self.entry, self.sp_top, BUDGET_US);
             crate::superv::cpu_charge(C, t0);
+            let dt = crate::clock::ticks().wrapping_sub(t0);
+            let e = &mut self.exc[match cmd { CMD_EVENTS => 0, CMD_CLOSE_HOUR => 1, _ => 2 }];
+            *e = (e.0 + 1, e.1.wrapping_add(dt), e.2.max(dt));
             let st = if how == crate::Excursion::Exited { self.r32(H_STATUS) } else { ST_PANIC };
             if st == ST_PANIC {
                 self.faults += 1;
@@ -393,6 +399,12 @@ mod el0 {
         kprint!("   [NEURO beat] fed={} dropped={} batches={} hours={} failed={} results={} deviant={} resets={} evictions={} no_clock_frames={} | dp frames={} class={} local={} named={} prefix={} names={} dns_timeouts={} udp_evicted={}\n",
             c.events_fed, c.events_dropped, c.batches, c.hours_closed, c.hours_failed, c.results, c.deviant, c.server_resets, c.slot_evictions, c.frames_no_clock,
             d.frames, d.rule_class, d.rule_local, d.rule_named, d.rule_prefix, d.names_learned, d.dns_timeouts, d.udp_evicted);
+        // per-excursion cost (entry -> EL0 -> exit, incl. the address-space switch), microseconds
+        let us = |t: u64| t * 1_000_000 / crate::clock::freq().max(1);
+        let x = h.srv.exc;
+        let avg = |e: (u64, u64, u64)| if e.0 == 0 { 0 } else { us(e.1 / e.0) };
+        kprint!("   [NEURO exc] events n={} avg={}us max={}us | close_hour n={} avg={}us max={}us | other n={} avg={}us max={}us\n",
+            x[0].0, avg(x[0]), us(x[0].2), x[1].0, avg(x[1]), us(x[1].2), x[2].0, avg(x[2]), us(x[2].2));
     }
 
     /// The AP loop's once-a-second tick: releases timed-out DNS queries and closes the UTC hour when it is over.
