@@ -46,9 +46,9 @@ pub fn keeps_mgmt_path(policy_section: Option<&[u8]>) -> bool {
     if !cfgbundle::policy_file(sec, &mut file) {
         return false;
     }
-    static mut SCRATCH: hal::policy::Policy = hal::policy::Policy::new();
-    let pol = unsafe { &mut *core::ptr::addr_of_mut!(SCRATCH) };
-    *pol = hal::policy::Policy::new();
+    // In .bss (an initialised 17 KB Policy static was stored in the image's .data): written fresh on every use.
+    static mut SCRATCH: core::mem::MaybeUninit<hal::policy::Policy> = core::mem::MaybeUninit::uninit();
+    let pol = unsafe { (*core::ptr::addr_of_mut!(SCRATCH)).write(hal::policy::Policy::new()) };
     if hal::policy::parse_policy(&file, pol).is_err() {
         return false; // an unparseable policy would lock management down at boot
     }

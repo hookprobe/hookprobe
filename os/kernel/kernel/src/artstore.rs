@@ -649,10 +649,10 @@ pub fn wan_has_secret(b: &[u8]) -> bool {
 /// a signed policy the parser refuses would put the device into the management lockdown at the next boot.
 /// The result of the last `verify` that carried a policy (None = parses / no policy).
 static mut POLICY_REFUSED: Option<hal::policy::PolicyErr> = None;
-static mut PSCRATCH: hal::policy::Policy = hal::policy::Policy::new();
+// In .bss (an initialised 17 KB Policy static was stored in the image's .data): written fresh on every use.
+static mut PSCRATCH: core::mem::MaybeUninit<hal::policy::Policy> = core::mem::MaybeUninit::uninit();
 fn check_policy_parses(file: &[u8]) {
-    let p = unsafe { &mut *core::ptr::addr_of_mut!(PSCRATCH) };
-    *p = hal::policy::Policy::new();
+    let p = unsafe { (*core::ptr::addr_of_mut!(PSCRATCH)).write(hal::policy::Policy::new()) };
     let r = hal::policy::parse_policy(file, p).err().filter(|e| *e != hal::policy::PolicyErr::Unsigned);
     unsafe { POLICY_REFUSED = r };
 }
