@@ -97,8 +97,8 @@ wifi-inject = ["apmc", "arch-aarch64/wifi-inject"]
 swifi = ["mcserve"]
 # HookProbe Neuro stage 1 (N0): host the el0-neuro EL0 excursion server (os/neuro/el0-neuro) — the per-device behavioural
 # memory that OBSERVES and SCORES; its output is evidence only, never an alert or an enforcement input
-# (the repo-root design doc heqk-neuro-integration.md). QEMU self-tests [P-neuro-*] in the mcserve boot (tools/neuro-qemu.sh). Not in
-# any shipping or bench image yet: CM5 metal evidence comes first (design doc §9, P2).
+# (the repo-root design doc heqk-neuro-integration.md). QEMU self-tests [P-neuro-*] in the mcserve boot (tools/neuro-qemu.sh). In the
+# shipping flavour since the operator's MVP decision of 2026-11-23 (tools/ci/shipping-features.txt), after CM5 metal evidence.
 neuro = ["mcserve", "dep:neuro-dp"]
 # QEMU INTEGRATION-TEST PROFILE ONLY (operator decision 2026-11-22, G19 S1): entropy from a virtio-rng device (host
 # /dev/urandom) behind the strict HwTrng contract, so a QEMU guest can run real key generation (G19 handshake, per-VM

@@ -55,8 +55,9 @@ items:
     state: proposed
     owner: Neuro research session (Apple M5 Pro host); this integration consumes signed packages only (D3)
   - id: api-evidence
-    what: read-only evidence fields for Mission Control (UI designer-owned)
-    state: not_started
+    what: read-only evidence fields for Mission Control (UI designer-owned) — GET /api/neuro (#1517)
+    state: metal_passed
+    evidence: [docs/design/metal-evidence/20261123-neuro-api-cm5.md, "[P-neuro-api]"]
     plan: P2
     inputs: "doc 34 (#1508): after a server reset N0 flags FEWER deviant hours (~0.3x at 24-72 h, normal after ~2 weeks) - expose relearning_since (time of the last el0-neuro reset / first boot) with every evidence record. 6 h metal run (20261123-neuro-6h-cm5.md): a new device's first hours are all deviant (cold start) - expose the device's first-seen time / warm-up state as well. The UI owner decides the presentation."
   - id: cm5-metal
