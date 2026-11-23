@@ -11,6 +11,7 @@ The engine **observes and scores**. It never decides enforcement (ADR 0023, cont
 | Crate | What | Target |
 |---|---|---|
 | [`neuro-core/`](neuro-core/) | the engine: integer streaming DNA. No `unsafe`, no allocation, no float, no dependencies. | any (`no_std`); tests on the host |
+| [`neuro-l1/`](neuro-l1/) | **candidate, not deployed:** the DNA v1 host-hour vector in fixed point + the frozen M3 S1 model's integer twin (docs 31, 35). Not used by the kernel; gated on doc 35 M4 and a signed package (D3) | any (`no_std`); tests on the host |
 | [`el0-neuro/`](el0-neuro/) | the EL0 server: shared-IO ABI (`hal::neuroabi` v1, shared with the kernel host `os/kernel/kernel/src/neuro.rs`), 64 device slots in `.bss`, commands EVENTS / CLOSE_HOUR / RESET_DEV / INFO | `aarch64-unknown-none-softfloat` |
 
 ## Verification status — read before relying on it
@@ -23,6 +24,7 @@ The engine **observes and scores**. It never decides enforcement (ADR 0023, cont
 | Peer keys for the data plane (`neuro-core::peerkey`) equal the Python reference bit for bit | **passed** (host) | `neuro-core/tests/peerkey.rs`: 3,000 keys in 5 modes and 4,000 name-table operations (64-entry table, evictions) identical to `unsw_to_d1.py`; `NameEntry` 32 B, `NameTable<4096>` 128 KiB |
 | Runs in QEMU-heqk | **passed** (2026-11-22, behind the kernel feature `neuro`, off in every shipping image) | `os/kernel/tools/neuro-qemu.sh`: `[P-neuro-golden]` 1,200/1,200 closes bit-exact through the permanent ABI (`hal::neuroabi`, v1.1) + EL1 reply validation; fault containment, complaint/reset, backpressure, isolation. Design: [`docs/design/heqk-neuro-integration.md`](../../docs/design/heqk-neuro-integration.md) |
 | Data-plane adapter (doc 20 §2) | **passed** (host parity with the reference converter + `[P-neuro-dp]` in QEMU) | [`neuro-dp/`](neuro-dp/): frames -> fingerprints in EL1, bounded state |
+| `neuro-l1` equals the Python DNA v1 + S1 reference | **passed** (host): every S1 decision equal, every u8 feature within 1 quantum | `neuro-l1/tests/parity.rs` on 140 real dev windows (CI); locally on every CTU-13 dev + test window (771) and the IoT-23 test windows (see `neuro-l1/README.md`) |
 | Runs on CM5 | **not started** | needs a bench slot (design doc §9 P3) |
 
 ## Run the checks
