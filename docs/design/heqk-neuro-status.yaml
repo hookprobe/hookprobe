@@ -58,6 +58,7 @@ items:
     what: read-only evidence fields for Mission Control (UI designer-owned)
     state: not_started
     plan: P2
+    inputs: "doc 34 (#1508): after a server reset N0 flags FEWER deviant hours (~0.3x at 24-72 h, normal after ~2 weeks) - expose relearning_since (time of the last el0-neuro reset / first boot) with every evidence record. 6 h metal run (20261123-neuro-6h-cm5.md): a new device's first hours are all deviant (cold start) - expose the device's first-seen time / warm-up state as well. The UI owner decides the presentation."
   - id: cm5-metal
     what: A/B on CM5 under Wi-Fi load — loop per-beat p50 equal, p95 +9 ms (2%), ap_poll equal, 14,935 events 0 dropped
     state: metal_passed
@@ -90,7 +91,9 @@ items:
     state: proposed
   - id: m3
     what: sealed M3 confirmation (doc 31)
-    state: not_started
+    state: measured_failed
+    evidence: [docs/research/neuro/data/m3-results.md (#1507), docs/research/neuro/34_NEURO_HEQK_ALIGNMENT_AFTER_M3.md (#1508)]
+    note: "S1/S2/S3 all below the recall bar (S1 0.680; IoT-23 0.993, CTU-13 0.320). Stop rules: nothing deployed, rules_ver stays 1, R-D1 not recommended, heqk P5 stays gated. The kernel host stays at N0 (evidence only)."
   - id: L3-explainer
     what: language tier, explain-only, off-device until R2-R8
     state: proposed
