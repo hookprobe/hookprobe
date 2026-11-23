@@ -102,3 +102,18 @@ ftFg-AE is run and reported (as the incumbent), not gated.
 
 **One look.** If ftHg passes, it replaces ftFg as the explainer candidate. If it fails, ftFg stays. The explainer
 is descriptive and off the protection path either way (doc 30).
+
+## Addendum: run 1 aborted (2026-11-23 08:36). No model was trained; the rule was not applied
+
+The training step failed at once with `ModuleNotFoundError: mlx_lm`. The routine cleanup of the work directory
+(under `/private/tmp`, at 00:00) had deleted files nobody had read for days from the MLX training environment.
+
+The chain did not stop on the error. It went on to "evaluate" a server that never started, so its `SELECT.md` scored
+an empty model (all zeros). **That output is void.** It is kept aside as `mixH-dev-ABORTED-run1` and is not a
+result.
+
+**Nothing was changed:** the data split (seed 36), the recipe, the rule and the scripts are as pinned above. mixH
+will be trained and judged once the environment is rebuilt with the same versions (mlx 0.32.4, mlx-lm 0.32.2).
+
+**Fix for the rerun.** The chain must stop if training produces no adapter. `mixH_chain.sh` is unchanged; the rerun
+command checks this between steps.
