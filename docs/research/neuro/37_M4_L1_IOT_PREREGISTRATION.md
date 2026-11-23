@@ -162,10 +162,12 @@ written: the intake is held until amendment B is merged.
 1. Source: `ciciot2023`, PCAPs only. Gated: every capture of the **Mirai** category. All other categories may be
    reported, not gated; their PCAPs are fetched only if the size cap allows after the Mirai ones.
 2. Size: at most 100 GB in total for CICIoT2023, Mirai captures first, then in the site's listing order.
-3. Labels: by host. Every IP frame sent from an attacking device's address is an attack frame. The attacking
-   addresses come from the dataset's own documentation (paper or site). If the documentation names none, intake
-   takes as attackers the addresses that each send at least 10% of a Mirai capture's IP frames, a rule fixed here and
-   applied to counts only, before scoring.
+3. Labels: by host. Every IP frame sent from an attacking device's address is an attack frame. The paper (Sensors
+   23(13):5941) names no attacking address. It says Mirai ran from five of the testbed's Raspberry Pis, and its
+   Table 1 lists the ten Raspberry Pi MACs (recorded by intel-data, #1534). So intake applies this rule, to counts
+   only and before scoring: in each Mirai capture, an **attacker** is one of those ten MACs that sends at least 10%
+   of the capture's IP frames; its IPv4 source addresses in that capture are passed as `--labels infected:`. If no
+   Pi qualifies in a capture, that capture is reported, not gated.
 4. Each capture is hashed into the sealed CICIoT2023 directory. Nothing is opened beyond hashing until intake.
 
 **Code.** `m4_gate.py` gains a third gated source, `ciciot2023-mirai`, so condition 1 now pools Kitsune-Mirai,
