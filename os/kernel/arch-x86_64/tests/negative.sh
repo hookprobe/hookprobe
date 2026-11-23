@@ -6,6 +6,8 @@
 #   3. mutant: user stack page executable (NX bit dropped)
 #                                            → the NX-execute check must report "NOT refused", exit 35
 #   4. no virtio devices on the PCIe bus     → the X2 PCIe stage must FAIL (exit 35), not pass vacuously
+#   5. different disk content                → the virtio-blk sector-0 check must FAIL (the read is real)
+#   6. NIC backend with no DHCP server       → the virtio-net DISCOVER → OFFER check must FAIL
 # Mutants are built from a temp COPY of the crate; the source tree is never modified.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -56,6 +58,8 @@ if D=$(mutant "NX-drop" "| P | RW | US | nx; // RW, never executable" "| P | RW 
 fi
 
 expect_fail "no virtio devices → X2 PCIe stage fails (not vacuous)" 'PCIe scan did not find' -- X1_NODEV=1
+expect_fail "different disk content → virtio-blk pattern check fails (the read is real)" 'sector 0 does not carry' -- X1_BLK_PATTERN=NOT-THE-EXPECTED-PATTERN-XX
+expect_fail "NIC with no DHCP server behind it → virtio-net DHCP check fails" 'no DHCPOFFER received' -- X1_NET_DEAD=1
 
 echo "negative: $pass passed, $fail failed"
 [ "$fail" = 0 ]

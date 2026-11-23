@@ -7,13 +7,13 @@ use crate::acpi::Ecam;
 
 /// The MCFG base address is that of bus 0 of the segment, whatever its start bus (PCI Firmware spec; Linux
 /// pci_mmcfg uses it the same way), so the bus offset is never rebased on `bus_start`.
-fn cfg(e: &Ecam, bus: u8, dev: u8, func: u8, off: u16) -> u64 {
+pub fn cfg(e: &Ecam, bus: u8, dev: u8, func: u8, off: u16) -> u64 {
     e.base + ((bus as u64) << 20) + ((dev as u64) << 15) + ((func as u64) << 12) + off as u64
 }
-fn r8(a: u64) -> u8 {
+pub fn r8(a: u64) -> u8 {
     unsafe { core::ptr::read_volatile(a as *const u8) }
 }
-fn r16(a: u64) -> u16 {
+pub fn r16(a: u64) -> u16 {
     unsafe { core::ptr::read_volatile(a as *const u16) }
 }
 

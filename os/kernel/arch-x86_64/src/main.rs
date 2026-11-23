@@ -26,6 +26,10 @@ mod io;
 mod paging;
 mod pci;
 mod rng;
+mod virtio;
+
+/// run-qemu.sh writes this at the start of the virtio-blk backing file; X2 must read it back.
+const BLK_PATTERN: &[u8] = b"HEQK-X2-VIRTIO-BLK-SECTOR0";
 
 use core::sync::atomic::Ordering;
 use efi::*;
@@ -307,7 +311,37 @@ pub extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> Status {
     if s.functions == 0 || !net || !blk {
         fail("PCIe scan did not find a modern virtio-net and virtio-blk");
     }
+    let find = |k: &str| {
+        s.virtio[..s.n_virtio].iter().find(|v| v.kind == k && v.modern).map(|v| virtio::Func { bus: v.bus, dev: v.dev, func: v.func })
+    };
 
-    kprintln!("[X2] PASS — ACPI MADT/MCFG, frame allocator, IOAPIC, {} local APIC, PCIe ECAM + modern virtio-pci discovery", if lapic.x2apic { "x2APIC" } else { "xAPIC" });
+    // ---- X2: real I/O through the modern virtio-pci transport (polled) ----
+    let b = virtio::blk_read_sector0(&ecam, find("blk").unwrap(), &mut frames).unwrap_or_else(|e| fail(e));
+    if !b.sector0.starts_with(BLK_PATTERN) {
+        fail("virtio-blk: sector 0 does not carry the runner's pattern");
+    }
+    kprintln!(
+        "[X2-blk] virtio-blk READ sector 0 OK: {} sectors, pattern \"{}\" matched{}",
+        b.capacity_sectors,
+        core::str::from_utf8(BLK_PATTERN).unwrap(),
+        if b.high_bars { " (BAR above 4 GiB, mapped on demand)" } else { "" }
+    );
+
+    // xid only pairs our DISCOVER with its OFFER; it is not a secret, so the TSC is fine here.
+    let xid = (rdtsc() as u32) | 1;
+    let n = virtio::net_dhcp_probe(&ecam, find("net").unwrap(), &mut frames, xid).unwrap_or_else(|e| fail(e));
+    let (o, sv) = (n.offered, n.server);
+    kprintln!(
+        "[X2-net] virtio-net TX DHCPDISCOVER → RX DHCPOFFER {}.{}.{}.{} from {}.{}.{}.{} (MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}, xid {:#010x}){}",
+        o[0], o[1], o[2], o[3], sv[0], sv[1], sv[2], sv[3],
+        n.mac[0], n.mac[1], n.mac[2], n.mac[3], n.mac[4], n.mac[5],
+        xid,
+        if n.high_bars { " (BAR above 4 GiB, mapped on demand)" } else { "" }
+    );
+    if n.offered == [0; 4] {
+        fail("virtio-net: DHCPOFFER without an address");
+    }
+
+    kprintln!("[X2] PASS — ACPI MADT/MCFG, frame allocator, IOAPIC, {} local APIC, PCIe ECAM, virtio-pci blk READ + net TX/RX", if lapic.x2apic { "x2APIC" } else { "xAPIC" });
     qemu_exit(EXIT_PASS)
 }

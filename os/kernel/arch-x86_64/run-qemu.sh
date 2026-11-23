@@ -16,12 +16,18 @@ EFI="$HERE/target/x86_64-unknown-uefi/release/heqk-x86.efi"
 
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/esp/EFI/BOOT"; cp "$EFI" "$T/esp/EFI/BOOT/BOOTX64.EFI"; cp "$OVMF_VARS" "$T/vars.fd"
-truncate -s 1M "$T/blk.img"   # a throwaway virtio-blk backing file (X2 only discovers the device)
-# X2 discovers these (modern-only virtio-pci). The user-mode NIC is `restrict=on`: nothing leaves the host.
+# A throwaway virtio-blk backing file; X2 must READ this pattern back from sector 0 (X1_BLK_PATTERN overrides it,
+# which tests/negative.sh uses to prove the read is real).
+printf '%s' "${X1_BLK_PATTERN:-HEQK-X2-VIRTIO-BLK-SECTOR0}" >"$T/blk.img"; truncate -s 1M "$T/blk.img"
+# X2 drives these (modern-only virtio-pci). The user-mode NIC is `restrict=on`: nothing leaves the host (QEMU's
+# built-in DHCP server still answers, which is what the X2 DISCOVER → OFFER check talks to).
 # X1_NODEV=1 omits them (tests/negative.sh: the PCIe stage must then FAIL, not pass vacuously).
 DEVS=(-netdev "user,id=n0,restrict=on" -device "virtio-net-pci,netdev=n0,disable-legacy=on"
       -drive "file=$T/blk.img,format=raw,if=none,id=b0" -device "virtio-blk-pci,drive=b0,disable-legacy=on")
 [ "${X1_NODEV:-0}" = 1 ] && DEVS=()
+# X1_NET_DEAD=1: the NIC's backend is a UDP socket to the local discard port: frames go nowhere and no DHCP server
+# answers (tests/negative.sh: the DHCP check must then FAIL).
+[ "${X1_NET_DEAD:-0}" = 1 ] && DEVS[1]="socket,id=n0,udp=127.0.0.1:9,localaddr=127.0.0.1:0"
 
 ACCEL="${X1_ACCEL:-auto}"
 if [ "$ACCEL" = auto ]; then [ -r /dev/kvm ] && [ -w /dev/kvm ] && ACCEL=kvm || ACCEL=tcg; fi
@@ -43,7 +49,7 @@ MISSING=0
 for m in '\[X1\] heqk x86_64 entered' '\[X1-ebs\]' '\[X1-gdt\]' '\[X1-idt\]' '\[X1-paging\]' '\[X1-rng\] PASS' \
          '\[X1-apic\]' '\[X1-ring3\]' '\[X1-ring3-iso\] CPL3 read' '\[X1\] PASS' \
          '\[X2-acpi\]' '\[X2-frames\]' '\[X2-ioapic\]' '\[X2-lapic\]' '\[X2-pci\].*virtio-net' '\[X2-pci\].*virtio-blk' \
-         '\[X2\] PASS'; do
+         '\[X2-blk\] virtio-blk READ sector 0 OK' '\[X2-net\] virtio-net TX DHCPDISCOVER → RX DHCPOFFER' '\[X2\] PASS'; do
   grep -aq "$m" "$T/serial.log" || { echo "run-qemu: missing marker: $m"; MISSING=1; }
 done
 echo "run-qemu: accel=$ACCEL qemu-exit=$RC (33 = PASS)"

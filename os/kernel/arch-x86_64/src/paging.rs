@@ -128,3 +128,42 @@ pub fn load_user_code(code: &[u8]) {
         core::ptr::copy_nonoverlapping(code.as_ptr(), page, code.len());
     }
 }
+
+const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
+
+/// Identity-map a device MMIO range (e.g. a 64-bit BAR that firmware placed above 4 GiB) as SUPERVISOR,
+/// uncached, never-executable 2 MiB pages. Missing intermediate tables come from the frame allocator.
+/// Refuses a range overlapping the user window. (Callers pass firmware-assigned BARs, which never overlap RAM.)
+pub fn map_mmio(frames: &mut crate::frames::Frames, pa: u64, len: u64) -> Result<(), &'static str> {
+    if len == 0 || pa.checked_add(len).is_none() || pa + len > (1 << 46) {
+        return Err("MMIO range out of bounds");
+    }
+    let (lo, hi) = (pa & !((2 << 20) - 1), (pa + len + (2 << 20) - 1) & !((2 << 20) - 1));
+    if lo < USER_BASE + (1 << 30) && hi > USER_BASE {
+        return Err("MMIO range overlaps the user window");
+    }
+    let nx = if features().nx { NX } else { 0 };
+    let mut a = lo;
+    while a < hi {
+        unsafe {
+            let pml4 = (&raw mut PML4) as *mut u64;
+            let e4 = pml4.add(((a >> 39) & 511) as usize);
+            if *e4 & P == 0 {
+                *e4 = frames.alloc().ok_or("no frame for a PDPT")? | P | RW; // supervisor: no US bit
+            }
+            let pdpt = (*e4 & ADDR_MASK) as *mut u64;
+            let e3 = pdpt.add(((a >> 30) & 511) as usize);
+            if *e3 & P == 0 {
+                *e3 = frames.alloc().ok_or("no frame for a PD")? | P | RW;
+            } else if *e3 & PS != 0 {
+                return Err("1 GiB page in the way");
+            }
+            let pd = (*e3 & ADDR_MASK) as *mut u64;
+            let e2 = pd.add(((a >> 21) & 511) as usize);
+            *e2 = a | P | RW | PS | PCD | PWT | nx;
+            asm!("invlpg [{}]", in(reg) a, options(nostack, preserves_flags));
+        }
+        a += 2 << 20;
+    }
+    Ok(())
+}
