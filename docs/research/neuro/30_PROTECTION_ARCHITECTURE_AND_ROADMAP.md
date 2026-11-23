@@ -13,7 +13,7 @@ none of them.
 | Temporal DNA | ✅ **N0 in the MVP shipping flavour** (operator 2026-11-23, #1522): `neuro-core` in `el0-neuro`, evidence only; read-only `GET /api/neuro` with learning / relearning / warm (#1517) | `behavioural_memory`, `dna_fixed`, `dna_features` (v1, doc 27) | evidence-only (D1/D1b/D1c, P2); CM5 metal: 6 h load, fault containment, per-excursion timing, API | on-device record (doc 27) |
 | Supervised classifier | — | `bench.py` (LightGBM etc.) | dev benchmark (doc 28) | on-device scorer |
 | Policy compiler | — | `tools/neuro_policy` (HQPROP1, 8 property tests) | tests only | doc 29 |
-| Explainer (LLM) | — | ftFg + guard A/E (candidate, doc 26) | explanation gain on 2 of 3 blind sets; injection safety solved (doc 25) | thin-evidence fix: mixH → blind v7 (doc 36) |
+| Explainer (LLM) | — | ftFg + guard A/E (candidate, doc 26) | explanation gain on 2 of 3 blind sets; injection safety solved (doc 25) | thin-evidence fix: mixH not eligible, stopped (doc 36); a next attempt needs contrastive data and a new pre-registration |
 
 **Why fine-tuning has not consistently beaten the base model** (docs 23–26):
 - an over-benign shortcut learned from template data (role ⇒ benign);
@@ -77,7 +77,7 @@ fixed-point tree port possible later.
 | **M8** | **Policy compiler integration** (was M4 in the first version of this doc; renumbered 2026-11-23 so M4 means the same everywhere). HQPROP1 proposals rendered in the owner app; approval through HQMGMT1 → ADR 0053 actions. No kernel change. | End-to-end on QEMU: incident → proposal → owner approve → TTL action → expiry. | Neuro + app |
 | **M5** | **Kernel requests R-P1…R-P4** (doc 29 §7). | HomePods decision recorded. | HomePods |
 | **M6** | **Field study (P7).** One lived-in home, 2+ weeks, observe-only. | Alerts per device-week and owner-rated precision. | operator |
-| **M7** | **Explainer:** doc 26 result → blind v6 or ship guard + base. | Gate result recorded. **Status 2026-11-23:** ftFg is the candidate; its thin-evidence weakness is being addressed by doc 36 (mixH → blind v7, one look). | Neuro (running) |
+| **M7** | **Explainer:** doc 26 result → blind v6 or ship guard + base. | Gate result recorded. **Status 2026-11-23:** ftFg is the candidate; doc 36's mixH fixed thin evidence but over-used `insufficient_evidence` (8.3% on mal, 32.4% on sus), so it was not eligible; blind v7 not built; ftFg stays, thin evidence its recorded limitation. | Neuro (running) |
 | **Research (after M3)** | DNA v2 (DNS features), 10-min windows, drift detection (ADWIN), fixed-point trees in EL0 | — | — |
 
 ## 5. Dataset and licence register
