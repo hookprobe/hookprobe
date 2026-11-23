@@ -136,10 +136,19 @@ pub fn step(now_ms: u64) {
         }
         let Some(d) = dev() else { return };
         let js = unsafe { &mut *core::ptr::addr_of_mut!(JS) };
+        let t0 = crate::clock::ticks();
+        let stage = match job { Job::Check { job, .. } => job.progress().2, Job::Install { job, .. } => 10 + job.progress().2, Job::None => 0 };
+        let slow = |what: &str| {
+            let ms = crate::clock::ticks().wrapping_sub(t0) / (crate::clock::freq() / 1000).max(1);
+            if ms > 100 {
+                arch_aarch64::_print(format_args!(" [UPLOAD-SLOW] job step ({} stage {}) took {} ms\n", what, stage, ms));
+            }
+        };
         match job {
             Job::Check { id, job: cj } => {
                 let id = *id;
                 let r = cj.step(&*d, crate::otaimg::STEP_BYTES);
+                slow("verify");
                 (js.done, js.total, _) = cj.progress();
                 let Some(r) = r else { return };
                 unsafe { JOB = Job::None };
@@ -162,6 +171,7 @@ pub fn step(now_ms: u64) {
             }
             Job::Install { tag, now_ms: t0, reason, rl, job: ij } => {
                 let r = ij.step(d, crate::otaimg::STEP_SECTORS, crate::otaimg::STEP_BYTES);
+                slow("install");
                 (js.done, js.total, _) = ij.progress();
                 let Some(r) = r else { return };
                 let (tag, t0, reason, rl, plan) = (*tag, *t0, *reason, *rl, ij.plan());

@@ -101,9 +101,21 @@ fn contiguous_run<F: FnMut(u64, &mut [u8; 512]) -> bool>(f: &Fat, read: &mut F, 
     if first < 2 || first as u64 + n > max_c as u64 {
         return None;
     }
+    // F7 (metal 2026-11-23): one FAT sector holds 128 entries; reading it again for every cluster made this walk
+    // ~1,280 eMMC reads (~2.9 s on the CM5, inside the AP loop) for a 5 MiB slot. Keep the last sector read.
+    let mut cache: Option<(u64, [u8; 512])> = None;
     let mut c = first;
     for i in 0..n {
-        let nx = next(f, read, c)?;
+        let off = c as u64 * 4;
+        let lba = f.fat_lo + off / 512;
+        if cache.as_ref().map(|(l, _)| *l) != Some(lba) {
+            let mut s = [0u8; 512];
+            if !read(lba, &mut s) {
+                return None;
+            }
+            cache = Some((lba, s));
+        }
+        let nx = le32(&cache.as_ref()?.1, (off % 512) as usize) & 0x0FFF_FFFF;
         if i + 1 == n {
             if nx < EOC {
                 return None; // the chain is longer than the size says

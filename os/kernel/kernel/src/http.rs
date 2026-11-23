@@ -586,6 +586,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             Abort,
         }
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        let t_up = crate::clock::ticks(); // F7: any upload handler that blocks the loop > 100 ms says so
         let r = match req.path {
             "/api/upload/begin" => up::begin(&c, req.body, auth).map(|b| {
                 crate::cfgd::note_owner(req.peer); // F-e: the owner's own client must keep its path
@@ -598,6 +599,10 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             "/api/upload/rollback" => up::rollback(&c, req.body, auth).map(Ok_::Act),
             _ => Err("unknown upload step"),
         };
+        let ms = crate::clock::ticks().wrapping_sub(t_up) / (crate::clock::freq() / 1000).max(1);
+        if ms > 100 {
+            arch_aarch64::_print(format_args!(" [UPLOAD-SLOW] {} took {} ms in the AP loop\n", req.path, ms));
+        }
         return match r {
             Ok(o) => json(scratch, |w| {
                 use core::fmt::Write;
