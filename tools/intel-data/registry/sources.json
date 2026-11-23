@@ -5348,7 +5348,7 @@
     "csv"
    ],
    "machine_readable": true,
-   "records": "27,170,754 instances (UCI API num_instances)",
+   "records": "27,170,754 instances (UCI API). UCI page 2026-11-23: one archive, 'Download (17.7 GB)'; pcaps about 1.76 GB and labels about 46 MB in total (sum of listed sizes); Mirai: pcap 8.1 MB, labels 2.2 KB (compressed).",
    "collection_period": null,
    "publication_date": "2018 (NDSS); UCI year_of_dataset_creati…",
    "last_update": "2024-03-28 (UCI last_updated)",
@@ -5378,7 +5378,7 @@
     "https://archive.ics.uci.edu/dataset/516/kitsune+network+attack+dataset",
     "https://archive.ics.uci.edu/api/dataset?id=516"
    ],
-   "notes": "The UCI API returned license: null, but the rendered UCI dataset page states CC BY 4.0. The UCI listing does not name creators."
+   "notes": "The UCI API returned license: null, but the rendered UCI dataset page states CC BY 4.0. The UCI listing does not name creators. Sizes 2026-11-23 from the UCI page's file listing (nothing downloaded; the server does not answer HEAD for the zip): *_dataset.csv.gz 1-3 GB each (Mirai 313.4 MB), *_pcap.pcap(ng).gz 140.3-318.6 MB (Mirai 8.1 MB), *_labels.csv.gz 3.8-9.2 MB (Mirai 2.2 KB). Only the whole 17.7 GB archive has a download link."
   },
   {
    "id": "lanl-comprehensive-multisource-2015",
@@ -10358,7 +10358,7 @@
    "data_format": [
     "csv (IPFIX/YAF flow instances)"
    ],
-   "records": null,
+   "records": "HTTP Content-Length 2026-11-23 (HEAD only): all.zip 598,871,430 bytes; home1-12.csv 6,576,737,194 bytes in total (home11 214,604,752 to home4 1,611,735,608); devices.xlsx 22,483. Row counts not read.",
    "collection_period": "not stated on the page",
    "publication_date": "2023 (paper year on the page)",
    "last_update": null,
