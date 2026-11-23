@@ -124,7 +124,51 @@ are extracted with the frozen `bench/dna_features.py`, which is unchanged since 
 - DNA v1 features: `ctu13_test.jsonl`, 675 windows, SHA-256
   `96741d0440e2509e16b5ff0051c96d216d460ca4ac122e48b7f9c79c86f1ce0e`.
 
-**IoT-23 test:** still building at intel-data. It will be pinned here before the run.
+**IoT-23 test** (intel-data, purpose `evaluation`, finished 2026-11-23 04:02):
+- build id `windows-f1677e2e31b2`;
+- manifest SHA-256 `5a26578dbbb6546deb2cda7b86a366ce4dfa264dbefae5e61c9671463f394226`;
+- **code:** `d9f0aaaf` + `cb58dc7b`. The patch changes only the plain-file size cap: a plain file is bounded by its own
+  size, and gzip keeps the 8 GiB cap;
+- unsealed: all 13 test captures. The 10 dev captures are skipped. All 13 file SHA-256s were re-checked here
+  against the manifest: 0 mismatches;
+- context is the same acquisitions as dev and as CTU-13 test: iptoasn `1634a0e4…`, warninglists `8a171664…`, 196
+  kept;
+- DNA v1 features: `iot23_test.jsonl`, 313 windows, SHA-256 `2abcb0d2c61601b4081d263083e128615d26c846b79a9ca2da65719e6ba9ab00`.
+
+**Why the patch cannot change any dev or CTU-13 window** (intel-data):
+- the cap is 8,589,934,592 B;
+- the only plain inputs above it are IoT-23 test 39-1 (10,885,361,439 B) and 43-1 (9,363,261,631 B). Before the
+  patch, the first build attempt stopped at 39-1;
+- every IoT-23 dev file is ≤ 3,070,319,722 B and every CTU-13 file is < 1 GB. All are ASCII, with no gzip.
+
+**Determinism.** The failed attempt finished 9 files: 4-1, 5-1, 17-1, 20-1, 21-1, 33-1, 34-1, 35-1, 36-1. All 9 are
+byte-identical to this build. (Intel-data first said 11; corrected to 9.)
+
+**Pseudonymisation scan** (intel-data, first 2 GB of each file). The only addresses outside the documentation and
+benchmark ranges are:
+- the documented 240.0.0.0/4 overflow remote pool, which dev uses too;
+- multicast 224.0.0.251, kept by design.
+
+| Capture | Windows | Events | File SHA-256 |
+|---|---|---|---|
+| Honeypot-Capture-4-1 | 22 | 452 | `9381ff8add3e855d16d00124bd29847dc6362afb8fe936a8a699d10cefc41fd9` |
+| Honeypot-Capture-5-1 | 39 | 1,164 | `a0b21c00d2d2e13ba5146128c34d7fe70af8940aa3bab0a35ef8e8187e102e24` |
+| IoT-Malware-Capture-8-1 | 27 | 10,403 | `883aad56c704bbafb106dd691b0d8bc9fa030075f9bb1cdc403cb7bb85661b76` |
+| IoT-Malware-Capture-9-1 | 26 | 6,378,293 | `256c4f7f3b9d3db2f046c2fb08244fcf50200e639b275397532f715218f73a7d` |
+| IoT-Malware-Capture-17-1 | 26 | 54,659,855 | `88af082d2219998ee4e0d152557be232b464e2e7780be989bce78dc564221c97` |
+| IoT-Malware-Capture-20-1 | 26 | 3,209 | `a5c22e6173dc528d14dbde24165e091596e64c373ece58c2e2159c631150c349` |
+| IoT-Malware-Capture-21-1 | 27 | 3,286 | `faf959cb17c35571144e7897e35c6a5f8210d8600cfc6b064a982b971f30df0f` |
+| IoT-Malware-Capture-33-1 | 28 | 54,454,591 | `749abbfa5b1e90e43c45fee0fcc0d1ba2c9544537cad2a92a91f4d4829801cea` |
+| IoT-Malware-Capture-34-1 | 26 | 23,145 | `f3c63ce4e7ae7614ba8a6682f98a2740b84fa42852ce24aa0e4abfd41813a649` |
+| IoT-Malware-Capture-35-1 | 26 | 10,447,787 | `e47563440028e4f5907b17e5f450de405fa8d5b9833e649589682db7e8b79a55` |
+| IoT-Malware-Capture-36-1 | 27 | 13,645,098 | `03b7586c06bf5e4a1ea9ab01c858a9af4fb6019d0ddd4296b220b21e8d0753c8` |
+| IoT-Malware-Capture-39-1 | 10 | 73,568,981 | `18acde74804d0786e585e623d36c62415c418d4f30d08b204eb5c4f03514dcce` |
+| IoT-Malware-Capture-43-1 | 3 | 67,321,809 | `a011b2e792d601b61b745c7a48391e000fc9e794543cb0617bf36b76c7319825` |
+
+**Home set:** `unsw_m3_second.jsonl` (Addendum A, `c8adabb1…`). Intel-data has marked both test splits spent in `sealed.json` (PR #1503).
+
+**The run** uses `bench/m3_run.py` and `dna_features.py`, both unchanged since `128b2520`, once, with `venv-bench`:
+`m3_run.py --dev iot23_dev.jsonl,ctu13_dev.jsonl --test iot23_test.jsonl,ctu13_test.jsonl --home unsw_m3_second.jsonl`.
 
 **Intel-data's reproducibility proof.** Rebuilding CTU-13 dev at `d9f0aaaf` reproduced dev build
 `windows-8ada671b2e1e`'s 3 window files byte-for-byte.
