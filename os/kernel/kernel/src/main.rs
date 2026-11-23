@@ -15205,10 +15205,10 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
 /// (never a live lockdown) and makes cfgd revert.
 #[allow(dead_code)]
 fn apply_policy_live<D: hal::BlockDev>(dev: &D) -> bool {
-    static mut NEXT: hal::policy::Policy = hal::policy::Policy::new();
+    // In .bss (an initialised 17 KB Policy static was stored in the image's .data): written fresh on every use.
+    static mut NEXT: core::mem::MaybeUninit<hal::policy::Policy> = core::mem::MaybeUninit::uninit();
     let live = unsafe { &mut *core::ptr::addr_of_mut!(POLICY) };
-    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(NEXT) };
-    *scratch = hal::policy::Policy::new();
+    let scratch = unsafe { (*core::ptr::addr_of_mut!(NEXT)).write(hal::policy::Policy::new()) };
     let ok = match load_policy_to(dev, scratch) {
         Some(Ok(())) | None => cfgd::install_policy(live, scratch),
         Some(Err(_)) => false,
