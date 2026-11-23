@@ -27,7 +27,7 @@ python3 -I heqk_data.py lookup --purpose commercial_training                   #
 python3 -I heqk_data.py dga xjw3kq9vzt2lmpr8.com                     # heqk dga.rs, bit-exact
 python3 -I heqk_data.py dga-eval                                     # dga.rs FP/recall sweep on the store
 python3 -I heqk_data.py catalog --out ../../docs/research/intel-data/CATALOGUE.md
-python3 -I -m unittest discover -s tests -t tests                     # 98 tests, fixtures only
+python3 -I -m unittest discover -s tests -t tests                     # 99 tests, fixtures only
 ```
 
 Purposes are `commercial_training`, `evaluation`, `research` and `live_intel`. Each source is checked
@@ -42,8 +42,8 @@ JSONL line per host per UTC hour (chunked at 50,000 events), in the event schema
 `tools/neuro-research/synth_events.py`, with the host's previous-24 h baseline. Addresses and domains are
 pseudonymised per capture into reserved ranges (no .0 or .255 octets). The split rule is pluggable and
 recorded in the manifest. `neuro-sha256-mod3` is `replay_iot23.split_of()`. Holdouts in
-`registry/sealed.json` (IoT-23's spent Neuro test side; Deakin IoT v2, sealed by name) are refused unless
-`--unseal <source>` is given, and each unseal is audited. `--window scenario-hour` reproduces
+`registry/sealed.json` (the IoT-23 and CTU-13 test splits, spent by Neuro's M3 one-look run; Deakin IoT v2,
+sealed by name) are refused unless `--unseal <source>` is given, and each unseal is audited. `--window scenario-hour` reproduces
 `gen_t0_iot23.py`'s windows, and `neuro_acceptance.py` checks that the rendered cards match. Details and
 choices are in `heqkdata/windows.py`.
 

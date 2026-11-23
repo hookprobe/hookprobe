@@ -131,6 +131,22 @@ class LineCap(unittest.TestCase):
     def test_short_lines_pass(self):
         self.assertEqual(list(safeio.lines(io.StringIO("a\r\nb\n"))), [(1, "a"), (2, "b")])
 
+    def test_plain_file_bounded_by_own_size_gzip_by_cap(self):
+        # IoT-23 39-1 is a 10.9 GB plain conn.log: the 8 GiB cap is for decompression, not for plain files
+        import gzip
+        body = "line\n" * 100
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "big.log")
+            with open(p, "w") as f:
+                f.write(body)
+            with safeio.open_text(p, max_bytes=10) as f:
+                self.assertEqual(f.read(), body)
+            g = p + ".gz"
+            with gzip.open(g, "wt") as f:
+                f.write(body)
+            with self.assertRaises(safeio.UnsafeContent), safeio.open_text(g, max_bytes=10) as f:
+                f.read()
+
 
 class ZeekTabLabelColumns(unittest.TestCase):
     def test_label_columns_as_own_tab_fields(self):
