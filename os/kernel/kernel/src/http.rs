@@ -604,6 +604,9 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 let _ = match o {
                     Ok_::Begun(id) => write!(w, "{{\"ok\":true,\"id\":\"{:016x}\",\"chunk_max\":{}}}", id, up::CHUNK_MAX),
                     Ok_::Chunk(got) => write!(w, "{{\"ok\":true,\"received\":{}}}", got),
+                    // F7: `async=1` on an os_image — verification runs in the AP loop; poll GET /api/upload/job
+                    Ok_::Fin(f) if f.pending => write!(w, "{{\"ok\":true,\"pending\":\"verifying\",\"poll\":\"/api/upload/job\"}}"),
+                    Ok_::Act(a) if a.pending => write!(w, "{{\"ok\":true,\"pending\":\"installing\",\"generation\":{},\"poll\":\"/api/upload/job\"}}", a.gen),
                     Ok_::Fin(f) => {
                         // R6 = D (additive): the staged content's SHA-256 — the activate envelope binds it
                         let _ = write!(w, "{{\"ok\":true,\"verified\":true,\"generation\":{},\"active_generation\":{},\"length\":{},\"digest\":\"", f.gen, f.active_gen, f.len);
@@ -690,6 +693,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             let _ = write!(w, "\"sent\":{},\"failed\":{},\"held_back\":{},\"queued\":{},\"last_status\":{},\"max_per_hour\":{}}}",
                 st.sent, st.failed, st.held_back, st.queued, st.last_status, crate::alerthook::MAX_PER_HOUR);
         }),
+        "/api/upload/job" => json(scratch, crate::upload::render_job), // F7: async os_image verify / install
         "/api/upload" => {
             crate::upload::expire(now_ms);
             json(scratch, crate::upload::render)
