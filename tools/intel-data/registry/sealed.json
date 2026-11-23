@@ -9,6 +9,7 @@
   {"source_id": "ctu-13", "scope": "split:test@neuro-sha256-mod3", "reason": "Neuro CTU-13 test split (scenarios 2,3,4,6,7,9,11,12,13 by mirror name CTU-13.Dataset-<capture>), frozen with the Neuro session before any window was exported; dev = 1,5,8; 10 missing (would be test)", "sealed_on": "2026-11-21",
    "unsealed": [{"on": "2026-11-22", "reason": "M3 one-look confirmation (doc 31)", "purpose": "evaluation", "approved_by": "operator", "build": "windows-3a93dfd92bed", "manifest_sha256": "c3d04c2ae56588cfa4ebbbbfe317f7acc7bd76807bc52e278abd29c20f77dd43", "code": "d9f0aaaf"}],
    "status": "spent 2026-11-22: stays sealed, so any later export still needs --unseal and is audited; never train on it"},
-  {"source_id": "kitsune-network-attack", "name": "Kitsune Network Attack Dataset (UCI 516)", "scope": "*", "reason": "Neuro's M4 evaluation-only cross-lab IoT malware holdout for the doc 35 L1-IoT gate: all 9 captures including the benign lead-ins; never acquired, never opened; never train on it", "sealed_on": "2026-11-23"}
+  {"source_id": "kitsune-network-attack", "name": "Kitsune Network Attack Dataset (UCI 516)", "scope": "*", "reason": "Neuro's M4 evaluation-only cross-lab IoT malware holdout for the doc 35 L1-IoT gate: all 9 captures including the benign lead-ins; never acquired, never opened; never train on it", "sealed_on": "2026-11-23"},
+  {"source_id": "unsw-iot-homes-ipfix", "name": "UNSW IPFIX ML Instances (12 home networks, KDDI Research)", "scope": "*", "reason": "Neuro's candidate M4 home-benign holdout (evaluation only, never training: KDDI provenance, MIT-0 wording covers the Software); never acquired, never opened; same UNSW group as unsw-iotraffic, different networks", "sealed_on": "2026-11-23"}
  ]
 }

@@ -10321,7 +10321,7 @@
    "personal_data": "unknown",
    "sensitivity": "medium",
    "access": "public_download",
-   "recommended_use": "v2 only as a candidate unseen-network benign set; check v2 environment and overlap with unsw-iotraffic before use.",
+   "recommended_use": "Not a home-benign holdout: v1 may overlap the spent UNSW testbed and v2 is not stated to be a home (Neuro, 2026-11-23: no M4 role). Possible later use as device-behaviour data; check v1/unsw-iotraffic overlap first.",
    "evidence": [
     "https://datadryad.org/api/v2/datasets/doi%3A10.5061%2Fdryad.7h44j1098",
     "https://creativecommons.org/publicdomain/zero/1.0/"
@@ -10373,7 +10373,7 @@
    "personal_data": "unknown",
    "sensitivity": "medium",
    "access": "public_download",
-   "recommended_use": "Candidate evaluation-only benign home set (Neuro M4 gap). Real homes, so seal by name before any download if chosen as a holdout.",
+   "recommended_use": "SEALED 2026-11-23 (registry/sealed.json) as Neuro's candidate M4 home-benign holdout: evaluation only, never training (KDDI provenance; MIT-0 wording covers 'the Software'). Same UNSW group as unsw-iotraffic, different networks.",
    "evidence": [
     "https://iotanalytics.unsw.edu.au/homedataset.html"
    ],
