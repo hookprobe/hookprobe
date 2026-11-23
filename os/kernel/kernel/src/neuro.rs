@@ -443,11 +443,12 @@ mod el0 {
             c.events_fed, c.events_dropped, c.batches, c.hours_closed, c.hours_failed, c.results, c.deviant, c.server_resets, c.slot_evictions, c.frames_no_clock,
             d.frames, d.rule_class, d.rule_local, d.rule_named, d.rule_prefix, d.names_learned, d.dns_timeouts, d.udp_evicted);
         // per-excursion cost (entry -> EL0 -> exit, incl. the address-space switch), microseconds
-        let us = |t: u64| t * 1_000_000 / crate::clock::freq().max(1);
+        // nanoseconds: a batch round trip is sub-microsecond on the CM5 (metal 2026-11-23; ADR 0065: 388 ns empty)
+        let ns = |t: u64| (t as u128 * 1_000_000_000 / crate::clock::freq().max(1) as u128) as u64; // u128: the running total never overflows
         let x = h.srv.exc;
-        let avg = |e: (u64, u64, u64)| if e.0 == 0 { 0 } else { us(e.1 / e.0) };
-        kprint!("   [NEURO exc] events n={} avg={}us max={}us | close_hour n={} avg={}us max={}us | other n={} avg={}us max={}us\n",
-            x[0].0, avg(x[0]), us(x[0].2), x[1].0, avg(x[1]), us(x[1].2), x[2].0, avg(x[2]), us(x[2].2));
+        let avg = |e: (u64, u64, u64)| if e.0 == 0 { 0 } else { ns(e.1) / e.0 };
+        kprint!("   [NEURO exc] events n={} avg={}ns max={}ns | close_hour n={} avg={}ns max={}ns | other n={} avg={}ns max={}ns\n",
+            x[0].0, avg(x[0]), ns(x[0].2), x[1].0, avg(x[1]), ns(x[1].2), x[2].0, avg(x[2]), ns(x[2].2));
     }
 
     /// `GET /api/neuro` (owner session, read-only): N0 behaviour evidence for Mission Control. Evidence only — never an
