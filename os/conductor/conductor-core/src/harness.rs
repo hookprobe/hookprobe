@@ -17,7 +17,7 @@ use crate::crypto::{ct_eq, sha256, verify as sig_verify, TAG_RESULT};
 use crate::frame::{self, Body, Request, Response, REQ_MAX};
 use crate::job::{inert_text, JobSpec};
 use crate::json::{self, JsonError, ModelOutput};
-use neuro_contract::{grounding, ids_add, ids_finish, write_system, IdList, Lang, Sink, CHAT_ASSISTANT, CHAT_SYSTEM, CHAT_USER, USER_HEAD, USER_MID};
+use neuro_contract::{context_ids, grounding, guard, write_system, IdList, Lang, Sink, CHAT_ASSISTANT, CHAT_SYSTEM, CHAT_USER, USER_HEAD, USER_MID};
 use crate::ledger::{Kind, Record};
 use crate::limits::*;
 use crate::place::{place_excluding, Env, PlaceRefusal};
@@ -170,8 +170,12 @@ pub struct Harness {
     /// Tool results and refusal notes, carried into the next call's prompt.
     transcript: Buf<MAX_PROMPT>,
     prompt: Buf<MAX_PROMPT>,
-    /// Where the evidence cards sit in `prompt` (the CONTEXT block guard G and the grounding checks read).
-    cards_at: (usize, usize),
+    /// The evidence cards of the current prompt as the device wrote them (`F<id> <card>` lines). The provider
+    /// is shown these after guard A; guard E, its template and guard G read them as they are here.
+    cards: Buf<MAX_PROMPT>,
+    /// Tool results as received, one per line group. Never shown to a provider (the transcript holds them
+    /// after guard A); guard E reads them, as Neuro's E reads the original context.
+    results_raw: Buf<MAX_PROMPT>,
     req_frame: Buf<REQ_MAX>,
     request_hash: [u8; 32],
     sign_req: SignRequest,
@@ -232,7 +236,8 @@ impl Harness {
             prompt_classes: 0,
             transcript: Buf::new(),
             prompt: Buf::new(),
-            cards_at: (0, 0),
+            cards: Buf::new(),
+            results_raw: Buf::new(),
             req_frame: Buf::new(),
             request_hash: [0; 32],
             sign_req: SignRequest::ZERO,
@@ -279,6 +284,7 @@ impl Harness {
         self.included = [false; MAX_EVIDENCE];
         self.prompt_classes = 0;
         self.transcript.clear();
+        self.results_raw.clear();
         self.prompt.clear();
         self.req_frame.clear();
         self.request_hash = [0; 32];
@@ -502,23 +508,35 @@ impl Harness {
     /// The explainer prompt, entirely from `neuro_contract`: Neuro's system prompt and closed schema (the
     /// context's ids as enums), the user framing with the evidence as fact cards (`F<id> <card>`), the
     /// ChatML wrapping. Conductor adds only the tool line (when tools are granted) and tool results.
+    ///
+    /// Guard A (Neuro doc 25) is applied to the cards on the way in: every quoted value is replaced by a
+    /// description of it, so text the network carried never reaches the provider. As in `run_eval.py`, the
+    /// ids of the schema are those of the context the provider is shown.
     fn build_prompt(&mut self) -> Option<()> {
-        // The ids first: the schema in the system prompt lists them. Same rule as on the joined context.
-        self.facts = IdList::new();
-        self.ents = IdList::new();
+        self.cards.clear();
         let mut line = [0u8; 8 + MAX_CARD];
+        let mut first = true;
         for (i, e) in self.job.evidence().iter().enumerate() {
             if !self.included.get(i).copied().unwrap_or(false) {
                 continue;
             }
+            if !first {
+                self.cards.push(b"\n")?;
+            }
+            first = false;
             let n = card_line(e.id, e.card.as_slice(), &mut line)?;
-            ids_add(line.get(..n)?, &mut self.facts, &mut self.ents).ok()?;
+            self.cards.push(line.get(..n)?)?;
         }
-        ids_finish(&mut self.ents);
+        // The ids first: the schema in the system prompt lists them. `prompt` is the scratch space here.
         let p = &mut self.prompt;
         p.clear();
+        guard::guard_a(self.cards.as_slice(), &mut BufSink(p)).ok()?;
+        self.facts = IdList::new();
+        self.ents = IdList::new();
+        context_ids(p.as_slice(), &mut self.facts, &mut self.ents).ok()?;
+        p.clear();
         p.push(CHAT_SYSTEM.as_bytes())?;
-        write_system(Lang::En, &self.facts, &self.ents, true, &mut PromptSink(p)).ok()?;
+        write_system(LANG, &self.facts, &self.ents, true, &mut BufSink(p)).ok()?;
         if self.job.tools_granted != 0 {
             p.push(b" Instead of the answer you may call ONE tool, as one JSON object:")?;
             if self.job.tools_granted & crate::tools::bit::EVIDENCE_GET != 0 {
@@ -531,20 +549,7 @@ impl Harness {
         }
         p.push(CHAT_USER.as_bytes())?;
         p.push(USER_HEAD.as_bytes())?;
-        let cards_start = p.len();
-        let mut first = true;
-        for (i, e) in self.job.evidence().iter().enumerate() {
-            if !self.included.get(i).copied().unwrap_or(false) {
-                continue;
-            }
-            if !first {
-                p.push(b"\n")?;
-            }
-            first = false;
-            let n = card_line(e.id, e.card.as_slice(), &mut line)?;
-            p.push(line.get(..n)?)?;
-        }
-        let cards_end = p.len();
+        guard::guard_a(self.cards.as_slice(), &mut BufSink(p)).ok()?;
         p.push(USER_MID.as_bytes())?;
         p.push(self.job.intent.as_slice())?;
         if !self.transcript.is_empty() {
@@ -552,7 +557,6 @@ impl Harness {
             p.push(self.transcript.as_slice())?;
         }
         p.push(CHAT_ASSISTANT.as_bytes())?;
-        self.cards_at = (cards_start, cards_end);
         Some(())
     }
 
@@ -695,11 +699,21 @@ impl Harness {
                 self.finish(out, Outcome::Rejected(Violation::Schema))
             }
             Ok(ModelOutput::Answer(mut a)) => {
+                // Guard E (Neuro doc 24): prose that repeats eight or more characters of a quoted value of the
+                // cards or of a tool result, as received, is replaced by the deterministic template sentence.
+                // Verdict, evidence, entities and next step stay as the provider gave them.
+                if guard::echoes(self.cards.as_slice(), self.summary.as_slice()) || guard::echoes(self.results_raw.as_slice(), self.summary.as_slice()) {
+                    let before = sha256(&[self.summary.as_slice()]);
+                    self.summary.clear();
+                    if guard::template_summary(self.cards.as_slice(), LANG, &mut BufSink(&mut self.summary)).is_err() {
+                        return self.finish(out, Outcome::Rejected(Violation::Schema));
+                    }
+                    out.push(Action::Ledger(self.record(Kind::EchoFallback, 0, before)));
+                }
                 // Guard G (Neuro): delete invented technique ids and unreturned CVE ids from the prose, against
-                // the context this provider was shown (the cards and the earlier tool results). Then the
-                // verifier checks what G cannot fix, and anything G should have removed.
-                let cards = self.prompt.as_slice().get(self.cards_at.0..self.cards_at.1).unwrap_or(&[]);
-                let ctx: [&[u8]; 2] = [cards, self.transcript.as_slice()];
+                // the cards and the earlier tool results. Then the verifier checks what G cannot fix, and
+                // anything G should have removed.
+                let ctx: [&[u8]; 2] = [self.cards.as_slice(), self.transcript.as_slice()];
                 let before = sha256(&[self.summary.as_slice()]);
                 let mut g = grounding::GuardG { removed: 0, overflow: false, len: 0 };
                 self.summary.shrink_with(|b, n| {
@@ -779,8 +793,12 @@ impl Harness {
             self.transcript.push(b" ev:")?;
             self.transcript.push_dec(u64::from(call.ev()))?;
             self.transcript.push(b"]\n")?;
-            self.transcript.push(data)?;
-            self.transcript.push(b"\n")
+            // Guard A on the way in, as for the cards: a result can quote what the network carried.
+            guard::guard_a(data, &mut BufSink(&mut self.transcript)).ok()?;
+            self.transcript.push(b"\n")?;
+            // The result as received, for guard E only. The newline keeps a quote from pairing across results.
+            self.results_raw.push(data)?;
+            self.results_raw.push(b"\n")
         };
         if entry().is_none() {
             return self.finish(out, Outcome::Aborted(Abort::PromptTooLarge));
@@ -811,8 +829,11 @@ fn card_line(id: u16, card: &[u8], out: &mut [u8]) -> Option<usize> {
     Some(s.len())
 }
 
-struct PromptSink<'b>(&'b mut Buf<MAX_PROMPT>);
-impl Sink for PromptSink<'_> {
+/// The language of the device's prompt and of guard E's template sentence.
+const LANG: Lang = Lang::En;
+
+struct BufSink<'b, const N: usize>(&'b mut Buf<N>);
+impl<const N: usize> Sink for BufSink<'_, N> {
     fn put(&mut self, s: &[u8]) -> Result<(), neuro_contract::ContractError> {
         self.0.push(s).ok_or(neuro_contract::ContractError::Space)
     }

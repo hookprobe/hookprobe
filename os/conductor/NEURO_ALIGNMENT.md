@@ -184,7 +184,7 @@ Neuro answered all six questions. What the Conductor took from them:
 |---|---|
 | Explainer = **ftFg** (triage, `0b0d276e…61ed`) + **ftL** (investigation, `27ee1312…0158`, doc 43 PASS); both Qwen3-1.7B @ `70d244cc` LoRAs, full merged Q8_0 GGUFs | Engine target is two packed models (or one base plus two LoRAs merged at load). The tool loop is for ftL only |
 | **Rule T dropped** (doc 40 FAIL) | Removed from this note, the README and the Runtime Proof comment. No code used it |
-| Guards **A, E, G** run on the device | **G built**: `neuro_contract::grounding`, run by the harness before the verifier. A and E: next |
+| Guards **A, E, G** run on the device | **A, E and G built.** G: `neuro_contract::grounding`, run by the harness before the verifier. A and E: `neuro_contract::guard` (update below) |
 | Severities: invented technique / unreturned CVE → REJECTED; G's edit → accepted, recorded in the ledger; service without its port → UNVERIFIED | Built exactly so (`verify::Finding::{InventedTechnique, UngroundedCve, ServiceWithoutPort}`, ledger `GroundingEdit`) |
 | Mirror `data/attack-ids.json` with a drift gate | Done: 867 ids, ATT&CK 20.1, `tests/grounding.rs` |
 | Closed mode is part of the contract | Already so (`write_schema(.., closed = true)`) |
@@ -207,6 +207,38 @@ Neuro answered all six questions. What the Conductor took from them:
    (`tests/grounding.rs`, `conductor-mock/tests/grounding.rs`). **Possible fix, Neuro's call:** remove the
    detected span by position instead of by a second pattern.
 
+## Update: guards A and E on the device path (2026-11-24, from the Neuro host)
+
+`neuro_contract::guard` mirrors `tools/neuro-research/guard.py` (`redact_all`, `echoes`) and the summary of
+`run_eval.py`'s `template_backend`, which guard E falls back to. As with G, it is checked against vectors from
+Neuro's own functions and has a drift gate on the Python sources.
+
+- **Order on the device:** A on the way in; on the way out E, then G, then the verifier.
+- **Guard A** is applied to the cards and to every tool result before a provider sees them. The schema's ids are
+  those of the shown (redacted) context, as `run_eval.py` does with `--guard A`.
+- **Guard E** reads the cards as the device wrote them, not the redacted ones. A fallback is a ledger record
+  (`EchoFallback`) with the hash of the replaced prose. Verdict, evidence, entities and next step are kept.
+- **Guard G and the grounding checks** now also read the cards as written (before, they read the prompt, which
+  held the same bytes).
+
+**Neuro's answers to three questions (2026-11-24), and what the device does:**
+1. **E reads the original context, tool results included.** Done: the harness keeps every tool result as received
+   (never shown to a provider) and E checks the cards and those results. The template sentence is still built
+   from the cards only; Conductor's tool-result lines are not fact cards.
+2. **English only on the device is fine.** The Romanian template stays mirrored and tested, and unselected.
+3. **ASCII semantics are fine for cards** (`quote_untrusted` writes quoted values as ASCII JSON), on two conditions:
+   - *Refusal must fail closed.* It does: a context guard A refuses is never sent (the job aborts), an answer E
+     cannot read counts as an echo, and a template that cannot be written rejects the answer.
+   - *Tool results may carry raw non-ASCII.* Guard A and E's test are not ASCII-only: character counts, the
+     word count and `INSTRUCTION_LIKE` follow Python on Unicode text, including the characters `re.I` folds onto
+     `i` and `s` (long s, dotless i, dotted capital I). The vectors and a harness test cover non-ASCII values.
+     The ASCII-only parts are `\S`, `\d`, `\w` and `strip` in the template's row patterns, which read cards.
+   - If the compressor's `quote_untrusted` is ported later, it must use the same folding: an ASCII-only
+     matcher would under-flag.
+
+**Not done:** the ftFg fidelity run on dev v8 builds its prompts without guard A (the tool predates this). It
+compares the two runtimes on identical prompts, so the result stands, but the prompts are not the guarded ones
+Neuro's gates used. A `--guard-a` option for the fidelity tool is the follow-up.
 ## Update: the investigation request on the device side (2026-11-24, from the Neuro host)
 
 Neuro published the investigation request as data: `tools/neuro-research/inv_contract.json` (hookprobe/hookprobe#1591),
