@@ -31,6 +31,19 @@ export default async function (t) {
   await go('/mission', 1500);
   ok(await vis(card.locator('text=Wi-Fi recovery took over')), 'Mission: hand-over to Wi-Fi recovery is stated');
 
+  // no Wi-Fi on this device (QEMU: wifi_ap denied, bus/security "absent" with no history): nothing to say
+  health = { substrate: 'heqk', mode: 'standalone', capabilities: ['ids', 'dns'], wifi_driver: { bus: bus('absent'), security: { ...bus('absent'), full_wipes: 0, pmksa_entries: null } } };
+  await go('/mission', 1500);
+  const noRadioMission = await card.count();
+  await go('/network/wifi', 1500);
+  ok(noRadioMission === 0 && await card.count() === 0, 'no Wi-Fi radio (wifi_ap not granted) + "absent": no Wi-Fi driver warning (QEMU showed "Wi-Fi works" on a radio-less device)');
+  health = { ...health, wifi_driver: { bus: bus('handed_to_wifiheal', 3, 3), security: null } };
+  await go('/mission', 1500);
+  ok(await vis(card.locator('text=Wi-Fi recovery took over')), 'Wi-Fi down after a failed recovery (wifi_ap denied): the hand-over is still stated');
+  health = { substrate: 'heqk', mode: 'standalone', capabilities: ['ids', 'dns', 'wifi_ap'], wifi_driver: { bus: bus('absent'), security: null } };
+  await go('/mission', 1500);
+  ok(await vis(card.locator('text=Wi-Fi is running inside the kernel')), 'Wi-Fi up (wifi_ap granted) + "absent": the in-kernel fallback warning shows');
+
   health = { ...health, wifi_driver: { bus: 'garbage' } };
   await go('/mission', 1500);
   ok(await card.count() === 0, 'a malformed field shows nothing rather than a guess');
