@@ -1,0 +1,16 @@
+# The P1 reference worker (ADR 0071 C2): the worker side of HP-EXEC v1 as a heqk-native library. A heqk node
+# on the owner's LAN runs it as an EL0 server. Workers are heqk nodes only: no Linux worker. no_std, no alloc,
+# no unsafe. The result key and the executor are traits, so the node's kernel keeps the key and the native
+# engine does the compute.
+[package]
+name = "conductor-worker"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+conductor-core = { path = "../conductor-core" }

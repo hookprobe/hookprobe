@@ -32,6 +32,7 @@ pub mod frame;
 pub mod harness;
 pub mod job;
 pub mod json;
+pub mod lease;
 pub mod ledger;
 pub mod pairing;
 pub mod limits;

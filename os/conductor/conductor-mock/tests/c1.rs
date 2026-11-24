@@ -9,72 +9,10 @@
 use conductor_core::cap;
 use conductor_core::class::Tier;
 use conductor_core::crypto::{public_key, sha256};
-use conductor_core::durable::{self, BlockDev, IoError, Sealed, MAGIC_DELEGATION, MAGIC_EPOCH, MAGIC_G19};
+use conductor_core::durable::{self, Sealed, MAGIC_DELEGATION, MAGIC_EPOCH, MAGIC_G19};
+use conductor_mock::disk::{Disk, Platter, TORN};
 use conductor_core::signer::{CounterStore, SignRefusal, Signer};
 use conductor_mock::*;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
-
-// ------------------------------------------------------------------ a disk that loses power
-
-/// Sectors that survive power loss, shared between "boots".
-#[derive(Default, Clone)]
-struct Platter(Rc<RefCell<HashMap<u64, [u8; 512]>>>);
-
-/// A view of the platter for one boot. After `writes_left` writes reach zero, the next write is torn (its first
-/// `torn` bytes land, the rest of the sector keeps its old content) and the power goes: every later operation
-/// fails. `bad_readback` makes the next read of a just-written sector return different bytes.
-struct Disk {
-    p: Platter,
-    writes_left: Option<usize>,
-    torn: usize,
-    dead: bool,
-    bad_readback: bool,
-}
-
-impl Disk {
-    fn new(p: &Platter) -> Self {
-        Disk { p: p.clone(), writes_left: None, torn: 0, dead: false, bad_readback: false }
-    }
-    fn crashing(p: &Platter, after: usize, torn: usize) -> Self {
-        Disk { p: p.clone(), writes_left: Some(after), torn, dead: false, bad_readback: false }
-    }
-}
-
-impl BlockDev for Disk {
-    fn read_block(&self, lba: u64, out: &mut [u8; 512]) -> Result<(), IoError> {
-        if self.dead {
-            return Err(IoError);
-        }
-        *out = self.p.0.borrow().get(&lba).copied().unwrap_or([0; 512]);
-        if self.bad_readback {
-            out[100] ^= 1;
-        }
-        Ok(())
-    }
-    fn write_block(&mut self, lba: u64, data: &[u8; 512]) -> Result<(), IoError> {
-        if self.dead {
-            return Err(IoError);
-        }
-        if let Some(n) = self.writes_left.as_mut() {
-            if *n == 0 {
-                let mut m = self.p.0.borrow_mut();
-                let old = m.get(&lba).copied().unwrap_or([0; 512]);
-                let mut s = old;
-                s[..self.torn].copy_from_slice(&data[..self.torn]);
-                m.insert(lba, s);
-                self.dead = true;
-                return Err(IoError);
-            }
-            *n -= 1;
-        }
-        self.p.0.borrow_mut().insert(lba, *data);
-        Ok(())
-    }
-}
-
-const TORN: [usize; 9] = [0, 1, 8, 15, 16, 47, 48, 100, 512];
 
 // ------------------------------------------------------------------ drift gate against the kernel
 
