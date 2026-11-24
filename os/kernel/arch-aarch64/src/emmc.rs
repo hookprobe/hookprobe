@@ -518,6 +518,10 @@ impl Emmc {
         // Gate 0 (ADR 0070 flash stub ONLY): the admitted whole-medium session window.
         #[cfg(feature = "flashstub")]
         if self.full {
+            // the admitted window is the user area and nothing past it — enforced here, not left to the card
+            if lba >= self.sec_count {
+                return Err(BlockErr::OutOfRange);
+            }
             return self.cmd24(lba, buf);
         }
         // Gate 1 (A/B commit): an ADMITTED BootConfig sector, ONE write, and only if the new
