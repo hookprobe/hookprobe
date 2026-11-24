@@ -134,3 +134,46 @@ So expect some pairs to be lost to the filter. The doc 33 run kept about 86% of 
   annotator's free-text answers omitting required DEVICE facts.
 - Nobody but the author has read the case content. The chain evaluates only if the file still hashes to the value
   above.
+
+## Result (2026-11-23 22:58): ftIg is not eligible; stop. ftFg stays the candidate
+
+**The run.** `mixI_chain.sh` ran as pinned. Every step produced its output; the chain checked the dev v8 hash against
+`SEALED` before evaluating.
+- **Pairs:** 600 generated. 489 survived the both-twins filter (978 SFT rows: 930 train, 48 valid).
+- **Training:** mixI 5,378 / 272. 2,689 iterations; checkpoint 2689 by lowest valid loss (0.215).
+- **ftIg:** GGUF Q8_0 SHA-256 `54033f1db27485800f0bb043fa2181161d735c68b669b73ce5935345f00b706d`; adapter
+  `8f63df6399df85c1fc852f85cbc2fe3613ed1abd664725371df0eb0f4689f4a7`.
+
+**`mixI_select.py` on dev v8 (one run, unedited):**
+
+| config | mention (270) | McNemar vs base17g-AE | canary (70) | halluc | thin ack (40) | thin called malicious | benign on mal | insufficient on mal | insufficient on sus | fallback |
+|---|---|---|---|---|---|---|---|---|---|---|
+| base17g-AE | 0.441 | — | 1.000 | 0.0000 | 0.000 | 11 | 10.0% | 0.0% | 0.0% | 6.2% |
+| ftFg-AE | 0.500 | p = 0.076 (44 vs 28) | 1.000 | 0.0000 | 0.150 | 15 | 2.0% | 0.0% | 0.0% | 4.7% |
+| **ftIg-AE** | 0.463 | p = 0.53 (35 vs 29) | 1.000 | 0.0000 | **0.800** | **1** | 2.0% | **16.0%** | **45.7%** | 5.9% |
+
+**Verdict per §4.** ftIg-AE fails condition 3 (mention not above base at p < 0.05) and condition 7 (`insufficient`
+on malicious 16.0% > 5%, on suspicious 45.7% > 10%). **Stop:** no blind v7. ftFg stays the explainer candidate
+(doc 26), with thin-evidence handling its recorded limitation. Dev v8 is now spent.
+
+**Reading (descriptive; dev numbers).**
+1. **The pairs made over-hedging worse, not better.** `insufficient` on suspicious went from ftHg's 32.4% (doc 36,
+   spent sets) to 45.7% here; on malicious, from 8.3% to 16.0%. Thin acknowledgement (0.800) and thin cases called
+   malicious (1) are the best yet. The student learnt to hedge more, not to tell thin from sufficient.
+2. **A likely mechanism (§7.1's risk, realised).** The sufficient twins differ from the thin ones by template
+   extremes (hundreds of connections, "kept retrying", hours of pattern). Hand-written suspicious cases sit in
+   between, and the student puts them on the thin side. Contrast learnt from templates did not transfer to
+   hand-written middle cases.
+3. **The incumbent, on fresh data for the first time.** ftFg-AE's mention gain over base is not significant on dev
+   v8 (0.500 vs 0.441, p = 0.076). Its earlier passes were on blind sets v4–v6 (doc 26). It keeps its other
+   strengths here: canary 1.000, hallucination 0, benign on malicious 2% vs base's 10%. Its thin-evidence weakness
+   (ack 0.150, 15 thin cases called malicious) is unchanged.
+
+**What a further attempt would need (not started; new pre-registration and fresh dev data required).**
+- Graded, hand-written or teacher-written middle cases (suspicious, with partial corroboration), not template
+  extremes.
+- Possibly a verdict head trained separately from the summary, so hedging in the verdict and wording in the summary
+  are not coupled.
+- Because three data-mix attempts (docs 33, 36, 38) moved the same trade-off rather than breaking it, a
+  rule-based route is also worth weighing: L0's deterministic verdict decides `insufficient_evidence`, and the
+  explainer only words it. That is hybrid mode, which already exists (doc 26).
