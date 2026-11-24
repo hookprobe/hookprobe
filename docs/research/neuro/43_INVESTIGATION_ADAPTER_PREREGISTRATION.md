@@ -105,3 +105,42 @@ is not mistaken for done.
   in the set's README). After it: 38/38.
 - ftL had finished training before the seal (the chain trains first, then waits for it); nothing from this set
   informed training.
+
+## Result (one look, 2026-11-24 14:35): PASS. Explainer = ftFg (triage) + ftL (investigation), with guard G
+
+`mixL_chain.sh` ran as pinned. ftL was trained and exported before the seal. Checkpoint 342 had the lowest valid
+loss (0.029). ftLg GGUF `27ee13123d659eaa4e2f16d049d42c0b76772cc5b9eeb548b6678af1d78e0158`, adapter
+`0bb51a7f25dbd2af…`. The inv-blind v2 hash was checked, and the training cases did not collide with it.
+
+**`mixL_gate.py` (unedited):**
+
+```
+| model | step next+multi (80) | step multi (35) | stop clears+decoy (55) | unreturned CVE raw/G | invented T-id raw/G | service w/o port | policy on decoy | tool calls |
+| base17g | 0.125 | 0.000 | 1.000 | 0 / 0 | 0 / 0 | 7 | 0 | 99 |
+| ftLg | 0.537 | 0.343 | 1.000 | 0 / 0 | 0 / 0 | 0 | 0 | 112 |
+McNemar ftLg vs base17g on next+multi: p=1e-08 (35 vs 2)
+VERDICT: PASS
+```
+
+All six conditions hold. inv-blind v2 is now spent.
+
+**Per kind** (`inv_eval.py` `step_ok`, base17g in brackets):
+- next 0.689 (0.222)
+- multi 0.343 (0.000)
+- clears 0.633 (0.267)
+- decoy 0.240 (0.240)
+- invisible **0.400 (1.000)**
+
+**Reading.**
+1. **Separating the turns worked.** ftL more than quadruples base on picking the check (0.537 vs 0.125) and moves
+   multi-step from 0.000 to 0.343, with triage untouched (still ftFg). It invented no CVE or technique id, and
+   named no service without its port.
+2. **Two weaknesses pass the gate, because "stop" accepts read-only lookups:**
+   - **Decoys:** ftL runs a read-only lookup on most ordinary windows. The exact `[null]` answer is 0.240, the
+     same as base. It never proposes a policy there.
+   - **Invisible:** 0.400 against base's 1.000. It tries to look up what a gateway cannot see. The training set
+     had 7% invisible cases.
+
+   Both are for a later round: more decoy and invisible cases, or a stricter stop condition, pre-registered.
+3. **What ships, as research:** triage on ftFg (guards A, E, G); investigation turns on ftL (guards A, G);
+   `lookup_exposure` as the only CVE source. Off the protection path; proposals only (doc 30).
