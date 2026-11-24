@@ -1,0 +1,23 @@
+# tok-build: BUILD-HOST ONLY. Turns a model's tokenizer definition into the table blob that
+# `neuro_lm::tok` validates and runs on the device. The Unicode tables come from Rust crates here (the
+# device has none). Never a dependency of a device binary. No Python: the reference implementation the
+# tests compare against is HF `tokenizers` (Rust), on its pure-Rust regex backend.
+[package]
+name = "tok-build"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+neuro-lm = { path = "../neuro-lm" }
+serde_json = "1"
+regex = "1"
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+fancy-regex = "0.14"
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }

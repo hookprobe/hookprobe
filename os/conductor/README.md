@@ -173,9 +173,39 @@ its dev set only, against llama.cpp on the same file. One known difference: llam
 which does not quantise activations (its CPU path does). The tolerance for that check must cover this, and
 the test above suggests the effect is small.
 
-Not built yet: the converter (`hnx-compile`, waiting on Neuro's GGUF and answers), the Qwen2 tokenizer
-(151,936 ids and the Qwen pre-tokenizer; the current BPE uses 16-bit ids), a 4-row NEON `Q8_0` kernel for
-speed, and any speed number (needs a real A76 after KR-1).
+Not built yet: the converter (`hnx-compile`, waiting on Neuro's GGUF and answers), a 4-row NEON `Q8_0`
+kernel for speed, and any speed number (needs a real A76 after KR-1).
+
+## The Qwen tokenizer
+
+`neuro-lm::tok` is the Qwen2/Qwen3 tokenizer on the device: byte-level BPE with 32-bit ids, added tokens
+(`<|im_start|>`, `<tool_call>`, `<think>`, …) matched leftmost-longest on the raw text, NFC normalisation,
+and the Qwen2 pre-tokenizer pattern implemented by hand (no regex engine). `no_std`, no allocation, no
+floating point, no Unicode library: the vocabulary, merges and Unicode tables (letter, number, whitespace,
+NFC quick check, combining class, 2,081 decompositions, 961 compositions; Hangul is algorithmic) come in
+one blob built on the build host by `tok-build` and validated at load. Every merge is checked to equal the
+concatenation of its parts, so a blob cannot make a merge produce a different text.
+
+Source for the test: Qwen3-1.7B `tokenizer.json` at revision 70d244cc (SHA-256 `aeb13307…dae4`,
+Apache-2.0), kept outside the repo. The converter will read the same tables from Neuro's GGUF instead.
+The reference is HF `tokenizers` (Rust, pure-Rust regex backend); nothing here uses Python.
+
+| Gate | Result |
+|---|---|
+| Pre-tokenizer: 40,029 texts (random Unicode across every branch of the pattern, plus edge cases) split exactly as the model's regex | pass |
+| **Whole encoder vs HF `tokenizers` on the real Qwen3 vocabulary**: 25,011 texts (chat-template prompts, tool calls, JSON evidence, code, 12 scripts, emoji, odd whitespace, glued real tokens, random text): **every id equal**, 0 refused; decoding gives back the NFC form of each text | pass |
+| NFC on the device equals `unicode-normalization` on 200,000 combining-heavy texts (123,354 changed by NFC) and on all 2,081 decomposable characters | pass |
+| Long pieces (16 KB of spaces, one letter, punctuation, CJK): equal to HF, 3–9 ms each on the build host | pass |
+| Blob: 4.06 MB for 151,669 ids, validated in 5 ms. Refused: wrong magic, truncated, trailing byte, wrong byte token, a merge whose result is not its parts, unsorted merges; 200,000 single-bit corruptions never panic | pass |
+| Builds for `aarch64-unknown-none-softfloat`; no floating point in the device crate | pass |
+
+What validation does not do: it does not prove the blob is the right one. 73,155 of the 200,000 corrupted
+blobs are still internally consistent (a changed Unicode class, an unused token's bytes). Integrity is the
+HNX signature and Merkle root, as for the weights.
+
+Known difference to plan for: llama.cpp (the runtime Neuro measured with) has its own implementation of this
+pre-tokenizer and its own Unicode tables. The fidelity check should compare token ids with llama.cpp on the
+dev set, not only with HF.
 
 ## Crates
 
