@@ -43,10 +43,10 @@ fn mutate(rng: &mut Rng, b: &mut Vec<u8>) -> bool {
 
 fn corpus() -> Vec<Vec<u8>> {
     let job = JobBuilder::default();
-    let (r, _) = run_simple(&job, &[r#"{"answer":{"verdict":"benign","cites":["ev:1"],"summary":"ok"}}"#], Tamper::None);
+    let (r, _) = run_simple(&job, &[r#"{"verdict":"benign","severity":"medium","summary":"ok","evidence":["F1"],"entities":[],"next_step":"investigate","confidence":50}"#], Tamper::None);
     let mut c = vec![job.encode(), r.signed[0].clone(), r.signed[0][..cap::BODY_LEN].to_vec()];
     c.push(br#"{"tool":"flows.count","args":{"ev":"ev:2","hours":6}}"#.to_vec());
-    c.push(br#"{"answer":{"verdict":"malicious","cites":["ev:1","ev:2"],"summary":"line\nnext \"q\" \\ /"}}"#.to_vec());
+    c.push(br#"{"verdict":"malicious","severity":"medium","summary":"line\nnext \"q\" \\ /","evidence":["F1","F2"],"entities":[],"next_step":"investigate","confidence":50}"#.to_vec());
     let mut e = vec![0u8; abi::ENV_LEN];
     e[32] = 1;
     c.push(e);
@@ -64,6 +64,9 @@ fn corpus() -> Vec<Vec<u8>> {
 
 #[test]
 fn decoders_never_panic() {
+    let (mut fuzz_facts, mut fuzz_ents) = (neuro_contract::IdList::new(), neuro_contract::IdList::new());
+    neuro_contract::context_ids(b"F1 CVE-2024-3400 on H1\nF2 42 connections to R3", &mut fuzz_facts, &mut fuzz_ents).unwrap();
+    let mut fuzz_summary = conductor_core::buf::Buf::new();
     let mut rng = Rng(0xdead_beef_1234_5678);
     let corpus = corpus();
     let dpk = public_key(&DEVICE_SEED);
@@ -83,7 +86,7 @@ fn decoders_never_panic() {
         let _ = cap::open(&b, &dpk);
         let _ = frame::Response::decode(&b);
         let _ = frame::Request::decode(&b);
-        let _ = json::parse(&b);
+        let _ = json::parse(&b, &fuzz_facts, &fuzz_ents, &mut fuzz_summary);
         let _ = job.decode_into(&b);
         let _ = abi::decode_env(&b);
         let _ = abi::decode_event(&b);
@@ -101,7 +104,7 @@ fn altered_worker_frames_are_never_verified() {
         k.rng = Rng(0x1234_5678 + i as u64 * 7919);
         k.tool_data.push((2, conductor_core::class::DataClass::Public, "17 flows".into()));
         k.frame_mutator = Some(|rng, f| if rng.below(3) == 0 { mutate(rng, f) } else { false });
-        let long = format!(r#"{{"answer":{{"verdict":"benign","cites":["ev:1"],"summary":"{}"}}}}"#, "z".repeat(i % 1500));
+        let long = format!(r#"{{"verdict":"benign","severity":"low","summary":"{}","evidence":["F1"],"entities":[],"next_step":"observe","confidence":10}}"#, "z".repeat(i % 600));
         let mut w = MockWorker::new(Tier::P1, vec![r#"{"tool":"evidence.get","args":{"id":"ev:2"}}"#.into(), long]);
         let mut h = Box::new(Harness::new());
         // Every other run uses SLO admission, so quote frames are mutated too.

@@ -35,7 +35,7 @@ fn main() {
     let text = std::fs::read_to_string(&path).expect("read listing");
     let (mut frame, mut calls) = (HashMap::<String, u64>::new(), HashMap::<String, HashSet<String>>::new());
     let (mut cur, mut indirect, mut sp_reg, mut fp_simd) = (None::<String>, 0u32, 0u32, 0u32);
-    // A compiled `match`: `adr base; ldrsw off, [table, idx, lsl #2]; add; br` stays inside its function.
+    // A compiled `match`: `adr base; ldr{sw,h,b} off, [table, idx, lsl #k]; add; br` stays inside its function.
     let (mut jump_tables, mut recent) = (0u32, std::collections::VecDeque::<String>::new());
     for line in text.lines() {
         if let (Some(a), true) = (line.find(" <"), line.ends_with(">:")) {
@@ -84,7 +84,7 @@ fn main() {
         if op == "blr" {
             indirect += 1;
         } else if op == "br" {
-            if recent.iter().any(|o| o == "adr") && recent.iter().any(|o| o == "ldrsw") {
+            if recent.iter().any(|o| o == "adr") && recent.iter().any(|o| o == "ldrsw" || o == "ldrh" || o == "ldrb") {
                 jump_tables += 1;
             } else {
                 indirect += 1;

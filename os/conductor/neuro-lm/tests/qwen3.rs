@@ -442,9 +442,9 @@ fn qwen3_integer_engine_tracks_f64_runtime_on_the_same_weights() {
         model.check().unwrap();
         let (kvn, kvs) = D.kv_len();
         let (mut vals, mut shifts) = (vec![0i16; kvn], vec![0u8; kvs]);
-        let (a, i8n, scn, i16n) = Work::lens(&D);
+        let (a, i8n, scn, i16n) = Work::lens(&D, 1);
         let (mut ba, mut bb, mut bc, mut bd) = (vec![0i64; a], vec![0i8; i8n], vec![(0, 0); scn], vec![0i32; i16n]);
-        let mut work = Work::new(&D, &mut ba, &mut bb, &mut bc, &mut bd).unwrap();
+        let mut work = Work::new(&D, 1, &mut ba, &mut bb, &mut bc, &mut bd).unwrap();
         let mut kv = Kv { vals: &mut vals, shifts: &mut shifts };
         let mut reference = RefModel::new(&b);
         let mut tok = (seed as usize * 7) % D.vocab;
@@ -516,11 +516,11 @@ fn qwen3_rejects_bad_models_and_inputs() {
     pmodel.check().unwrap();
     {
         let (kvn, kvs) = D.kv_len();
-        let (a, i8n, scn, i32n) = Work::lens(&D);
+        let (a, i8n, scn, i32n) = Work::lens(&D, 1);
         let mut run = |m: &Model| -> Vec<i64> {
             let (mut vals, mut shifts) = (vec![0i16; kvn], vec![0u8; kvs]);
             let (mut ba, mut bb, mut bc, mut bd) = (vec![0i64; a], vec![0i8; i8n], vec![(0, 0); scn], vec![0i32; i32n]);
-            let mut w = Work::new(&D, &mut ba, &mut bb, &mut bc, &mut bd).unwrap();
+            let mut w = Work::new(&D, 1, &mut ba, &mut bb, &mut bc, &mut bd).unwrap();
             let mut kv = Kv { vals: &mut vals, shifts: &mut shifts };
             let mut all = vec![];
             let mut t = 7usize;
@@ -537,10 +537,10 @@ fn qwen3_rejects_bad_models_and_inputs() {
     // Bad token, full context, wrong cache size.
     let (kvn, kvs) = D.kv_len();
     let (mut vals, mut shifts) = (vec![0i16; kvn], vec![0u8; kvs]);
-    let (a, i8n, scn, i16n) = Work::lens(&D);
+    let (a, i8n, scn, i16n) = Work::lens(&D, 1);
     let (mut ba, mut bb, mut bc, mut bd) = (vec![0i64; a], vec![0i8; i8n], vec![(0, 0); scn], vec![0i32; i16n]);
-    assert!(Work::new(&D, &mut ba[..a - 1], &mut bb, &mut bc, &mut bd).is_none());
-    let mut work = Work::new(&D, &mut ba, &mut bb, &mut bc, &mut bd).unwrap();
+    assert!(Work::new(&D, 1, &mut ba[..a - 1], &mut bb, &mut bc, &mut bd).is_none());
+    let mut work = Work::new(&D, 1, &mut ba, &mut bb, &mut bc, &mut bd).unwrap();
     let mut kv = Kv { vals: &mut vals, shifts: &mut shifts };
     assert_eq!(good.step(Simd::SCALAR, 384, 0, &mut kv, &mut work), Err(neuro_lm::LmError::Token));
     assert_eq!(good.step(Simd::SCALAR, 1, D.max_ctx, &mut kv, &mut work), Err(neuro_lm::LmError::Context));

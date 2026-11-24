@@ -81,7 +81,7 @@ fn six_workloads_one_runtime() {
         assert_eq!(r.outcome, Some(Outcome::Refused(PlaceRefusal::RemoteDisabled)));
         assert_eq!(r.sends, 0, "nothing leaves an air-gapped device");
         // (b) Owner enabled a LAN worker: the explanation is checked against the evidence, L0 decides.
-        let answer = format!(r#"{{"answer":{{"verdict":"malicious","cites":["ev:1"],"summary":"The device contacted peers it had not used before."}}}}"#);
+        let answer = r#"{"verdict":"malicious","severity":"high","summary":"The device contacted peers it had not used before.","evidence":["F1"],"entities":[],"next_step":"investigate","confidence":70}"#.to_string();
         let mut k = Kernel::new(policy_p1(), Tier::P1);
         let mut w = MockWorker::new(Tier::P1, vec![answer]);
         let r = k.run(&mut h, &job[..n], env_with(policy_p1(), public_key(&WORKER_SEED), Tier::P1), &mut w);

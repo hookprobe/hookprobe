@@ -198,6 +198,11 @@ impl<'a> Tokenizer<'a> {
         self.pool.get(a..b)
     }
 
+    /// True for added tokens (`<|im_start|>`, `<tool_call>`, …): never part of a constrained answer.
+    pub fn is_added(&self, id: u32) -> bool {
+        (0..self.added.len() / 4).any(|i| u32_at(self.added, i) == id)
+    }
+
     /// Id of the added token with exactly this text, if any.
     pub fn added_id(&self, text: &[u8]) -> Option<u32> {
         (0..self.added.len() / 4).map(|i| u32_at(self.added, i)).find(|&id| self.bytes(id as usize) == Some(text))

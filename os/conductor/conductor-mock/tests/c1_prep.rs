@@ -110,7 +110,7 @@ fn ledger_power_loss_recovery() {
 #[test]
 fn ledger_records_a_real_job() {
     // The harness's ledger actions, chained: a full tool-then-answer job verifies end to end.
-    let (r, _) = run_simple(&JobBuilder::default(), &[r#"{"answer":{"cites":["ev:1"],"summary":"ok"}}"#], Tamper::None);
+    let (r, _) = run_simple(&JobBuilder::default(), &[r#"{"verdict":"insufficient_evidence","severity":"medium","summary":"ok","evidence":["F1"],"entities":[],"next_step":"investigate","confidence":50}"#], Tamper::None);
     let mut store = vec![];
     let mut head = Anchor::EMPTY;
     for rec in &r.ledger {
@@ -177,7 +177,7 @@ fn lapsed_pairing_stops_signing() {
     let (r, s) = owner_pairing(Tier::P1, public_key(&WORKER_SEED), 5_000, 2);
     k.signer.install_pairing(&r, &s).unwrap();
     let job = JobBuilder::default();
-    let mut w = MockWorker::new(Tier::P1, vec![r#"{"answer":{"cites":["ev:1"],"summary":"ok"}}"#.into()]);
+    let mut w = MockWorker::new(Tier::P1, vec![r#"{"verdict":"insufficient_evidence","severity":"medium","summary":"ok","evidence":["F1"],"entities":[],"next_step":"investigate","confidence":50}"#.into()]);
     let mut h = Box::new(conductor_core::harness::Harness::new());
     k.now = 10_000; // past valid_until
     let rep = k.run(&mut h, &job.encode(), env_with(policy_p1(), public_key(&WORKER_SEED), Tier::P1), &mut w);

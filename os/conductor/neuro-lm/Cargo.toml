@@ -13,6 +13,7 @@ path = "src/lib.rs"
 
 [dependencies]
 neuro-kernels = { path = "../neuro-kernels" }
+neuro-contract = { path = "../neuro-contract" }
 
 [dev-dependencies]
 neuro-build = { path = "../neuro-build" }

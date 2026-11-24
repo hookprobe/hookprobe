@@ -308,6 +308,48 @@ fn dequant_block(m: i32, s: i32, qs: &[u8], frac: u32, ob: &mut [i64]) {
     }
 }
 
+/// Several activation vectors against one GGUF-layout matrix: `sink(column, row, value)`. Each column is
+/// bit-identical to [`matvec`] on it (same per-column grid, same kernels). Rows go in groups of four, and
+/// each group computes every column while it is in cache, so a bandwidth-bound device reads the matrix
+/// once per call instead of once per column. Returns false (calling nothing) if the lengths do not fit.
+pub fn matvec_multi(simd: crate::Simd, w: &[u8], rows: usize, xs: &[Act], wexp: i32, mut sink: impl FnMut(usize, usize, i64)) -> bool {
+    let Some(x0) = xs.first() else { return false };
+    let rb = row_bytes(x0.q.len());
+    if rb == 0 || rows.checked_mul(rb) != Some(w.len()) || xs.iter().any(|x| x.q.len() != x0.q.len() || !ok(w.get(..rb).unwrap_or(&[]), x)) {
+        return false;
+    }
+    let mut ks = [0i32; MAX_BATCH];
+    if xs.len() > MAX_BATCH {
+        return false;
+    }
+    for (k, x) in ks.iter_mut().zip(xs) {
+        *k = grid(x, wexp);
+    }
+    let mut groups = w.chunks_exact(4 * rb);
+    let mut r = 0usize;
+    for g in groups.by_ref() {
+        for (j, (x, &k)) in xs.iter().zip(&ks).enumerate() {
+            let mut o = [0i64; 4];
+            rows4_k(simd, g, rb, x, k, &mut o);
+            for (l, v) in o.into_iter().enumerate() {
+                sink(j, r + l, v);
+            }
+        }
+        r += 4;
+    }
+    for wr in groups.remainder().chunks_exact(rb) {
+        for (j, (x, &k)) in xs.iter().zip(&ks).enumerate() {
+            let v = if simd.is_neon() { row(simd, wr, x, wexp).unwrap_or(0) } else { row_k(wr, x, k) };
+            sink(j, r, v);
+        }
+        r += 1;
+    }
+    true
+}
+
+/// Columns one call may batch.
+pub const MAX_BATCH: usize = 16;
+
 // ------------------------------------------------------------------------------------------ packed layout
 
 fn rd16(b: &[u8], i: usize) -> i16 {
@@ -464,6 +506,87 @@ pub fn matvec_packed(simd: crate::Simd, w: &[u8], rows: usize, x: &Act, wexp: i3
         }
     }
     true
+}
+
+/// Several activation vectors against one packed matrix: `sink(column, row, value)` for the real rows.
+/// Bit-identical per column to [`matvec_packed`]; each 4-row group serves every column while in cache.
+pub fn matvec_packed_multi(simd: crate::Simd, w: &[u8], rows: usize, xs: &[Act], wexp: i32, mut sink: impl FnMut(usize, usize, i64)) -> bool {
+    let Some(x0) = xs.first() else { return false };
+    let cols = x0.q.len();
+    if xs.len() > MAX_BATCH || xs.iter().any(|x| !act_ok(x) || x.q.len() != cols) || w.len() != packed_bytes(rows, cols) {
+        return false;
+    }
+    let mut ks = [0i32; MAX_BATCH];
+    for (k, x) in ks.iter_mut().zip(xs) {
+        *k = grid(x, wexp);
+    }
+    let gb = cols / QK * P_BLOCK;
+    for (g, grp) in w.chunks_exact(gb).enumerate() {
+        for (j, (x, &k)) in xs.iter().zip(&ks).enumerate() {
+            let o = packed_group(simd, grp, x, k);
+            for (lane, v) in o.into_iter().enumerate() {
+                if 4 * g + lane < rows {
+                    sink(j, 4 * g + lane, v);
+                }
+            }
+        }
+    }
+    true
+}
+
+/// Only the listed rows (ascending) of a packed matrix, for one activation vector: `sink(row, value)`.
+/// Each listed row's value is bit-identical to [`matvec_packed`]; whole groups are computed, but only
+/// groups that hold a listed row. This is output-head pruning: under a grammar, few tokens are possible.
+pub fn matvec_packed_rows(simd: crate::Simd, w: &[u8], rows: usize, x: &Act, wexp: i32, list: &[u32], mut sink: impl FnMut(usize, i64)) -> bool {
+    let cols = x.q.len();
+    if !act_ok(x) || w.len() != packed_bytes(rows, cols) || list.windows(2).any(|p| p.first() >= p.get(1)) || list.last().is_some_and(|&r| r as usize >= rows) {
+        return false;
+    }
+    let k = grid(x, wexp);
+    let gb = cols / QK * P_BLOCK;
+    let mut i = 0usize;
+    while let Some(&r) = list.get(i) {
+        let g = r as usize / 4;
+        let Some(grp) = w.get(g * gb..(g + 1) * gb) else { return false };
+        let o = packed_group(simd, grp, x, k);
+        while let Some(&r2) = list.get(i) {
+            if r2 as usize / 4 != g {
+                break;
+            }
+            sink(r2 as usize, o.get(r2 as usize % 4).copied().unwrap_or(0));
+            i += 1;
+        }
+    }
+    true
+}
+
+/// Only the listed rows (ascending) of a GGUF-layout matrix; bit-identical to [`matvec`] on those rows.
+pub fn matvec_rows(simd: crate::Simd, w: &[u8], rows: usize, x: &Act, wexp: i32, list: &[u32], mut sink: impl FnMut(usize, i64)) -> bool {
+    let rb = row_bytes(x.q.len());
+    if rb == 0 || rows.checked_mul(rb) != Some(w.len()) || !ok(w.get(..rb).unwrap_or(&[]), x) || list.last().is_some_and(|&r| r as usize >= rows) {
+        return false;
+    }
+    let k = grid(x, wexp);
+    for &r in list {
+        let wr = w.get(r as usize * rb..(r as usize + 1) * rb).unwrap_or(&[]);
+        let v = if simd.is_neon() { row(simd, wr, x, wexp).unwrap_or(0) } else { row_k(wr, x, k) };
+        sink(r as usize, v);
+    }
+    true
+}
+
+fn packed_group(simd: crate::Simd, grp: &[u8], x: &Act, k: i32) -> [i64; 4] {
+    let mut o = [0i64; 4];
+    if simd.is_neon() {
+        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+        // SAFETY: grp is one group of cols/32 records; activations checked by the caller; the token carries the promise.
+        unsafe {
+            neon::rows4_packed(grp, x, k, &mut o)
+        };
+    } else {
+        rows4_packed_k(grp, x, k, &mut o);
+    }
+    o
 }
 
 /// Four packed rows (one group) by the scalar reference, for differential tests.

@@ -4,7 +4,8 @@
 //! Levels: STRUCTURAL (the strict parser), EVIDENTIAL (every citation exists in what this provider was
 //! shown; required evidence cited) and COMPUTATIONAL (the deterministic L0 verdict, when the core has one,
 //! DECIDES; the model only words it — Neuro doc 40). The status is never a claim that a conclusion is
-//! proven: VALID means "structure and evidence checked, and the conclusion matches L0 or is purely
+//! proven. The answer always carries a verdict (Neuro's schema requires one); `insufficient_evidence` claims
+//! nothing, so it is treated as a descriptive answer. VALID means "structure and evidence checked, and the conclusion matches L0 or is purely
 //! descriptive". Precedence: REJECTED > CONFLICT > INCOMPLETE > UNVERIFIED > VALID.
 
 use crate::job::{JobSpec, Verdict};
@@ -69,11 +70,12 @@ pub fn verify(a: &Answer, job: &JobSpec, included: &[bool; MAX_EVIDENCE]) -> Ver
             None => return mk(Status::Rejected, Finding::UnknownCitation, None, false),
         }
     }
-    if a.summary.is_empty() {
+    if a.summary_len == 0 {
         return mk(Status::Rejected, Finding::EmptySummary, None, false);
     }
-    // Computational: L0 decides where it has a verdict.
-    if let (Some(l0), Some(m)) = (job.l0_verdict(), a.verdict) {
+    // Computational: L0 decides where it has a verdict. "insufficient_evidence" is no claim.
+    let claim = a.verdict.filter(|v| *v != Verdict::InsufficientEvidence);
+    if let (Some(l0), Some(m)) = (job.l0_verdict(), claim) {
         if l0 != m {
             return mk(Status::Conflict, Finding::ContradictsL0, Some(l0), true);
         }
@@ -82,7 +84,7 @@ pub fn verify(a: &Answer, job: &JobSpec, included: &[bool; MAX_EVIDENCE]) -> Ver
     if missing {
         return mk(Status::Incomplete, Finding::MissingRequired, job.l0_verdict(), job.l0_verdict().is_some());
     }
-    match (job.l0_verdict(), a.verdict) {
+    match (job.l0_verdict(), claim) {
         (Some(l0), _) => mk(Status::Valid, Finding::None, Some(l0), true),
         (None, Some(_)) => mk(Status::Unverified, Finding::NotReproducible, None, false),
         (None, None) => mk(Status::Valid, Finding::None, None, false),

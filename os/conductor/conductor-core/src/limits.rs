@@ -22,7 +22,7 @@ pub const MAX_TOOL_REFUSALS: u8 = 2;
 /// Citations in one answer.
 pub const MAX_CITES: usize = 16;
 /// Bytes of the answer's summary text.
-pub const MAX_SUMMARY: usize = 1024;
+pub const MAX_SUMMARY: usize = 2400;
 /// Longest a capability may live (device lease and token expiry), in ms.
 pub const MAX_TTL_MS: u64 = 5 * 60 * 1000;
 /// Ceiling for any single call's compute budget, in ms.

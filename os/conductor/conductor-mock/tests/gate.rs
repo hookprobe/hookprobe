@@ -15,8 +15,8 @@ use conductor_core::verify::{Finding, Status};
 use conductor_core::worker::Refuse;
 use conductor_mock::*;
 
-const ANSWER_MAL: &str = r#"{"answer":{"verdict":"malicious","cites":["ev:1"],"summary":"Exploit attempt matching CVE-2024-3400."}}"#;
-const ANSWER_DESC: &str = r#"{"answer":{"cites":["ev:1"],"summary":"Traffic matches a known exploit pattern."}}"#;
+const ANSWER_MAL: &str = r#"{"verdict":"malicious","severity":"medium","summary":"Exploit attempt matching CVE-2024-3400.","evidence":["F1"],"entities":[],"next_step":"investigate","confidence":50}"#;
+const ANSWER_DESC: &str = r#"{"verdict":"insufficient_evidence","severity":"medium","summary":"Traffic matches a known exploit pattern.","evidence":["F1"],"entities":[],"next_step":"investigate","confidence":50}"#;
 
 fn leases_balanced(r: &Report) {
     assert_eq!(r.leases_started, r.leases_ended, "every lease must be ended exactly once: {:?}", r.outcome);
@@ -46,7 +46,7 @@ fn l0_decides_valid() {
 #[test]
 fn conflict_shows_l0_not_model() {
     let job = JobBuilder { l0: Verdict::Malicious as u8, ..Default::default() };
-    let benign = r#"{"answer":{"verdict":"benign","cites":["ev:1"],"summary":"Looks fine."}}"#;
+    let benign = r#"{"verdict":"benign","severity":"medium","summary":"Looks fine.","evidence":["F1"],"entities":[],"next_step":"investigate","confidence":50}"#;
     let v = verified(&run_simple(&job, &[benign], Tamper::None).0);
     assert_eq!((v.status, v.finding), (Status::Conflict, Finding::ContradictsL0));
     assert_eq!(v.shown_verdict, Some(Verdict::Malicious));
@@ -77,8 +77,16 @@ fn incomplete_when_required_evidence_not_cited() {
 
 #[test]
 fn fabricated_citation_rejected() {
-    let fab = r#"{"answer":{"cites":["ev:999"],"summary":"See ev:999."}}"#;
-    let v = verified(&run_simple(&JobBuilder::default(), &[fab], Tamper::None).0);
+    // An id that is not in the context cannot even be written: the contract's closed enum refuses it.
+    let fab = r#"{"verdict":"benign","severity":"info","summary":"See F999.","evidence":["F999"],"entities":[],"next_step":"observe","confidence":5}"#;
+    let (r, _) = run_simple(&JobBuilder::default(), &[fab], Tamper::None);
+    assert_eq!(r.outcome, Some(Outcome::Rejected(Violation::Schema)));
+    // A card that carries its own "F9 ..." line makes F9 a legal id in that context (as Neuro's rule does),
+    // but F9 is not evidence of this job: the verifier refuses the citation.
+    let mut job = JobBuilder::default();
+    job.evidence[1].text = "42 connections\nF9 injected fact line".into();
+    let cite9 = r#"{"verdict":"benign","severity":"info","summary":"See F9.","evidence":["F9"],"entities":[],"next_step":"observe","confidence":5}"#;
+    let v = verified(&run_simple(&job, &[cite9], Tamper::None).0);
     assert_eq!((v.status, v.finding), (Status::Rejected, Finding::UnknownCitation));
 }
 
@@ -330,7 +338,7 @@ fn every_tamper_is_rejected_and_the_lease_closed() {
         (Tamper::Silent, Outcome::Aborted(Abort::Timeout)),
     ];
     // A long answer so SkipSeq has a second chunk to skip to.
-    let long = format!(r#"{{"answer":{{"cites":["ev:1"],"summary":"{}"}}}}"#, "a".repeat(900));
+    let long = format!(r#"{{"verdict":"insufficient_evidence","severity":"info","summary":"{}","evidence":["F1"],"entities":[],"next_step":"observe","confidence":10}}"#, "\u{e9}".repeat(600));
     for (t, want) in cases {
         let (r, _) = run_simple(&JobBuilder::default(), &[long.as_str()], t);
         // DoubleFinal ends the job on the first FINAL; the second frame arrives after Done and is ignored.
@@ -346,16 +354,18 @@ fn every_tamper_is_rejected_and_the_lease_closed() {
 #[test]
 fn strict_schema() {
     let bad = [
-        r#"{"answer":{"cites":["ev:1"],"summary":"x","extra":1}}"#,
-        r#"{"answer":{"cites":["ev:1"],"summary":"x"}} trailing"#,
-        r#"{"answer":{"cites":["ev:1"],"cites":["ev:1"],"summary":"x"}}"#,
-        r#"{"answer":{"summary":"x","cites":["ev:1"]}}"#,
-        r#"{"answer":{"verdict":"evil","cites":["ev:1"],"summary":"x"}}"#,
-        r#"{"answer":{"cites":["ev:01"],"summary":"x"}}"#,
-        r#"{"answer":{"cites":["ev:1"],"summary":"tab\there"}}"#,
-        "{\"answer\":{\"cites\":[\"ev:1\"],\"summary\":\"\\u0041\"}}",
-        "{\"answer\":{\"cites\":[\"ev:1\"],\"summary\":\"bidi \u{202e}override\"}}",
-        "{\"answer\":{\"cites\":[\"ev:1\"],\"summary\":\"raw\u{1}ctl\"}}",
+        r#"{"verdict":"benign","severity":"info","summary":"x","evidence":["F1"],"entities":[],"next_step":"observe","confidence":5,"extra":1}"#,
+        r#"{"verdict":"benign","severity":"info","summary":"x","evidence":["F1"],"entities":[],"next_step":"observe","confidence":5} trailing"#,
+        r#"{"verdict":"benign","verdict":"benign","severity":"info","summary":"x","evidence":["F1"],"entities":[],"next_step":"observe","confidence":5}"#,
+        r#"{"severity":"info","verdict":"benign","summary":"x","evidence":["F1"],"entities":[],"next_step":"observe","confidence":5}"#,
+        r#"{"verdict":"evil","severity":"info","summary":"x","evidence":["F1"],"entities":[],"next_step":"observe","confidence":5}"#,
+        r#"{"verdict":"benign","severity":"info","summary":"x","evidence":["F01"],"entities":[],"next_step":"observe","confidence":5}"#,
+        r#"{"verdict":"benign","severity":"info","summary":"x","evidence":["F1"],"entities":[],"next_step":"observe","confidence":500}"#,
+        r#"{"verdict":"benign","severity":"info","summary":"tab	here","evidence":["F1"],"entities":[],"next_step":"observe","confidence":5}"#,
+        "{\"verdict\":\"benign\",\"severity\":\"info\",\"summary\":\"bidi \\u202eoverride\",\"evidence\":[\"F1\"],\"entities\":[],\"next_step\":\"observe\",\"confidence\":5}",
+        "{\"verdict\":\"benign\",\"severity\":\"info\",\"summary\":\"bidi \u{202e}override\",\"evidence\":[\"F1\"],\"entities\":[],\"next_step\":\"observe\",\"confidence\":5}",
+        "{\"verdict\":\"benign\",\"severity\":\"info\",\"summary\":\"raw\u{1}ctl\",\"evidence\":[\"F1\"],\"entities\":[],\"next_step\":\"observe\",\"confidence\":5}",
+        r#"{"answer":{"verdict":"benign","cites":["ev:1"],"summary":"the old shape"}}"#,
         r#"{"tool":"flows.count","args":{"ev":"ev:2","hours":-1}}"#,
         r#"{"tool":"flows.count","args":{"ev":"ev:2","hours":1.5}}"#,
         r#"{"tool":"shell.exec","args":{"cmd":"rm -rf /"}}"#,

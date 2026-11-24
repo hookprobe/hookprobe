@@ -17,5 +17,6 @@ path = "src/lib.rs"
 signer = []
 
 [dependencies]
+neuro-contract = { path = "../neuro-contract" }
 sha2 = { version = "=0.10.9", default-features = false }
 ed25519-compact = { version = "=2.3.1", default-features = false }

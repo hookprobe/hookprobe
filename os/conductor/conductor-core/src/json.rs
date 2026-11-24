@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! A strict parser for the model's reply. It accepts exactly two shapes, with keys in this order:
+//! A strict parser for the model's reply. It accepts exactly two shapes:
+//!
+//! - **the explainer's answer**, in the language of `neuro_contract` (Neuro's triage schema, closed over the
+//!   fact ids and aliases of this job's context) and parsed by that crate's automaton, the same one the
+//!   engine decodes with. Nothing here redefines it;
+//! - **a tool call** (a Conductor extension, keys in this order):
 //!
 //! ```text
 //! {"tool":"evidence.get","args":{"id":"ev:N"}}
 //! {"tool":"flows.count","args":{"ev":"ev:N","hours":H}}
-//! {"answer":{"verdict":"benign|suspicious|malicious|insufficient_evidence","cites":["ev:N",...],"summary":"..."}}
 //! ```
 //!
-//! `verdict` may be omitted (a descriptive answer). Anything else is an error: unknown or duplicate keys
+//! Citations `F<n>` name evidence `n` (canonical decimal only). The summary is unescaped and must be inert
+//! text. In tool calls, anything else is an error: unknown or duplicate keys
 //! (a duplicate necessarily breaks the fixed order), other escapes than \" \\ \/ \n, raw control
 //! characters, numbers with signs, leading zeros or fractions, nesting beyond the schema, trailing bytes.
 //! Strings are bounded and must be inert text. No allocation, no recursion.
@@ -15,6 +20,7 @@
 use crate::buf::Buf;
 use crate::job::{inert_text, Verdict};
 use crate::limits::{MAX_CITES, MAX_SUMMARY};
+use neuro_contract::{IdList, Sink};
 use crate::tools::ToolCall;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,9 +34,51 @@ pub enum JsonError {
 
 pub struct Answer {
     pub verdict: Option<Verdict>,
+    /// Index into `neuro_contract::SEVERITIES` / `NEXT_STEPS`.
+    pub severity: u8,
+    pub next_step: u8,
+    pub confidence: u8,
+    pub n_entities: u8,
     pub cites: [u16; MAX_CITES],
     pub n_cites: usize,
-    pub summary: Buf<MAX_SUMMARY>,
+    /// Bytes of the decoded summary (the text itself is written to the caller's buffer).
+    pub summary_len: usize,
+}
+
+struct BufSink<'b, const N: usize>(&'b mut Buf<N>);
+impl<const N: usize> Sink for BufSink<'_, N> {
+    fn put(&mut self, s: &[u8]) -> Result<(), neuro_contract::ContractError> {
+        self.0.push(s).ok_or(neuro_contract::ContractError::Space)
+    }
+}
+
+/// `F<n>`, canonical decimal (no leading zero), n ≤ 65535.
+fn fact_number(id: &[u8]) -> Option<u16> {
+    let digits = id.strip_prefix(b"F")?;
+    if digits.is_empty() || (digits.len() > 1 && digits.first() == Some(&b'0')) || digits.len() > 5 {
+        return None;
+    }
+    let v = digits.iter().try_fold(0u32, |a, &d| if d.is_ascii_digit() { a.checked_mul(10)?.checked_add(u32::from(d.wrapping_sub(b'0'))) } else { None })?;
+    u16::try_from(v).ok()
+}
+
+/// The explainer's answer, through the contract.
+fn answer(b: &[u8], facts: &IdList, ents: &IdList, summary: &mut Buf<MAX_SUMMARY>) -> R<Answer> {
+    let c = neuro_contract::parse(b, facts, ents).map_err(|_| JsonError::Schema)?;
+    let mut a = Answer { verdict: None, severity: c.severity, next_step: c.next_step, confidence: c.confidence, n_entities: u8::try_from(c.entities().len()).unwrap_or(u8::MAX), cites: [0; MAX_CITES], n_cites: 0, summary_len: 0 };
+    a.verdict = Some(Verdict::parse_name(c.verdict_name().as_bytes()).ok_or(JsonError::Schema)?);
+    for &i in c.evidence() {
+        let id = facts.get(usize::from(i)).and_then(fact_number).ok_or(JsonError::Schema)?;
+        *a.cites.get_mut(a.n_cites).ok_or(JsonError::TooLong)? = id;
+        a.n_cites = a.n_cites.saturating_add(1);
+    }
+    summary.clear();
+    neuro_contract::unescape(c.summary(b), &mut BufSink(summary)).map_err(|e| if e == neuro_contract::ContractError::Space { JsonError::TooLong } else { JsonError::Encoding })?;
+    if !inert_text(summary.as_slice()) {
+        return Err(JsonError::Encoding);
+    }
+    a.summary_len = summary.len();
+    Ok(a)
 }
 
 impl Answer {
@@ -144,27 +192,20 @@ impl<'a> Cur<'a> {
         }
         u16::try_from(v).map_err(|_| JsonError::Schema)
     }
-    fn comma_or(&mut self, end: u8) -> R<bool> {
-        self.ws();
-        match self.bump()? {
-            b',' => Ok(true),
-            c if c == end => Ok(false),
-            _ => Err(JsonError::Syntax),
-        }
-    }
 }
 
-pub fn parse(b: &[u8]) -> R<ModelOutput> {
+/// Parse a reply. `facts` and `ents` are the ids of the context the model was shown (the closed enums); an
+/// answer's decoded summary goes to `summary`.
+pub fn parse(b: &[u8], facts: &IdList, ents: &IdList, summary: &mut Buf<MAX_SUMMARY>) -> R<ModelOutput> {
     let c = &mut Cur { b, i: 0 };
     c.expect(b'{')?;
     let mut top: Buf<24> = Buf::new();
     c.string(&mut top).map_err(|_| JsonError::Schema)?;
     c.expect(b':')?;
-    let out = match top.as_slice() {
-        b"tool" => ModelOutput::Tool(tool(c)?),
-        b"answer" => ModelOutput::Answer(answer(c)?),
-        _ => return Err(JsonError::Schema),
-    };
+    if top.as_slice() != b"tool" {
+        return Ok(ModelOutput::Answer(answer(b, facts, ents, summary)?));
+    }
+    let out = ModelOutput::Tool(tool(c)?);
     c.expect(b'}')?;
     c.ws();
     if c.i != b.len() {
@@ -198,39 +239,3 @@ fn tool(c: &mut Cur) -> R<ToolCall> {
     Ok(call)
 }
 
-fn answer(c: &mut Cur) -> R<Answer> {
-    let mut a = Answer { verdict: None, cites: [0; MAX_CITES], n_cites: 0, summary: Buf::new() };
-    c.expect(b'{')?;
-    let mut k: Buf<24> = Buf::new();
-    c.string(&mut k).map_err(|_| JsonError::Schema)?;
-    c.expect(b':')?;
-    if k.as_slice() == b"verdict" {
-        let mut v: Buf<24> = Buf::new();
-        c.string(&mut v).map_err(|_| JsonError::Schema)?;
-        a.verdict = Some(Verdict::parse_name(v.as_slice()).ok_or(JsonError::Schema)?);
-        c.expect(b',')?;
-        c.key(b"cites")?;
-    } else if k.as_slice() != b"cites" {
-        return Err(JsonError::Schema);
-    }
-    c.expect(b'[')?;
-    c.ws();
-    if c.peek() == Some(b']') {
-        c.i = c.i.saturating_add(1);
-    } else {
-        loop {
-            let id = c.ev_ref()?;
-            let slot = a.cites.get_mut(a.n_cites).ok_or(JsonError::TooLong)?;
-            *slot = id;
-            a.n_cites = a.n_cites.saturating_add(1);
-            if !c.comma_or(b']')? {
-                break;
-            }
-        }
-    }
-    c.expect(b',')?;
-    c.key(b"summary")?;
-    c.string(&mut a.summary)?;
-    c.expect(b'}')?;
-    Ok(a)
-}

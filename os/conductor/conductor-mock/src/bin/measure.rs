@@ -15,7 +15,7 @@ fn main() {
     let env = env_with(policy_p1(), public_key(&WORKER_SEED), Tier::P1);
     let outputs = vec![
         r#"{"tool":"flows.count","args":{"ev":"ev:2","hours":6}}"#.to_string(),
-        r#"{"answer":{"verdict":"malicious","cites":["ev:1","ev:2"],"summary":"Exploit attempt; 17 flows in 6 h."}}"#.to_string(),
+        r#"{"verdict":"malicious","severity":"medium","summary":"Exploit attempt; 17 flows in 6 h.","evidence":["F1","F2"],"entities":[],"next_step":"investigate","confidence":50}"#.to_string(),
     ];
     let t = Instant::now();
     for i in 0..n {

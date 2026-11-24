@@ -11,7 +11,7 @@ use conductor_core::place::{PlaceRefusal, WorkerInfo};
 use conductor_core::verify::Status;
 use conductor_mock::*;
 
-const ANSWER: &str = r#"{"answer":{"cites":["ev:1"],"summary":"ok"}}"#;
+const ANSWER: &str = r#"{"verdict":"insufficient_evidence","severity":"medium","summary":"ok","evidence":["F1"],"entities":[],"next_step":"investigate","confidence":50}"#;
 
 fn two_tiers() -> (Kernel, conductor_core::place::Env, OwnerPolicy) {
     let p = OwnerPolicy { remote_enabled: true, tiers: Tier::P1.bit() | Tier::P5.bit(), ..Default::default() };

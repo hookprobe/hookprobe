@@ -16,6 +16,7 @@
 pub mod bpe;
 pub mod qwen3;
 pub mod tok;
+pub mod decode;
 
 use neuro_kernels::lm::{self, ExpTable};
 use neuro_kernels::{gemv_q4_group, group_bytes, i8_bytes, Simd, GROUP_ROWS};

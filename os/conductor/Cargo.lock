@@ -96,6 +96,7 @@ name = "conductor-core"
 version = "0.0.26"
 dependencies = [
  "ed25519-compact",
+ "neuro-contract",
  "sha2",
 ]
 
@@ -104,6 +105,7 @@ name = "conductor-mock"
 version = "0.0.26"
 dependencies = [
  "conductor-core",
+ "neuro-contract",
 ]
 
 [[package]]
@@ -463,6 +465,7 @@ name = "neuro-lm"
 version = "0.0.26"
 dependencies = [
  "neuro-build",
+ "neuro-contract",
  "neuro-kernels",
 ]
 
@@ -784,6 +787,7 @@ version = "0.0.26"
 dependencies = [
  "fancy-regex",
  "neuro-build",
+ "neuro-contract",
  "neuro-gguf",
  "neuro-kernels",
  "neuro-lm",

@@ -135,6 +135,14 @@ fn num_key(id: &[u8]) -> (u8, u128) {
 pub fn context_ids(ctx: &[u8], facts: &mut IdList, entities: &mut IdList) -> Result<(), ContractError> {
     *facts = IdList::new();
     *entities = IdList::new();
+    ids_add(ctx, facts, entities)?;
+    ids_finish(entities);
+    Ok(())
+}
+
+/// The id rule over one more piece of a context that starts a line and is followed by a line break (or
+/// the end): equal to running [`context_ids`] on the joined context. Call [`ids_finish`] after the last.
+pub fn ids_add(ctx: &[u8], facts: &mut IdList, entities: &mut IdList) -> Result<(), ContractError> {
     let at = |i: usize| ctx.get(i).copied();
     let digits_end = |mut j: usize| {
         while at(j).is_some_and(|c| c.is_ascii_digit()) {
@@ -165,7 +173,11 @@ pub fn context_ids(ctx: &[u8], facts: &mut IdList, entities: &mut IdList) -> Res
         }
         i += 1;
     }
-    // Sort entities by (letter, number): insertion sort, n ≤ 64.
+    Ok(())
+}
+
+/// Sort the entities by (letter, number), as `sorted(set(...), key=...)` does.
+pub fn ids_finish(entities: &mut IdList) {
     let n = entities.n;
     for a in 1..n {
         let mut b = a;
@@ -179,10 +191,14 @@ pub fn context_ids(ctx: &[u8], facts: &mut IdList, entities: &mut IdList) -> Res
             b -= 1;
         }
     }
-    Ok(())
 }
 
-/// A byte sink with a fixed capacity.
+/// Where the writers put bytes: [`Out`] here, the harness's own prompt buffer on the device.
+pub trait Sink {
+    fn put(&mut self, s: &[u8]) -> Result<(), ContractError>;
+}
+
+/// A byte sink over a fixed slice.
 pub struct Out<'a> {
     pub buf: &'a mut [u8],
     pub n: usize,
@@ -198,6 +214,15 @@ impl<'a> Out<'a> {
         self.n += s.len();
         Ok(())
     }
+}
+
+impl Sink for Out<'_> {
+    fn put(&mut self, s: &[u8]) -> Result<(), ContractError> {
+        Out::put(self, s)
+    }
+}
+
+trait SinkExt: Sink {
     fn json_str(&mut self, s: &[u8]) -> Result<(), ContractError> {
         // Python json.dumps(ensure_ascii=False) escaping for the ids and fixed strings used here.
         self.put(b"\"")?;
@@ -241,8 +266,10 @@ impl<'a> Out<'a> {
     }
 }
 
+impl<S: Sink + ?Sized> SinkExt for S {}
+
 /// `json.dumps(triage_schema(ctx, closed), ensure_ascii=False)`, byte for byte.
-pub fn write_schema(facts: &IdList, entities: &IdList, closed: bool, out: &mut Out) -> Result<(), ContractError> {
+pub fn write_schema(facts: &IdList, entities: &IdList, closed: bool, out: &mut (impl Sink + ?Sized)) -> Result<(), ContractError> {
     out.put(b"{\"type\": \"object\", \"additionalProperties\": false, \"required\": ")?;
     out.str_list(KEYS.iter().map(|k| k.as_bytes()))?;
     out.put(b", \"properties\": {\"verdict\": {\"type\": \"string\", \"enum\": ")?;
@@ -268,7 +295,7 @@ pub fn write_schema(facts: &IdList, entities: &IdList, closed: bool, out: &mut O
     out.put(b"}}}")
 }
 
-fn item_schema(ids: &IdList, closed: bool, out: &mut Out) -> Result<(), ContractError> {
+fn item_schema(ids: &IdList, closed: bool, out: &mut (impl Sink + ?Sized)) -> Result<(), ContractError> {
     if closed && !ids.is_empty() {
         out.put(b"{\"type\": \"string\", \"enum\": ")?;
         out.str_list(ids.iter())?;
@@ -279,14 +306,14 @@ fn item_schema(ids: &IdList, closed: bool, out: &mut Out) -> Result<(), Contract
 }
 
 /// The system message as `run_eval.py` sends it in closed (and schema-shown free) mode.
-pub fn write_system(lang: Lang, facts: &IdList, entities: &IdList, closed: bool, out: &mut Out) -> Result<(), ContractError> {
+pub fn write_system(lang: Lang, facts: &IdList, entities: &IdList, closed: bool, out: &mut (impl Sink + ?Sized)) -> Result<(), ContractError> {
     out.put(system_prompt(lang).as_bytes())?;
     out.put(FORMAT_LEAD.as_bytes())?;
     write_schema(facts, entities, closed, out)
 }
 
 /// The user message: `"CONTEXT (untrusted):\n<<<\n%s\n>>>\n\nQUESTION: %s"`.
-pub fn write_user(context: &[u8], question: &[u8], out: &mut Out) -> Result<(), ContractError> {
+pub fn write_user(context: &[u8], question: &[u8], out: &mut (impl Sink + ?Sized)) -> Result<(), ContractError> {
     out.put(USER_HEAD.as_bytes())?;
     out.put(context)?;
     out.put(USER_MID.as_bytes())?;
@@ -387,6 +414,12 @@ fn enum_list(field: u8) -> &'static [&'static str] {
 impl<'a> Machine<'a> {
     pub fn new(allowed: Allowed<'a>) -> Self {
         Self { allowed, ph: Ph::Open, ws: Ws::Off, field: 0, pos: 0, cand: 0, items: 0, chars: 0, esc: 0, utf8_left: 0, num: 0, digits: 0 }
+    }
+
+    /// True inside a free-text string (the summary, or an id in open mode): nearly every token is allowed,
+    /// so a decoder should not bother listing them.
+    pub fn in_free_text(&self) -> bool {
+        self.ph == Ph::Str
     }
 
     /// True when the answer is complete: end of generation is allowed here.
@@ -721,10 +754,10 @@ pub struct Answer {
     pub severity: u8,
     pub next_step: u8,
     pub confidence: u8,
-    /// Raw JSON text of the summary (escapes undecoded; validated by the automaton). 600 characters of at
-    /// most 6 bytes each (`\uXXXX`).
-    pub summary: [u8; 6 * SUMMARY_MAX_CHARS as usize],
-    pub summary_len: usize,
+    /// Where the summary's raw JSON text (escapes undecoded, validated by the automaton) lies in the parsed
+    /// text: `text[summary_start..summary_end]`. No copy, so an answer is a few dozen bytes.
+    pub summary_start: usize,
+    pub summary_end: usize,
     pub evidence: [u8; LIST_MAX as usize],
     pub n_evidence: usize,
     pub entities: [u8; LIST_MAX as usize],
@@ -735,8 +768,9 @@ impl Answer {
     pub fn verdict_name(&self) -> &'static str {
         VERDICTS.get(usize::from(self.verdict)).copied().unwrap_or("")
     }
-    pub fn summary(&self) -> &[u8] {
-        self.summary.get(..self.summary_len).unwrap_or(&[])
+    /// The summary's raw JSON text, from the text that was parsed.
+    pub fn summary<'t>(&self, text: &'t [u8]) -> &'t [u8] {
+        text.get(self.summary_start..self.summary_end).unwrap_or(&[])
     }
     pub fn evidence(&self) -> &[u8] {
         self.evidence.get(..self.n_evidence).unwrap_or(&[])
@@ -750,16 +784,18 @@ impl Answer {
 /// allowed lists). Anything outside the language is `Invalid`.
 pub fn parse(text: &[u8], facts: &IdList, entities: &IdList) -> Result<Answer, ContractError> {
     let mut m = Machine::new(Allowed { facts, entities, closed: true });
-    let mut a = Answer { verdict: 0, severity: 0, next_step: 0, confidence: 0, summary: [0; 6 * SUMMARY_MAX_CHARS as usize], summary_len: 0, evidence: [0; LIST_MAX as usize], n_evidence: 0, entities: [0; LIST_MAX as usize], n_entities: 0 };
-    for &b in text {
+    let mut a = Answer { verdict: 0, severity: 0, next_step: 0, confidence: 0, summary_start: 0, summary_end: 0, evidence: [0; LIST_MAX as usize], n_evidence: 0, entities: [0; LIST_MAX as usize], n_entities: 0 };
+    let mut summary_bytes = 0usize;
+    for (i, &b) in text.iter().enumerate() {
         match m.step(b).ok_or(ContractError::Invalid)? {
             Event::Enum { field: F_VERDICT, index } => a.verdict = index,
             Event::Enum { field: F_SEVERITY, index } => a.severity = index,
             Event::Enum { field: F_NEXT, index } => a.next_step = index,
             Event::Int(v) => a.confidence = v,
-            Event::StrByte { field: F_SUMMARY, byte } => {
-                *a.summary.get_mut(a.summary_len).ok_or(ContractError::Invalid)? = byte;
-                a.summary_len += 1;
+            Event::StrByte { field: F_SUMMARY, .. } => summary_bytes += 1,
+            Event::StrEnd { field: F_SUMMARY } => {
+                a.summary_end = i;
+                a.summary_start = i - summary_bytes;
             }
             Event::Id { field: F_EVIDENCE, index } => {
                 *a.evidence.get_mut(a.n_evidence).ok_or(ContractError::Invalid)? = index;
@@ -776,4 +812,64 @@ pub fn parse(text: &[u8], facts: &IdList, entities: &IdList) -> Result<Answer, C
         return Err(ContractError::Invalid);
     }
     Ok(a)
+}
+
+// ------------------------------------------------------------------------------------------- chat, text
+
+/// The explainer's chat wrapping: Qwen3's ChatML template as llama-server renders it with reasoning off
+/// (`enable_thinking = false`), ending where the assistant's answer begins.
+pub const CHAT_SYSTEM: &str = "<|im_start|>system\n";
+pub const CHAT_USER: &str = "<|im_end|>\n<|im_start|>user\n";
+pub const CHAT_ASSISTANT: &str = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
+
+/// Decode a JSON string body (as the automaton accepted it) into UTF-8: `\" \\ \b \f \n \r \t` and
+/// `\uXXXX` (surrogate pairs joined). A lone surrogate is `Invalid`.
+pub fn unescape(raw: &[u8], out: &mut (impl Sink + ?Sized)) -> Result<(), ContractError> {
+    let hex = |s: &[u8]| -> Option<u32> {
+        s.iter().try_fold(0u32, |a, &c| Some(a * 16 + char::from(c).to_digit(16)?))
+    };
+    let mut i = 0usize;
+    while let Some(&c) = raw.get(i) {
+        if c != b'\\' {
+            out.put(&[c])?;
+            i += 1;
+            continue;
+        }
+        let e = raw.get(i + 1).copied().ok_or(ContractError::Invalid)?;
+        let simple = match e {
+            b'"' => Some(b'"'),
+            b'\\' => Some(b'\\'),
+            b'b' => Some(8),
+            b'f' => Some(12),
+            b'n' => Some(b'\n'),
+            b'r' => Some(b'\r'),
+            b't' => Some(b'\t'),
+            _ => None,
+        };
+        if let Some(b) = simple {
+            out.put(&[b])?;
+            i += 2;
+            continue;
+        }
+        if e != b'u' {
+            return Err(ContractError::Invalid);
+        }
+        let mut cp = hex(raw.get(i + 2..i + 6).ok_or(ContractError::Invalid)?).ok_or(ContractError::Invalid)?;
+        i += 6;
+        if (0xd800..0xdc00).contains(&cp) {
+            if raw.get(i..i + 2) != Some(b"\\u") {
+                return Err(ContractError::Invalid);
+            }
+            let lo = hex(raw.get(i + 2..i + 6).ok_or(ContractError::Invalid)?).ok_or(ContractError::Invalid)?;
+            if !(0xdc00..0xe000).contains(&lo) {
+                return Err(ContractError::Invalid);
+            }
+            cp = 0x10000 + ((cp - 0xd800) << 10) + (lo - 0xdc00);
+            i += 6;
+        }
+        let ch = char::from_u32(cp).ok_or(ContractError::Invalid)?;
+        let mut b = [0u8; 4];
+        out.put(ch.encode_utf8(&mut b).as_bytes())?;
+    }
+    Ok(())
 }

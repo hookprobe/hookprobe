@@ -492,7 +492,7 @@ fn qwen3_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
         exit(1);
     }
     let (kva, kvb, wa, wb) = unsafe { (&mut *core::ptr::addr_of_mut!(KV_A), &mut *core::ptr::addr_of_mut!(KV_B), &mut *core::ptr::addr_of_mut!(WA), &mut *core::ptr::addr_of_mut!(WB)) };
-    let (Some(mut work_a), Some(mut work_b)) = (Work::new(&D, &mut wa.0, &mut wa.1, &mut wa.2, &mut wa.3), Work::new(&D, &mut wb.0, &mut wb.1, &mut wb.2, &mut wb.3)) else {
+    let (Some(mut work_a), Some(mut work_b)) = (Work::new(&D, 1, &mut wa.0, &mut wa.1, &mut wa.2, &mut wa.3), Work::new(&D, 1, &mut wb.0, &mut wb.1, &mut wb.2, &mut wb.3)) else {
         let _ = writeln!(u, "FAIL: qwen3 work buffers");
         exit(1)
     };
@@ -522,7 +522,7 @@ fn qwen3_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
         let _ = writeln!(u, "FAIL: packed qwen3 model refused");
         exit(1);
     }
-    let Some(mut work_c) = Work::new(&D, &mut wc.0, &mut wc.1, &mut wc.2, &mut wc.3) else { exit(1) };
+    let Some(mut work_c) = Work::new(&D, 1, &mut wc.0, &mut wc.1, &mut wc.2, &mut wc.3) else { exit(1) };
     let mut kv_c = Kv { vals: &mut kvc.0, shifts: &mut kvc.1 };
     let prompt = [3usize, 77, 12, 101, 64];
     let mut tok = 0usize;

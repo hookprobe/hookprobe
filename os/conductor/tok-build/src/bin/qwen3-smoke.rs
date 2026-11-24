@@ -236,13 +236,13 @@ fn main() {
     let d = h.dims;
     let (kvn, kvs) = d.kv_len();
     let (mut vals, mut shifts) = (vec![0i16; kvn], vec![0u8; kvs]);
-    let (a, i8n, scn, i32n) = Work::lens(&d);
+    let (a, i8n, scn, i32n) = Work::lens(&d, 1);
     let (mut ba, mut bb, mut bc, mut bd) = (vec![0i64; a], vec![0i8; i8n], vec![(0, 0); scn], vec![0i32; i32n]);
-    let mut work = Work::new(&d, &mut ba, &mut bb, &mut bc, &mut bd).expect("work");
+    let mut work = Work::new(&d, 1, &mut ba, &mut bb, &mut bc, &mut bd).expect("work");
     let mut kv = Kv { vals: &mut vals, shifts: &mut shifts };
     let (mut vals2, mut shifts2) = (vec![0i16; kvn], vec![0u8; kvs]);
     let (mut ba2, mut bb2, mut bc2, mut bd2) = (vec![0i64; a], vec![0i8; i8n], vec![(0, 0); scn], vec![0i32; i32n]);
-    let mut work2 = Work::new(&d, &mut ba2, &mut bb2, &mut bc2, &mut bd2).expect("work");
+    let mut work2 = Work::new(&d, 1, &mut ba2, &mut bb2, &mut bc2, &mut bd2).expect("work");
     let mut kv2 = Kv { vals: &mut vals2, shifts: &mut shifts2 };
     let mut packed_equal = 0usize;
     let mut reference = Ref { g: &g, h, mode: Mode::Float, k: vec![vec![]; d.n_layers], v: vec![vec![]; d.n_layers] };
