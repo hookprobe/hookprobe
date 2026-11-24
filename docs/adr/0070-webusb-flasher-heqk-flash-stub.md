@@ -6,9 +6,11 @@ The rest of this record (protocol, security contract, metal plan) is awaiting re
 of the retired [ADR 0037](0037-zero-touch-onboarding-flasher-provisioning.md) (Decision 1, "CM5/CM4 are
 browser-flashable via WebUSB + rpiboot (eMMC as USB mass storage)"); the rest of 0037 stays retired.
 
-**Built so far (2026-11-24):** the browser side only. `tools/flash/web/` holds the rpiboot protocol, the
+**Built so far (2026-11-24):** the browser side: `tools/flash/web/` holds the rpiboot protocol, the
 re-enumeration handling, the host side of the HQFL protocol and a development page, tested offline against mock
-devices (`node --test`, CI g1). **The stub does not exist yet, and nothing here has run on a CM5.**
+devices (`node --test`, CI g1). The first stub implementation: `os/kernel/flashstub/` (a detached crate) holds the
+DWC2 device-mode driver, the HQFL server and the stub image (`--features flashstub`), tested on the host against
+a register-level DWC2 model and the real verifier (`cargo test`, CI g1). **Nothing here has run on a CM5.**
 
 **Relates to:** [0047](0047-heqk-everywhere-on-device-mission-control.md) (no Linux on the device), [0056](0056-device-upload-interface.md)
 (the OTA upload path whose checks the stub repeats), [0067](0067-heqk-efficiency-programme-and-ip-hygiene.md)

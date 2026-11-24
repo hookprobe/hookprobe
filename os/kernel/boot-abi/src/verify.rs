@@ -2,7 +2,7 @@
 //! The ONE hybrid secure-boot verifier + the ONE embedded trust root.
 //!
 //! This is the single code path that decides whether a HEQK payload is
-//! authentic and not rolled back. It is called from TWO places, and only two:
+//! authentic and not rolled back. It is called from THREE places, and only three:
 //!   * **HBoot** (`hboot/src/main.rs`) — the AUTHORITATIVE boot-time verify, run
 //!     on the image the firmware is about to launch at EL1 (metal).
 //!   * **The kernel's M3.4 OTA orchestrator** (`kernel/src/ota.rs`) — the
@@ -11,8 +11,13 @@
 //!     re-verify the candidate at its trial boot, so this pre-flight only refuses
 //!     to *waste* a trial cycle on (or stage a downgrade of) an image HBoot would
 //!     reject anyway.
+//!   * **The ADR 0070 flash stub** (`flashstub/src/image.rs`, a separate USB-flasher
+//!     image, never a device image) — verifies the signed slot image a browser sends
+//!     BEFORE the stub writes anything to the eMMC, and re-verifies both slot files
+//!     read back from the written medium. Same checks as the OTA pre-flight (header,
+//!     both signatures, `svn >= floor`, HBoot prefix).
 //!
-//! Both call sites share:
+//! All three call sites share:
 //!   * the SAME trust root — [`TRUSTED_ED25519_PUBKEY`] + [`TRUSTED_SLHDSA_PUBKEY`]
 //!     (defined here, re-exported by `hboot::trusted_keys`),
 //!   * the SAME signed message — `SHA-256( LE64(svn) || sha256(payload) )` via

@@ -1,0 +1,62 @@
+# ADR 0070 — the heqk flash stub: a USB device (BCM2712 DWC2 OTG core, device mode) that serves HQFL v1 to the
+# browser flasher (tools/flash/web), verifies a signed slot image with the SHARED boot verifier (boot-abi::verify),
+# and only then writes the whole eMMC through the driver's `flashstub` gate.
+#
+# A DETACHED crate (own [workspace], own Cargo.lock): it never enters the kernel workspace's build graph, so cargo
+# feature unification can never carry `arch-aarch64/flashstub` (the whole-medium write gate) into a kernel build —
+# and tools/ci/shipping_guard.py forbids `flashstub` on any crate of the kernel's graph regardless.
+#
+#   host tests (x86_64, stable):  cargo +stable test --release --target x86_64-unknown-linux-gnu
+#   the stub (aarch64, pinned nightly + build-std from ../.cargo/config.toml):
+#                                 cargo build --release --features flashstub
+[package]
+name = "flashstub"
+version = "0.0.26"
+edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0063 G4)
+license = "AGPL-3.0-only"
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+# The bare-metal image (HBoot payload). Built only with `flashstub`, so host `cargo test` never compiles it.
+[[bin]]
+name = "flashstub"
+path = "src/main.rs"
+test = false
+required-features = ["flashstub"]
+
+[features]
+# THE stub build: links the CM5 arch crate with its whole-eMMC write gate (`arch-aarch64/flashstub`, which implies
+# `p15-write`). FORBIDDEN in every shipping image (tools/ci/shipping_guard.py FORBIDDEN["flashstub"]).
+# `fwfiles`: the CYW43455 vendor files are not linked into the stub (it has no Wi-Fi; nothing to redistribute).
+flashstub = ["dep:arch-aarch64", "arch-aarch64/flashstub", "arch-aarch64/hboot", "arch-aarch64/cm5", "arch-aarch64/fwfiles"]
+
+[dependencies]
+# The ONE hybrid verifier + trust root (Ed25519 + SLH-DSA-SHA2-128s), the same crate HBoot and OTA use.
+boot-abi = { path = "../boot-abi", features = ["otaverify"] }
+# hal::abslot (the A/B slot walk OTA uses) and the BlockDev trait.
+hal = { path = "../hal" }
+arch-aarch64 = { path = "../arch-aarch64", optional = true }
+
+[profile.dev]
+panic = "abort"
+# The verifier is hashed/verified over ~2 MB images in the host tests: optimise the crypto even in debug.
+[profile.dev.package.boot-abi]
+opt-level = 3
+[profile.dev.package.fips205]
+opt-level = 3
+[profile.dev.package.ed25519-compact]
+opt-level = 3
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+# Same size policy as the kernel workspace: the verifiers are built for size.
+[profile.release.package.ed25519-compact]
+opt-level = "s"
+[profile.release.package.fips205]
+opt-level = "s"
