@@ -184,7 +184,7 @@ Neuro answered all six questions. What the Conductor took from them:
 |---|---|
 | Explainer = **ftFg** (triage, `0b0d276e…61ed`) + **ftL** (investigation, `27ee1312…0158`, doc 43 PASS); both Qwen3-1.7B @ `70d244cc` LoRAs, full merged Q8_0 GGUFs | Engine target is two packed models (or one base plus two LoRAs merged at load). The tool loop is for ftL only |
 | **Rule T dropped** (doc 40 FAIL) | Removed from this note, the README and the Runtime Proof comment. No code used it |
-| Guards **A, E, G** run on the device | **G built**: `neuro_contract::grounding`, run by the harness before the verifier. A and E: next |
+| Guards **A, E, G** run on the device | **A, E and G built.** G: `neuro_contract::grounding`, run by the harness before the verifier. A and E: `neuro_contract::guard` (update below) |
 | Severities: invented technique / unreturned CVE → REJECTED; G's edit → accepted, recorded in the ledger; service without its port → UNVERIFIED | Built exactly so (`verify::Finding::{InventedTechnique, UngroundedCve, ServiceWithoutPort}`, ledger `GroundingEdit`) |
 | Mirror `data/attack-ids.json` with a drift gate | Done: 867 ids, ATT&CK 20.1, `tests/grounding.rs` |
 | Closed mode is part of the contract | Already so (`write_schema(.., closed = true)`) |
@@ -206,3 +206,31 @@ Neuro answered all six questions. What the Conductor took from them:
    not hold. The verifier's REJECTED is the backstop, and on the device it catches every such case
    (`tests/grounding.rs`, `conductor-mock/tests/grounding.rs`). **Possible fix, Neuro's call:** remove the
    detected span by position instead of by a second pattern.
+
+## Update: guards A and E on the device path (2026-11-24, from the Neuro host)
+
+`neuro_contract::guard` mirrors `tools/neuro-research/guard.py` (`redact_all`, `echoes`) and the summary of
+`run_eval.py`'s `template_backend`, which guard E falls back to. As with G, it is checked against vectors from
+Neuro's own functions and has a drift gate on the Python sources.
+
+- **Order on the device:** A on the way in; on the way out E, then G, then the verifier.
+- **Guard A** is applied to the cards and to every tool result before a provider sees them. The schema's ids are
+  those of the shown (redacted) context, as `run_eval.py` does with `--guard A`.
+- **Guard E** reads the cards as the device wrote them, not the redacted ones. A fallback is a ledger record
+  (`EchoFallback`) with the hash of the replaced prose. Verdict, evidence, entities and next step are kept.
+- **Guard G and the grounding checks** now also read the cards as written (before, they read the prompt, which
+  held the same bytes).
+
+**Three things for Neuro to confirm or correct:**
+1. **Tool results.** E checks the cards only. A result is shown after guard A and is not kept as received, so its
+   quoted values cannot be echoed and are not checked. In `inv_eval.py` the RESULT lines are part of the context
+   E would read.
+2. **Language.** The device's prompt and E's template sentence are English only (`Lang::En`). The Romanian
+   template is mirrored and tested, but nothing on the device selects it yet.
+3. **Differences from Python, all outside what the compressor emits:** `\S`, `\d`, `\w` and `strip` are ASCII; a
+   context that is not UTF-8 is refused; both Greek sigmas compare equal in E, which can add a fallback Python
+   would not make but cannot miss one.
+
+**Not done:** the ftFg fidelity run on dev v8 builds its prompts without guard A (the tool predates this). It
+compares the two runtimes on identical prompts, so the result stands, but the prompts are not the guarded ones
+Neuro's gates used. A `--guard-a` option for the fidelity tool is the follow-up.

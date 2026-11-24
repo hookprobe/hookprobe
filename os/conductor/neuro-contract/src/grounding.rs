@@ -26,7 +26,7 @@ fn is_alnum(b: u8) -> bool {
 }
 
 /// Python's `\s` (and `str.isspace`) restricted to ASCII: space, \t \n \v \f \r and \x1c–\x1f.
-fn is_space(b: u8) -> bool {
+pub(crate) fn is_space(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r' | 0x1c..=0x1f)
 }
 
