@@ -9,6 +9,8 @@ Per observable playbook, one card template (SIGN below) renders its "seen on the
   clears    the sign + a RESULT line meeting the playbook's "clears" condition -> gold = stop (no call)
   invisible a window for a technique the gateway cannot see (T1003) -> gold = no call
   decoy     (v2, doc 42) an ordinary window with no detection that needs no investigation -> gold = no call
+  v3 (doc 43, --version 3): multi = a DIFFERENT next tool after a supporting result, or a policy proposal once
+            two results support it (doc 42 found v2 multi-step targets repeated step 1's tool)
 Usage: gen_investigate.py --playbooks data/playbooks.json --n 600 --seed 39 --out inv.jsonl [--ro 0.10]
 """
 import argparse, hashlib, json, os, random, sys
@@ -93,6 +95,8 @@ def main():
     ap.add_argument("--playbooks", required=True); ap.add_argument("--n", type=int, default=600); ap.add_argument("--seed", type=int, default=39)
     ap.add_argument("--ro", type=float, default=0.10); ap.add_argument("--out", required=True); ap.add_argument("--id-prefix", default="inv")
     ap.add_argument("--v1", action="store_true", help="doc 41 version: no decoy kind (reproduces the P3 output)")
+    ap.add_argument("--version", type=int, choices=[2, 3], default=2,
+                    help="2 = doc 42 (default, reproduces its output); 3 = doc 43: multi-step targets MOVE ON")
     a = ap.parse_args()
     pbs = [p for p in json.load(open(a.playbooks))["playbooks"]]
     obs = [p for p in pbs if p["observable"]]
@@ -130,7 +134,19 @@ def main():
                 st = steps[0]
                 res = RESULT[st["tool"]][0 if kind == "multi" else 1]
                 w.ctx_lines.append("RESULT %s %s: %s" % (st["tool"], tgt if st["tool"] != "lookup_exposure" else H.split("=")[0], res))
-                if kind == "multi" and len(steps) > 1:
+                if kind == "multi" and a.version == 3:
+                    # doc 43: after a supporting result the next check is a DIFFERENT tool; once two results support
+                    # it, the case is conclusive and the step is a policy proposal (doc 42's multi-step template gap)
+                    other = [x for x in steps[1:] if x["tool"] != st["tool"]]
+                    if other and r.random() < 0.5:
+                        gold = {"kind": "multi", "tools": [other[0]["tool"]], "entities": [tgt, H.split("=")[0]], "technique": p["id"]}
+                    else:
+                        if other:
+                            t2 = other[0]["tool"]
+                            w.ctx_lines.append("RESULT %s %s: %s" % (t2, tgt if t2 != "lookup_exposure" else H.split("=")[0], RESULT[t2][0]))
+                        gold = {"kind": "multi", "tools": ["propose_policy_change"], "entities": [H.split("=")[0]],
+                                "policies": ["isolated", "internet_only"], "technique": p["id"]}
+                elif kind == "multi" and len(steps) > 1:
                     st2 = steps[1]
                     gold = {"kind": "multi", "tools": [st2["tool"]], "entities": [tgt, H.split("=")[0]], "technique": p["id"]}
                 elif kind == "multi":
