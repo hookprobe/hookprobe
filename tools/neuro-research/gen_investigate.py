@@ -11,6 +11,9 @@ Per observable playbook, one card template (SIGN below) renders its "seen on the
   decoy     (v2, doc 42) an ordinary window with no detection that needs no investigation -> gold = no call
   v3 (doc 43, --version 3): multi = a DIFFERENT next tool after a supporting result, or a policy proposal once
             two results support it (doc 42 found v2 multi-step targets repeated step 1's tool)
+  v4 (doc 44, --version 4): adds `alert` cases in the E2E L1-alert card shape (the card's shape decides the check:
+            fan-out -> the device's flows; one remote -> its reputation), more decoy and invisible cases, and
+            invisible gold = no tool only
 Usage: gen_investigate.py --playbooks data/playbooks.json --n 600 --seed 39 --out inv.jsonl [--ro 0.10]
 """
 import argparse, hashlib, json, os, random, sys
@@ -95,7 +98,7 @@ def main():
     ap.add_argument("--playbooks", required=True); ap.add_argument("--n", type=int, default=600); ap.add_argument("--seed", type=int, default=39)
     ap.add_argument("--ro", type=float, default=0.10); ap.add_argument("--out", required=True); ap.add_argument("--id-prefix", default="inv")
     ap.add_argument("--v1", action="store_true", help="doc 41 version: no decoy kind (reproduces the P3 output)")
-    ap.add_argument("--version", type=int, choices=[2, 3], default=2,
+    ap.add_argument("--version", type=int, choices=[2, 3, 4], default=2,
                     help="2 = doc 42 (default, reproduces its output); 3 = doc 43: multi-step targets MOVE ON")
     a = ap.parse_args()
     pbs = [p for p in json.load(open(a.playbooks))["playbooks"]]
@@ -104,12 +107,38 @@ def main():
     r = random.Random(a.seed)
     out, seen = [], set()
     kinds = ["next"] * 4 + ["multi"] * 3 + ["clears"] * 2 + ["invisible"] + ([] if a.v1 else ["decoy"] * 2)
+    if a.version == 4:   # doc 44: the L1-alert card shape, and more decoy / invisible cases
+        kinds = ["next"] * 4 + ["multi"] * 3 + ["clears"] * 2 + ["invisible"] * 2 + ["decoy"] * 3 + ["alert"] * 3
     while len(out) < a.n:
         kind = r.choice(kinds)
         ro = r.random() < a.ro
         w = g.Win(r)
         H, R = w.ref("H", g.ip_lan(r)), w.ref("R", g.ip_wan(r))
-        if kind == "decoy":
+        if kind == "alert":
+            # doc 44: the device's generic L1 alert, exactly as the E2E harness renders it (no category, no technique);
+            # the card's SHAPE decides the check: fan-out -> the device's flows; one remote -> its reputation
+            ALERT = "det=behaviour_change[-,sev2,alert, l1]"
+            w.ctx_lines.append("CONTEXT %s is the %s" % (H.split("=")[0], r.choice(list(ROLE.values()))))
+            shape = r.choice(["scan", "brute", "beacon", "upload", "proxy"])
+            if shape == "scan":
+                port = r.choice([23, 2323, 22, 445, 5555])
+                w.card("%s->*:%d n=%d fanout_hosts=%d fail=%d%% %s" % (H, port, r.randrange(400, 4000), r.randrange(300, 3000), r.randrange(70, 98), ALERT))
+                gold = {"kind": "alert", "tools": ["query_flows"], "entities": [H.split("=")[0]], "technique": "alert-scan"}
+            elif shape == "brute":
+                w.card("%s->%s:%d n=%d periodic=%ds cv=0.0%d novel %s" % (H, R, r.choice([22, 23, 3389]), r.randrange(200, 2000), r.choice([2, 4, 6, 10]), r.randrange(0, 5), ALERT))
+                gold = {"kind": "alert", "tools": ["lookup_reputation"], "entities": [R.split("=")[0]], "technique": "alert-brute"}
+            elif shape == "beacon":
+                w.card("%s->%s:443 n=%d periodic=%ds cv=0.0%d novel %s" % (H, R, r.randrange(60, 900), r.choice([60, 300, 600]), r.randrange(1, 5), ALERT))
+                gold = {"kind": "alert", "tools": ["lookup_reputation"], "entities": [R.split("=")[0]], "technique": "alert-beacon"}
+            elif shape == "upload":
+                w.card("%s->%s:443 n=%d out=%.1fGB novel %s" % (H, R, r.randrange(20, 300), r.randrange(5, 60) / 10, ALERT))
+                gold = {"kind": "alert", "tools": ["lookup_reputation"], "entities": [R.split("=")[0]], "technique": "alert-upload"}
+            else:
+                w.card("%s->* n=%d remotes=%d countries=%d %s" % (H, r.randrange(2000, 9000), r.randrange(300, 2000), r.randrange(15, 60), ALERT))
+                gold = {"kind": "alert", "tools": ["query_flows"], "entities": [H.split("=")[0]], "technique": "alert-proxy"}
+            for _ in range(r.choice([0, 1, 2])):
+                g.distractor(w)
+        elif kind == "decoy":
             w.card("%s->%s:443 n=%d out=%dKB" % (H, R, r.randrange(3, 80), r.randrange(5, 400)))   # ordinary, no detection
             w.ctx_lines.append("CONTEXT %s is the %s" % (H.split("=")[0], r.choice(list(ROLE.values()))))
             for _ in range(r.choice([1, 2, 3])):
@@ -119,7 +148,7 @@ def main():
             p = r.choice(blind)
             w.card("%s->%s:445 n=%d" % (H, w.ref("H", g.ip_lan(r)), r.randrange(3, 30)))
             w.ctx_lines.append("CONTEXT owner: I think someone stole the passwords stored on %s" % H.split("=")[0])
-            gold = {"kind": "invisible", "tools": [None, "query_flows"], "entities": [H.split("=")[0]], "technique": p["id"]}
+            gold = {"kind": "invisible", "tools": [None] if a.version == 4 else [None, "query_flows"], "entities": [H.split("=")[0]], "technique": p["id"]}
         else:
             p = r.choice(obs)
             cls = r.choice(p["classes"])

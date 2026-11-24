@@ -5,11 +5,15 @@ the SHA-256, never case content.
 Usage: inv_seal.py check  <cases> <other case files...>
        inv_seal.py sample <cases> <annotator dir>            (25% stratified: 38 cases, context + question only)
        inv_seal.py agree  <cases> <annotator dir>            (annotator labels.jsonl vs gold; writes agreement.json)
+Set INV_SET=v3 for the doc 44 set (adds the `alert` kind: 175 cases, 44-case sample).
 """
 import collections, hashlib, json, os, re, sys
 
 MIX = {"next": 45, "multi": 35, "clears": 30, "decoy": 25, "invisible": 15}
 PER = {"next": 11, "multi": 9, "clears": 8, "decoy": 6, "invisible": 4}            # 38 = 25%
+if os.environ.get("INV_SET") == "v3":   # doc 44: inv-blind v3 adds 25 L1-alert cases
+    MIX = dict(MIX, alert=25)
+    PER = dict(PER, alert=6)                                                        # 44 = 25%
 TOOLS = {None, "lookup_reputation", "query_flows", "query_dns", "lookup_exposure", "propose_policy_change"}
 POL = {"isolated", "internet_only", "lan_only", "full_access"}
 RES = re.compile(r"^RESULT (\w+) ([HRD]\d+): .+$", re.M)
@@ -35,7 +39,7 @@ def check(path, others):
         if "propose_policy_change" in g["tools"] and not set(g.get("policies") or []) <= POL: fail.append("policy enum")
         if "propose_policy_change" in g["tools"] and not g.get("policies"): fail.append("policy missing")
         if k in ("clears", "decoy") and g["tools"] != [None]: fail.append("clears/decoy gold not [null]")
-        if k in ("next", "multi") and None in g["tools"]: fail.append("next/multi accepts null")
+        if k in ("next", "multi", "alert") and None in g["tools"]: fail.append("next/multi/alert accepts null")
         for e in g.get("entities") or []:
             if not re.search(r"\b%s\b" % re.escape(e), c["context"]): fail.append("gold entity not in context")
         if re.search(r"CVE-\d", json.dumps(c), re.I): fail.append("CVE id present")
