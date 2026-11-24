@@ -410,6 +410,13 @@ MCTLS_PROV=$(head -c 6 "$STAGE/MCTLS.CRT" | grep -q '^HQCRT1' && echo True || ec
 check "MCTLS.CRT located at byte $TLS_OFF (4096 B, provisioned=$MCTLS_PROV)" \
   "[ -n '$TLS_OFF' ] && [ \"\$(dd if='$IMG' bs=1 skip=$TLS_OFF count=4096 status=none | sha256sum | cut -d' ' -f1)\" = \"\$(sha256sum '$STAGE/MCTLS.CRT' | cut -d' ' -f1)\" ]"
 
+# Byte offset of slot A (the signed boot image) inside the disk image: the browser flasher sends these bytes to
+# the heqk flash stub, which verifies them BEFORE it writes anything (ADR 0070). The stub does not trust this
+# offset: after the write it locates HEQK8-A.IMG through FAT itself and compares it with what it verified.
+SLOT_A_OFF="$(fat_off "HEQK8-A IMG")"
+check "HEQK8-A.IMG located at byte $SLOT_A_OFF (the flasher's verify input)" \
+  "[ -n '$SLOT_A_OFF' ] && cmp -s -n $(stat -c %s "$STAGE/heqk8-a.img") <(tail -c +$((${SLOT_A_OFF:-0} + 1)) '$IMG') '$STAGE/heqk8-a.img'"
+
 SHA="$(sha256sum "$IMG" | cut -d' ' -f1)"
 echo "$SHA  $(basename "$IMG")" >"$IMG.sha256"
 python3 -I - "$IMG.json" <<PY
@@ -420,6 +427,7 @@ json.dump({
   "layout": {"p1_fat32": [$P1_START, $P1_SECT], "p2_datavolume_0xda": [$P2_START, $P2_SECT],
              "reserved_zero": [2016, 2048]},
   "slot_sha256": "$(sha256sum "$STAGE/heqk8-a.img" | cut -d' ' -f1)",
+  "slot_a": {"offset": int("${SLOT_A_OFF:-0}"), "length": $(stat -c %s "$STAGE/heqk8-a.img")},
   "wan_file": {"offset": int("${WAN_OFF:-0}"), "length": 512},
   "policy_file": {"offset": int("${POL_OFF:-0}"), "length": 4096},
   "mctls_file": {"offset": int("${TLS_OFF:-0}"), "length": 4096, "provisioned": $MCTLS_PROV},

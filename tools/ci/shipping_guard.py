@@ -56,6 +56,7 @@ FORBIDDEN = {
     "artstore-bench": "artifact-store metal trigger (tampers the ACTIVE store half on the eMMC, ADR 0059 0.4)",
     "fwcon-fast": "firmware console read every beat + full trap / stack dump (vendor test-firmware diagnostics, REL-08)",
     "t0inv": "ADR 0062 T0 inventory (hboot: ID registers, DTB, mailbox GET tags, gated SMCCC probe — bench only)",
+    "flashstub": "ADR 0070 flash stub: whole-eMMC write gate (the USB flasher image only, never a device image)",
 }
 
 LINE = re.compile(r"^([A-Za-z0-9_\-]+) v\S+.*?\|([A-Za-z0-9_,\-]*)\|")
