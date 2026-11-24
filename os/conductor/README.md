@@ -27,9 +27,12 @@ crates compiled for the target, 0 imported symbols, no dynamic section, one sysc
 |---|---|---|
 | `conductor-core`, `el0-harness`, `runtime-proof` (lib) | heqk (EL0) | **no** |
 | `conductor-mock` (tests, fuzz, `measure`, `stack_bound`) | the build host only (ADR 0047 D3) | not shipped |
-| `conductor-worker` | someone else's GPU machine | **yes: a bridge, outside the runtime.** It exists because heqk cannot yet run a language model or drive a GPU. It is not part of HookProbe OS and can be dropped without touching the device side |
 
-The two kernel requests that remove the need for the bridge are in [`KERNEL_REQUESTS.md`](KERNEL_REQUESTS.md).
+There is no Linux-hosted component. A reference worker for a Linux GPU machine was built and then removed
+on 2026-11-24 (operator decision: everything stays heqk-native). The worker-side acceptance rules remain
+as `no_std` protocol code (`conductor-core/src/worker.rs`) for a future heqk-native worker, and are
+exercised by the mock in the tests. The two kernel requests that make neural computation and applications
+native are in [`KERNEL_REQUESTS.md`](KERNEL_REQUESTS.md).
 
 ## Crates
 
@@ -123,8 +126,7 @@ cd os/conductor/el0-harness && cargo build --release
   cache salt, ledger) derived from the sealed root; persist the counter and the ledger anchor in the sealed
   store (ADR 0069 pattern); broadcast epoch announcements; wire `el0-harness` behind a feature; assign its
   address range; time Ed25519 verify at opt-level "z" on CM5.
-- **C2**: Mission Control pairing UI (shows the six digits), the compute segment, the reference worker
-  (request-level; engines bind to localhost behind the worker agent; answers quotes from measured
-  per-profile timings), the red-team egress gate.
+- **Remote workers**: only as heqk-native nodes (heqk on the worker machine), after ADR 0068 and the
+  kernel requests. No Linux-hosted worker.
 - Third-party applications (containers / microVMs on a companion host) are outside C0 and need their own
   ADR.
