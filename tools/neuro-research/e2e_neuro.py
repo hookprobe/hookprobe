@@ -17,7 +17,7 @@ are false alerts, and the explainer's verdict on them is measured for calm wordi
 Usage: e2e_neuro.py build <out dir> <pcap>... [--sample 20] [--seed 7]
        e2e_neuro.py score <out dir> <run_eval AE json>
 """
-import collections, json, os, random, resource, sys, time
+import collections, json, os, random, re, resource, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, "bench")); sys.path.insert(0, os.path.join(HERE, "eval"))
 
@@ -38,9 +38,12 @@ def build(out, pcaps, sample, seed):
     rep = collections.OrderedDict()
     kept = {}
 
+    kept_host = {}
+
     class Rec(Agg):                        # same aggregator, plus a copy of the window's flow events for stage C
         def add(self, j):
             kept[self.meta["window_id"]] = (j["events"], [tuple(p) for p in j["baseline"]["pairs"]])
+            kept_host[self.meta["window_id"]] = self.meta["host"]
             return Agg.add(self, j)
     pd.Agg = Rec
 
@@ -67,6 +70,7 @@ def build(out, pcaps, sample, seed):
     rep["B S1 decision"] = dict(windows_scored=len(scored), devices=len(devs), alerts=n_al,
                                 alerts_per_device_day=round(24 * n_al / max(1, len(scored)), 3),
                                 us_per_window=round(1e6 * tB / max(1, len(scored)), 1), peak_rss_mb=round(rss_mb(), 1))
+    json.dump(sorted(w for w, a in dec.items() if a), open(os.path.join(out, "alert_windows.json"), "w"))
     # ---- C
     r = random.Random(seed)
     quiet = sorted(w for w, a in dec.items() if not a)
@@ -75,7 +79,20 @@ def build(out, pcaps, sample, seed):
     t = time.time()
     for w in pick:
         evs, pairs = kept[w]
-        ev2 = sorted((dict(e, state=e.get("conn_state", "SF")) for e in evs), key=lambda e: e["ts"])
+        # compressor states are est / rst / fin; only rst counts as a failure. No reply (S0) and reset (REJ) both fail.
+        st = {"S0": "rst", "REJ": "rst", "SF": "fin"}
+        ev2 = sorted((dict(e, state=st.get(e.get("conn_state"), "fin")) for e in evs), key=lambda e: e["ts"])
+        if dec[w]:
+            # the L1 alert reaches the explainer as a detection on the window, as it would on the device: attached to
+            # the device's most-contacted peer and (dst_port 0) to its fan-out cards
+            host = kept_host.get(w, "")
+            import ipaddress
+            pub = lambda x: (not u.is_local(ipaddress.ip_address(x).packed)) if re.match(r"^[\d.]+$", x or "") else False
+            peers = collections.Counter(e["dst_ip"] for e in evs if e["src_ip"] == host and pub(e["dst_ip"]))
+            ev2.append({"type": "detection", "id": "det:l1:%d" % len(cases), "ts": ev2[0]["ts"] if ev2 else "", "rule_id": 9100001,
+                        "rule_msg": "L1 behaviour model alert (alert, l1)", "category": "behaviour_change", "severity": 2,
+                        "mitre": None, "src_ip": host, "dst_ip": peers.most_common(1)[0][0] if peers else "", "dst_port": 0,
+                        "confidence": 70})
         cards, residual, _ = sc.rep_cards(ev2, {"pairs": set(pairs), "suffixes": set()})
         lines, used = sc.fill(cards, 512, tok, residual)
         if len(lines) == len(cards):          # nothing dropped: still end with the REST line, as the device does
@@ -90,6 +107,7 @@ def build(out, pcaps, sample, seed):
     rep["C cards"] = dict(windows=len(cases), alerts=sum(c["id"].startswith("alert") for c in cases),
                           ms_per_window=round(1000 * tC / max(1, len(cases)), 1), tokens_mean=round(sum(toks) / max(1, len(toks)), 1),
                           tokens_max=max(toks) if toks else 0, tokenizer=tok.label(), peak_rss_mb=round(rss_mb(), 1))
+    json.dump({c["id"]: c["window"] for c in cases}, open(os.path.join(out, "case_windows.json"), "w"))
     with open(os.path.join(out, "cases.jsonl"), "w") as f:
         for c in cases:
             f.write(json.dumps({k: v for k, v in c.items() if k != "window"}) + "\n")
@@ -134,6 +152,21 @@ def score(out, run_path):
                gen_tok_per_s_median=round(q(gen, .5), 1) if gen else None,
                valid={k: "%d/%d" % (v, n) for k, v in ok.items()},
                verdicts={k: dict(v) for k, v in verdict.items()})
+    man = os.environ.get("E2E_MANIFEST")
+    if man and os.path.exists(os.path.join(out, "case_windows.json")):   # injected attacks: what S1 and the explainer did per hour
+        m = json.load(open(man)); mac = ":".join(m["device_mac"][i:i + 2] for i in range(0, 12, 2))
+        cw = json.load(open(os.path.join(out, "case_windows.json")))
+        al = set(json.load(open(os.path.join(out, "alert_windows.json"))))
+        byw = {w: i for i, w in cw.items()}
+        outs = {r["id"]: l0_thin.compose(cases[r["id"]], r["outputs"][0]) for r in rows}
+        per = {}
+        for h, kind in sorted(m["injected_hours"].items()):
+            w = [x for x in al | set(cw.values()) if x.endswith("|%s|%s" % (mac, h))]
+            w = w[0] if w else None
+            o = outs.get(byw.get(w)) if w else None
+            per[h] = dict(kind=kind, s1_alert=bool(w and w in al), explainer=(o or {}).get("verdict"),
+                          summary=((o or {}).get("summary") or "")[:160])
+        rep["injected"] = per
     json.dump(rep, open(os.path.join(out, "stage_D.json"), "w"), indent=1)
     print(json.dumps(rep, indent=1))
 
