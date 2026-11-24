@@ -43,7 +43,7 @@ fn only_rust_sources() {
 #[test]
 fn device_crates_are_freestanding() {
     let banned = ["f32", "f64", "std::", "extern crate std", "extern crate alloc", "alloc::", "libc", "pthread", "mmap", "/proc", "/dev/", "python", "torch"];
-    for (krate, entry) in [("conductor-core", "src/lib.rs"), ("runtime-proof", "src/lib.rs"), ("el0-harness", "src/main.rs"), ("neuro-engine", "src/lib.rs"), ("el0-engine", "src/main.rs"), ("neuro-kernels", "src/lib.rs"), ("neon-proof", "src/main.rs"), ("neuro-hnx", "src/lib.rs"), ("neuro-lm", "src/lib.rs"), ("neuro-gguf", "src/lib.rs")] {
+    for (krate, entry) in [("conductor-core", "src/lib.rs"), ("runtime-proof", "src/lib.rs"), ("el0-harness", "src/main.rs"), ("neuro-engine", "src/lib.rs"), ("el0-engine", "src/main.rs"), ("neuro-kernels", "src/lib.rs"), ("neon-proof", "src/main.rs"), ("neuro-hnx", "src/lib.rs"), ("neuro-lm", "src/lib.rs"), ("neuro-gguf", "src/lib.rs"), ("neuro-contract", "src/lib.rs")] {
         let dir = root().join(krate);
         let head = std::fs::read_to_string(dir.join(entry)).unwrap();
         assert!(head.contains("#![no_std]"), "{krate} must be no_std");

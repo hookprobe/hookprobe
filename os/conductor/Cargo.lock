@@ -406,6 +406,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "neuro-contract"
+version = "0.0.26"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "neuro-core"
 version = "0.0.26"
 
