@@ -420,6 +420,7 @@ name = "neuro-contract"
 version = "0.0.26"
 dependencies = [
  "regex",
+ "serde_json",
 ]
 
 [[package]]
