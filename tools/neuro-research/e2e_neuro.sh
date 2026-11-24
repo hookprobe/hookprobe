@@ -12,7 +12,7 @@ need "$G"; need "$LS"
 log "stages A-C, E (capture -> DNA -> S1 -> cards; exposure lookup)"
 "$PY" -I "$T/e2e_neuro.py" build "$O" "$@" --sample 20 > "$O/build.log" 2>&1 || { tail -5 "$O/build.log"; exit 4; }
 need "$O/cases.jsonl"
-log "stage D (explainer: llama-server, guard A, then guard E and rule T)"
+log "stage D (explainer: llama-server, guard A, then guard E, guard G and rule T)"
 port=18993; t0=$(date +%s)
 "$LS" -m "$G" --port $port -c 8192 -np 1 -ngl 99 --reasoning off --no-webui > "$O/server.log" 2>&1 & sp=$!
 for _ in $(seq 1 180); do curl -sf http://127.0.0.1:$port/health >/dev/null && break; sleep 1; done
@@ -23,7 +23,9 @@ srss=$(ps -o rss= -p $sp 2>/dev/null | tr -d ' ')
 kill $sp; wait $sp 2>/dev/null
 need "$O/explainer-A.json"
 python3 -I "$T/guard_offline.py" "$O/cases.jsonl" "$O/explainer-A.json" "$O/explainer-AE.json"
-"$PY" -I "$T/e2e_neuro.py" score "$O" "$O/explainer-AE.json" > "$O/score.log" 2>&1 || { tail -5 "$O/score.log"; exit 5; }
+python3 -I "$T/guard_ground.py" "$O/cases.jsonl" "$O/explainer-AE.json" "$O/explainer-AEG.json"     # guard G: strip invented ids
+need "$O/explainer-AEG.json"
+"$PY" -I "$T/e2e_neuro.py" score "$O" "$O/explainer-AEG.json" > "$O/score.log" 2>&1 || { tail -5 "$O/score.log"; exit 5; }
 echo "{\"model_load_s\": $((t1 - t0)), \"server_rss_mb\": $(( ${srss:-0} / 1024 )), \"gguf\": \"$(basename "$G")\", \"gguf_mb\": $(( $(stat -f %z "$G") / 1048576 ))}" > "$O/stage_D_server.json"
 log "E2E DONE"
 cat "$O/stages_ABCE.json" "$O/stage_D.json" "$O/stage_D_server.json"

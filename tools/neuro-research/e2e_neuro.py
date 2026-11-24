@@ -144,6 +144,7 @@ def score(out, run_path):
         ok["technique_ids_real"] += grounding.technique_check(o, c["context"])["ok"]       # no invented T-ids
         ok["services_on_cards"] += grounding.service_check(o, c["context"])["ok"]          # no service without its port
         ok["fallback"] += bool(o.get("_guard_fallback"))
+        ok["guard_G_edited"] += bool(o.get("_guard_g"))
         o2 = l0_thin.compose(c, o)
         ok["rule_T_fired"] += bool(o2.get("_l0_thin"))
         verdict[c["id"].split("-")[0]][o2.get("verdict")] += 1
