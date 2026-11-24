@@ -21,6 +21,8 @@ pub enum Kind {
     LeaseEnded = 11,
     QuoteDeclined = 12,
     QuoteAccepted = 13,
+    /// Guard G edited the answer's prose. `code` = distinct tokens removed; `digest` = SHA-256 of the prose before.
+    GroundingEdit = 14,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

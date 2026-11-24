@@ -17,12 +17,12 @@ use crate::crypto::{ct_eq, sha256, verify as sig_verify, TAG_RESULT};
 use crate::frame::{self, Body, Request, Response, REQ_MAX};
 use crate::job::{inert_text, JobSpec};
 use crate::json::{self, JsonError, ModelOutput};
-use neuro_contract::{ids_add, ids_finish, write_system, IdList, Lang, Sink, CHAT_ASSISTANT, CHAT_SYSTEM, CHAT_USER, USER_HEAD, USER_MID};
+use neuro_contract::{grounding, ids_add, ids_finish, write_system, IdList, Lang, Sink, CHAT_ASSISTANT, CHAT_SYSTEM, CHAT_USER, USER_HEAD, USER_MID};
 use crate::ledger::{Kind, Record};
 use crate::limits::*;
 use crate::place::{place_excluding, Env, PlaceRefusal};
 use crate::tools::{authorize, ToolCall, ToolRefusal};
-use crate::verify::{verify, Verification};
+use crate::verify::{verify_grounded, Grounding, Verification};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Event<'a> {
@@ -170,6 +170,8 @@ pub struct Harness {
     /// Tool results and refusal notes, carried into the next call's prompt.
     transcript: Buf<MAX_PROMPT>,
     prompt: Buf<MAX_PROMPT>,
+    /// Where the evidence cards sit in `prompt` (the CONTEXT block guard G and the grounding checks read).
+    cards_at: (usize, usize),
     req_frame: Buf<REQ_MAX>,
     request_hash: [u8; 32],
     sign_req: SignRequest,
@@ -230,6 +232,7 @@ impl Harness {
             prompt_classes: 0,
             transcript: Buf::new(),
             prompt: Buf::new(),
+            cards_at: (0, 0),
             req_frame: Buf::new(),
             request_hash: [0; 32],
             sign_req: SignRequest::ZERO,
@@ -317,6 +320,10 @@ impl Harness {
     }
     pub fn tx(&self) -> &[u8] {
         self.tx.as_slice()
+    }
+    /// The decoded summary of the last answer, after guard G.
+    pub fn summary(&self) -> &[u8] {
+        self.summary.as_slice()
     }
     pub fn prompt(&self) -> &[u8] {
         self.prompt.as_slice()
@@ -524,6 +531,7 @@ impl Harness {
         }
         p.push(CHAT_USER.as_bytes())?;
         p.push(USER_HEAD.as_bytes())?;
+        let cards_start = p.len();
         let mut first = true;
         for (i, e) in self.job.evidence().iter().enumerate() {
             if !self.included.get(i).copied().unwrap_or(false) {
@@ -536,13 +544,16 @@ impl Harness {
             let n = card_line(e.id, e.card.as_slice(), &mut line)?;
             p.push(line.get(..n)?)?;
         }
+        let cards_end = p.len();
         p.push(USER_MID.as_bytes())?;
         p.push(self.job.intent.as_slice())?;
         if !self.transcript.is_empty() {
             p.push(b"\n\nTool results:\n")?;
             p.push(self.transcript.as_slice())?;
         }
-        p.push(CHAT_ASSISTANT.as_bytes())
+        p.push(CHAT_ASSISTANT.as_bytes())?;
+        self.cards_at = (cards_start, cards_end);
+        Some(())
     }
 
     fn begin_call(&mut self, out: &mut Actions) {
@@ -683,8 +694,33 @@ impl Harness {
             Err(_e @ (JsonError::Syntax | JsonError::Schema | JsonError::Encoding | JsonError::TooLong | JsonError::Trailing)) => {
                 self.finish(out, Outcome::Rejected(Violation::Schema))
             }
-            Ok(ModelOutput::Answer(a)) => {
-                let v = verify(&a, &self.job, &self.included);
+            Ok(ModelOutput::Answer(mut a)) => {
+                // Guard G (Neuro): delete invented technique ids and unreturned CVE ids from the prose, against
+                // the context this provider was shown (the cards and the earlier tool results). Then the
+                // verifier checks what G cannot fix, and anything G should have removed.
+                let cards = self.prompt.as_slice().get(self.cards_at.0..self.cards_at.1).unwrap_or(&[]);
+                let ctx: [&[u8]; 2] = [cards, self.transcript.as_slice()];
+                let before = sha256(&[self.summary.as_slice()]);
+                let mut g = grounding::GuardG { removed: 0, overflow: false, len: 0 };
+                self.summary.shrink_with(|b, n| {
+                    g = grounding::guard_g(b, n, &ctx);
+                    g.len
+                });
+                a.summary_len = self.summary.len();
+                if g.overflow {
+                    return self.finish(out, Outcome::Rejected(Violation::Schema));
+                }
+                if g.removed > 0 {
+                    let code = u16::try_from(g.removed).unwrap_or(u16::MAX);
+                    out.push(Action::Ledger(self.record(Kind::GroundingEdit, code, before)));
+                }
+                let s = self.summary.as_slice();
+                let found = Grounding {
+                    unknown_techniques: grounding::technique_check(s).unknown,
+                    ungrounded_cves: grounding::ungrounded_cves(s, &ctx),
+                    services_without_port: grounding::services_without_port(s, &ctx),
+                };
+                let v = verify_grounded(&a, &self.job, &self.included, found);
                 self.finish(out, Outcome::Verified(v));
             }
             Ok(ModelOutput::Tool(call)) => match authorize(&call, &self.job, &self.included) {

@@ -31,7 +31,7 @@ already held (hookprobe/hookprobe#1578), so it was renumbered by operator decisi
 **Request: the `el0-harness` bench feature.** Add `os/conductor/el0-harness` to `kernel/build.rs` behind a bench
 feature, as `neuro` was added:
 - no shipping change;
-- the size gate (`.text` 82,716 B, `.bss` 52,392 B, `.data` 0);
+- the size gate (`.text` 90,736 B, `.bss` 52,408 B, `.data` 0);
 - its address range assigned.
 
 It needs nothing from KR-1, KR-2 or KR-3: zero FP/SIMD instructions and one syscall. It is the first Conductor
@@ -291,6 +291,6 @@ a P1 heqk worker on the owner's LAN.
 5. KR-3 is independent of KR-1 and KR-2, and can go in parallel: it unblocks Conductor C1.
 
 Until then, already possible on today's kernel with no change beyond adding an EL0 crate to
-`kernel/build.rs` behind a feature: the Conductor harness (`el0-harness`: `.text` 82,716 B, `.data` 0,
-`.bss` 52,392 B, stack bound 10,912 B, zero FP/SIMD instructions, no imports, one syscall) and Runtime
+`kernel/build.rs` behind a feature: the Conductor harness (`el0-harness`: `.text` 90,736 B, `.data` 0,
+`.bss` 52,408 B, stack bound 10,912 B, zero FP/SIMD instructions, no imports, one syscall) and Runtime
 Proof 001's pipeline with the integer specialist.

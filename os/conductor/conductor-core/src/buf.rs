@@ -32,6 +32,14 @@ impl<const N: usize> Buf<N> {
         self.len = n;
         Some(())
     }
+    /// Let `f` edit the contents in place; it returns the new length, which may only shrink. The tail is zeroed.
+    pub fn shrink_with(&mut self, f: impl FnOnce(&mut [u8], usize) -> usize) {
+        let n = f(&mut self.b, self.len).min(self.len);
+        if let Some(t) = self.b.get_mut(n..) {
+            t.fill(0);
+        }
+        self.len = n;
+    }
     pub fn as_slice(&self) -> &[u8] {
         self.b.get(..self.len).unwrap_or(&[])
     }
