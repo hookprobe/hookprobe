@@ -19,17 +19,39 @@ use neuro_kernels::hp;
 use neuro_kernels::q8::{self, Act};
 use neuro_kernels::Simd;
 
-/// A `Q8_0` matrix, `rows × cols`, row-major blocks exactly as in GGUF.
+/// A `Q8_0` matrix, `rows × cols`: row-major blocks exactly as in GGUF, or the packed layout
+/// (`neuro_kernels::q8::pack`, lossless, aligned, faster). Both compute the same numbers bit for bit.
 #[derive(Clone, Copy, Debug)]
 pub struct Mat<'a> {
     pub rows: usize,
     pub cols: usize,
     pub w: &'a [u8],
+    pub packed: bool,
+    /// Largest weight exponent (`q8::wexp_gguf` / `q8::wexp_packed`); `check()` verifies it.
+    pub wexp: i32,
 }
 
-impl Mat<'_> {
+impl<'a> Mat<'a> {
+    /// A GGUF-layout matrix (computes `wexp` with one pass over the scales).
+    pub fn gguf(rows: usize, cols: usize, w: &'a [u8]) -> Self {
+        Mat { rows, cols, w, packed: false, wexp: q8::wexp_gguf(w) }
+    }
+
     fn ok(&self, rows: usize, cols: usize) -> bool {
-        self.rows == rows && self.cols == cols && cols % q8::QK == 0 && cols <= q8::MAX_COLS && rows.checked_mul(q8::row_bytes(cols)) == Some(self.w.len())
+        let shape = self.rows == rows && self.cols == cols && cols % q8::QK == 0 && cols <= q8::MAX_COLS;
+        if self.packed {
+            shape && q8::packed_valid(self.w, rows, cols) && self.wexp == q8::wexp_packed(self.w)
+        } else {
+            shape && rows.checked_mul(q8::row_bytes(cols)) == Some(self.w.len()) && q8::scales_finite(self.w) && self.wexp == q8::wexp_gguf(self.w)
+        }
+    }
+
+    /// Pack this GGUF-layout matrix into `out` (`q8::packed_bytes(rows, cols)` bytes): the load-time step.
+    pub fn pack_into<'b>(&self, out: &'b mut [u8]) -> Option<Mat<'b>> {
+        if self.packed || !q8::pack(self.w, self.rows, self.cols, out) {
+            return None;
+        }
+        Some(Mat { rows: self.rows, cols: self.cols, w: out, packed: true, wexp: self.wexp })
     }
 }
 
@@ -152,7 +174,9 @@ fn gemv(simd: Simd, m: &Mat, x: &[i64], xq: &mut [i8], xs: &mut [(i32, i32)], si
     if !q8::quantize(x, q, s) {
         return Err(LmError::Shape);
     }
-    if q8::matvec(simd, m.w, m.rows, &Act { q, scale: s }, sink) {
+    let act = Act { q, scale: s };
+    let ran = if m.packed { q8::matvec_packed(simd, m.w, m.rows, &act, m.wexp, sink) } else { q8::matvec(simd, m.w, m.rows, &act, m.wexp, sink) };
+    if ran {
         Ok(())
     } else {
         Err(LmError::Shape)
@@ -196,7 +220,7 @@ impl Model<'_> {
         if !dims_ok {
             return Err(LmError::Shape);
         }
-        let mat = |m: &Mat, r, c| m.ok(r, c) && q8::scales_finite(m.w);
+        let mat = |m: &Mat, r, c| m.ok(r, c);
         let layer = |l: &Layer| {
             gains_ok(l.attn_norm, dm)
                 && gains_ok(l.ffn_norm, dm)
@@ -242,9 +266,14 @@ impl Model<'_> {
             return Err(LmError::Context);
         }
         let Work { res, xn, q, k, v, att, gate, up, w, logits, xq, xs, qq } = work;
-        let rb = q8::row_bytes(d);
-        let erow = self.embed.w.get(token * rb..(token + 1) * rb).ok_or(LmError::Shape)?;
-        if !q8::dequant_row(erow, hp::FRAC, res) {
+        let looked_up = if self.embed.packed {
+            q8::packed_dequant_row(self.embed.w, self.embed.rows, token, hp::FRAC, res)
+        } else {
+            let rb = q8::row_bytes(d);
+            let erow = self.embed.w.get(token * rb..(token + 1) * rb).ok_or(LmError::Shape)?;
+            q8::dequant_row(erow, hp::FRAC, res)
+        };
+        if !looked_up {
             return Err(LmError::Shape);
         }
         let rope = self.rope.get(pos * hd / 2..(pos + 1) * hd / 2).ok_or(LmError::Shape)?;

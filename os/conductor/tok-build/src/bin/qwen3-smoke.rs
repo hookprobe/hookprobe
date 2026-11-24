@@ -183,14 +183,44 @@ fn main() {
     let question = args.next().unwrap_or_else(|| "What is the capital of France? Answer in one word.".into());
 
     let t0 = Instant::now();
-    let bytes = std::fs::read(&path).expect("read");
-    let g = Gguf::open(&bytes).expect("open GGUF");
+    // Leaked: the model borrows it for the rest of this one-shot program.
+    let bytes: &'static [u8] = std::fs::read(&path).expect("read").leak();
+    let g = Gguf::open(bytes).expect("open GGUF");
     let h = bind::hparams(&g, CTX).expect("hparams");
     println!("opened {path} in {:?}: {:?}", t0.elapsed(), h.dims);
     println!("kq_scale bits {:#x} (f32 1/sqrt(128) = {:#x})", h.kq_scale, (1.0f32 / (h.dims.head_dim as f32).sqrt()).to_bits());
     let layers: Vec<_> = (0..h.dims.n_layers).map(|i| bind::layer(&g, &h, i).expect("layer")).collect();
     let rope = neuro_build::rope_neox_table(CTX, h.dims.head_dim, f32::from_bits(h.rope_base) as f64);
     let model = bind::model(&g, &h, &layers, &rope).expect("bind model");
+
+    // PACKED=1: pack every matrix (the device's load-time step), prove each unpacks to the exact GGUF bytes,
+    // and run the packed model beside the GGUF one: every logit must be equal.
+    let packed_mode = std::env::var("PACKED").is_ok_and(|v| v == "1");
+    let pmodel = if packed_mode {
+        let t = Instant::now();
+        let mut bytes_in = 0usize;
+        let mut bytes_out = 0usize;
+        let mut pk = |m: &neuro_lm::qwen3::Mat| -> neuro_lm::qwen3::Mat<'static> {
+            let buf: &'static mut [u8] = vec![0u8; neuro_kernels::q8::packed_bytes(m.rows, m.cols)].leak();
+            let p = m.pack_into(buf).expect("pack");
+            let mut row = vec![0u8; neuro_kernels::q8::row_bytes(m.cols)];
+            for r in 0..m.rows {
+                assert!(neuro_kernels::q8::unpack_row(p.w, m.rows, m.cols, r, &mut row));
+                assert_eq!(&row[..], &m.w[r * row.len()..(r + 1) * row.len()], "unpacked row differs from the GGUF bytes");
+            }
+            bytes_in += m.w.len();
+            bytes_out += p.w.len();
+            p
+        };
+        let players: Vec<_> = layers.iter().map(|l| neuro_lm::qwen3::Layer { wq: pk(&l.wq), wk: pk(&l.wk), wv: pk(&l.wv), wo: pk(&l.wo), w_gate: pk(&l.w_gate), w_up: pk(&l.w_up), w_down: pk(&l.w_down), ..*l }).collect();
+        let players: &'static [neuro_lm::qwen3::Layer] = players.leak();
+        let pm = neuro_lm::qwen3::Model { embed: pk(&model.embed), layers: players, head: model.head.as_ref().map(&mut pk), ..model };
+        pm.check().expect("packed model check");
+        println!("packed {bytes_in} GGUF bytes into {bytes_out} ({:+.1} %) in {:?}; every row unpacks to the exact GGUF bytes", (bytes_out as f64 / bytes_in as f64 - 1.0) * 100.0, t.elapsed());
+        Some(pm)
+    } else {
+        None
+    };
 
     let tok_blob = tok_build::blob(&tok_build::from_gguf(&g).expect("tokenizer"), &tok_build::unicode_ranges(), &tok_build::nfc_tables()).expect("blob");
     let tok = Tokenizer::new(&tok_blob).expect("tokenizer blob");
@@ -210,6 +240,11 @@ fn main() {
     let (mut ba, mut bb, mut bc, mut bd) = (vec![0i64; a], vec![0i8; i8n], vec![(0, 0); scn], vec![0i32; i32n]);
     let mut work = Work::new(&d, &mut ba, &mut bb, &mut bc, &mut bd).expect("work");
     let mut kv = Kv { vals: &mut vals, shifts: &mut shifts };
+    let (mut vals2, mut shifts2) = (vec![0i16; kvn], vec![0u8; kvs]);
+    let (mut ba2, mut bb2, mut bc2, mut bd2) = (vec![0i64; a], vec![0i8; i8n], vec![(0, 0); scn], vec![0i32; i32n]);
+    let mut work2 = Work::new(&d, &mut ba2, &mut bb2, &mut bc2, &mut bd2).expect("work");
+    let mut kv2 = Kv { vals: &mut vals2, shifts: &mut shifts2 };
+    let mut packed_equal = 0usize;
     let mut reference = Ref { g: &g, h, mode: Mode::Float, k: vec![vec![]; d.n_layers], v: vec![vec![]; d.n_layers] };
     // Diagnostics (REF_DIAG=1): the same f64 runtime with llama.cpp-CPU and with engine activation quantisation.
     let diag = std::env::var("REF_DIAG").is_ok_and(|v| v == "1");
@@ -231,6 +266,11 @@ fn main() {
         }
         let s = Instant::now();
         let got = model.step(Simd::SCALAR, tokid, pos, &mut kv, &mut work).expect("step");
+        if let Some(pm) = &pmodel {
+            let got2 = pm.step(Simd::SCALAR, tokid, pos, &mut kv2, &mut work2).expect("packed step");
+            assert!(got2 == got && work2.logits == work.logits, "packed and GGUF logits differ at {pos}");
+            packed_equal += 1;
+        }
         t_int += s.elapsed().as_secs_f64();
         let s = Instant::now();
         let want = reference.step(tokid, pos);
@@ -264,6 +304,9 @@ fn main() {
     let mut out = vec![0u8; 1 << 16];
     let m = tok.decode(&generated, &mut out).expect("decode");
     println!("\nanswer (integer engine, greedy): {:?}", String::from_utf8_lossy(&out[..m]));
+    if packed_mode {
+        println!("packed model: every logit equal to the GGUF-layout model at all {packed_equal} steps");
+    }
     if diag {
         println!("worst 1-cos: llama.cpp-CPU activation quantisation vs float {d_llama:.1e}; integer engine vs float with the engine's own activation quantisation {d_engine:.1e}");
     }

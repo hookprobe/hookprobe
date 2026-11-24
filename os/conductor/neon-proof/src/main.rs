@@ -354,7 +354,8 @@ fn q8_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
             exit(1);
         }
         let act = q8::Act { q: &xq[..cols], scale: &xs[..cols / 32] };
-        let (a, b) = (q8::row_scalar(&wr[..wn], &act), q8::row(simd, &wr[..wn], &act));
+        let wexp = q8::wexp_gguf(&wr[..wn]);
+        let (a, b) = (q8::row_scalar(&wr[..wn], &act, wexp), q8::row(simd, &wr[..wn], &act, wexp));
         if a.is_none() || a != b {
             let _ = writeln!(u, "FAIL q8 round {round} cols {cols}: scalar {a:?} neon {b:?}");
             exit(1);
@@ -368,6 +369,8 @@ fn q8_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
     const C4: usize = 1024;
     static mut W7: [u8; 7 * q8::row_bytes(C4)] = [0; 7 * q8::row_bytes(C4)];
     let w7 = unsafe { &mut *core::ptr::addr_of_mut!(W7) };
+    static mut P7: [u8; q8::packed_bytes(7, C4)] = [0; q8::packed_bytes(7, C4)];
+    let p7 = unsafe { &mut *core::ptr::addr_of_mut!(P7) };
     let (mut groups, mut mats) = (0u64, 0u64);
     for round in 0..3_000u32 {
         let cols = 32 * (1 + (rng.next() % 32) as usize);
@@ -390,7 +393,8 @@ fn q8_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
         let act = q8::Act { q: &xq[..cols], scale: &xs[..cols / 32] };
         if nrows >= 4 {
             let (mut a, mut b) = ([0i64; 4], [1i64; 4]);
-            let ok = q8::rows4_scalar(&w7[..4 * rb], &act, &mut a) && q8::rows4(simd, &w7[..4 * rb], &act, &mut b);
+            let wexp4 = q8::wexp_gguf(&w7[..4 * rb]);
+            let ok = q8::rows4_scalar(&w7[..4 * rb], &act, wexp4, &mut a) && q8::rows4(simd, &w7[..4 * rb], &act, wexp4, &mut b);
             if !ok || a != b {
                 let _ = writeln!(u, "FAIL q8 rows4 round {round} cols {cols}: scalar {a:?} neon {b:?}");
                 exit(1);
@@ -398,11 +402,22 @@ fn q8_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
             groups += 1;
         }
         let (mut ms, mut mn) = ([0i64; 7], [1i64; 7]);
-        let ok1 = q8::matvec(Simd::SCALAR, &w7[..nrows * rb], nrows, &act, |r, v| ms[r] = v);
-        let ok2 = q8::matvec(simd, &w7[..nrows * rb], nrows, &act, |r, v| mn[r] = v);
+        let wexp = q8::wexp_gguf(&w7[..nrows * rb]);
+        let ok1 = q8::matvec(Simd::SCALAR, &w7[..nrows * rb], nrows, &act, wexp, |r, v| ms[r] = v);
+        let ok2 = q8::matvec(simd, &w7[..nrows * rb], nrows, &act, wexp, |r, v| mn[r] = v);
+        // The packed layout: scalar and NEON, equal to the GGUF layout bit for bit.
+        let pn = q8::packed_bytes(nrows, cols);
+        let (mut pa, mut pb) = ([3i64; 7], [4i64; 7]);
+        let ok3 = q8::pack(&w7[..nrows * rb], nrows, cols, &mut p7[..pn]) && q8::wexp_packed(&p7[..pn]) == wexp;
+        let ok4 = q8::matvec_packed(Simd::SCALAR, &p7[..pn], nrows, &act, wexp, |r, v| pa[r] = v);
+        let ok5 = q8::matvec_packed(simd, &p7[..pn], nrows, &act, wexp, |r, v| pb[r] = v);
+        if !ok3 || !ok4 || !ok5 || pa[..nrows] != ms[..nrows] || pb[..nrows] != ms[..nrows] {
+            let _ = writeln!(u, "FAIL q8 packed round {round} rows {nrows} cols {cols}: gguf {:?} packed scalar {:?} neon {:?}", &ms[..nrows], &pa[..nrows], &pb[..nrows]);
+            exit(1);
+        }
         let mut want = [0i64; 7];
         for r in 0..nrows {
-            want[r] = q8::row_scalar(&w7[r * rb..(r + 1) * rb], &act).unwrap_or(i64::MIN);
+            want[r] = q8::row_scalar(&w7[r * rb..(r + 1) * rb], &act, wexp).unwrap_or(i64::MIN);
         }
         if !ok1 || !ok2 || ms[..nrows] != want[..nrows] || mn[..nrows] != want[..nrows] {
             let _ = writeln!(u, "FAIL q8 matvec round {round} rows {nrows} cols {cols}");
@@ -411,11 +426,11 @@ fn q8_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
         mats += 1;
     }
     let mut o = [7i64; 4];
-    if q8::rows4(simd, &w7[..4 * q8::row_bytes(64) - 1], &q8::Act { q: &xq[..64], scale: &xs[..2] }, &mut o) || o != [7; 4] {
+    if q8::rows4(simd, &w7[..4 * q8::row_bytes(64) - 1], &q8::Act { q: &xq[..64], scale: &xs[..2] }, 0, &mut o) || o != [7; 4] {
         let _ = writeln!(u, "FAIL: rows4 accepted a short matrix");
         exit(1);
     }
-    let _ = writeln!(u, "PASS q8 4-row kernel: {groups} groups and {mats} matrices (1-7 rows, fast and general scale paths), {} identical to the scalar reference", simd.name());
+    let _ = writeln!(u, "PASS q8 4-row kernel: {groups} groups and {mats} matrices (1-7 rows, any scale), {} identical to the scalar reference; packed layout (scalar and NEON) identical to the GGUF layout on every matrix", simd.name());
 }
 
 /// A whole Qwen3-shaped decoder (QK-norm, NEOX RoPE θ = 1e6, GQA, SwiGLU, tied head, Q8_0 weights in GGUF
@@ -460,7 +475,7 @@ fn qwen3_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
     let (mut wo, mut go) = (0usize, 0usize);
     let mut mat = |rows: usize, cols: usize| {
         let n = rows * row_bytes(cols);
-        let m = Mat { rows, cols, w: &w[wo..wo + n] };
+        let m = Mat::gguf(rows, cols, &w[wo..wo + n]);
         wo += n;
         m
     };
@@ -471,7 +486,7 @@ fn qwen3_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
     };
     let mut layer = || Layer { attn_norm: gain(64), wq: mat(QD, 64), wk: mat(KVD, 64), wv: mat(KVD, 64), wo: mat(64, QD), q_norm: gain(32), k_norm: gain(32), ffn_norm: gain(64), w_gate: mat(128, 64), w_up: mat(128, 64), w_down: mat(64, 128) };
     let layers = [layer(), layer()];
-    let model = Model { dims: D, embed: Mat { rows: 128, cols: 64, w: &w[embed_off..] }, layers: &layers, final_norm: &g[NORMS - 256..], head: None, rope: &tables::ROPE_NEOX, eps: tables::EPS_BITS, kq_scale: tables::KQ_SCALE_BITS };
+    let model = Model { dims: D, embed: Mat::gguf(128, 64, &w[embed_off..]), layers: &layers, final_norm: &g[NORMS - 256..], head: None, rope: &tables::ROPE_NEOX, eps: tables::EPS_BITS, kq_scale: tables::KQ_SCALE_BITS };
     if model.check().is_err() {
         let _ = writeln!(u, "FAIL: qwen3 model shapes");
         exit(1);
@@ -482,24 +497,52 @@ fn qwen3_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
         exit(1)
     };
     let (mut kv_a, mut kv_b) = (Kv { vals: &mut kva.0, shifts: &mut kva.1 }, Kv { vals: &mut kvb.0, shifts: &mut kvb.1 });
+    // The same model with every matrix packed (lossless, aligned), run with NEON.
+    const PTOTAL: usize = TOTAL / 34 * 36;
+    static mut PW: [u8; PTOTAL] = [0; PTOTAL];
+    static mut KV_C: ([i16; KVN], [u8; KVS]) = ([0; KVN], [0; KVS]);
+    static mut WC: ([i64; A64], [i8; 128], [(i32, i32); 4], [i32; 32]) = ([0; A64], [0; 128], [(0, 0); 4], [0; 32]);
+    let (pw, kvc, wc) = unsafe { (&mut *core::ptr::addr_of_mut!(PW), &mut *core::ptr::addr_of_mut!(KV_C), &mut *core::ptr::addr_of_mut!(WC)) };
+    let mut rest: &'static mut [u8] = pw;
+    let mut pk = |m: &Mat| -> Mat<'static> {
+        let n = neuro_kernels::q8::packed_bytes(m.rows, m.cols);
+        let (a, b) = core::mem::take(&mut rest).split_at_mut(n);
+        rest = b;
+        match m.pack_into(a) {
+            Some(p) => p,
+            None => exit(1),
+        }
+    };
+    let players = [0, 1].map(|i| {
+        let l = &layers[i];
+        Layer { wq: pk(&l.wq), wk: pk(&l.wk), wv: pk(&l.wv), wo: pk(&l.wo), w_gate: pk(&l.w_gate), w_up: pk(&l.w_up), w_down: pk(&l.w_down), ..*l }
+    });
+    let pmodel = Model { embed: pk(&model.embed), layers: &players, ..model };
+    if pmodel.check().is_err() {
+        let _ = writeln!(u, "FAIL: packed qwen3 model refused");
+        exit(1);
+    }
+    let Some(mut work_c) = Work::new(&D, &mut wc.0, &mut wc.1, &mut wc.2, &mut wc.3) else { exit(1) };
+    let mut kv_c = Kv { vals: &mut kvc.0, shifts: &mut kvc.1 };
     let prompt = [3usize, 77, 12, 101, 64];
     let mut tok = 0usize;
     let mut generated = [0u8; 32];
     for pos in 0..D.max_ctx {
         let t = if pos < prompt.len() { prompt[pos] } else { tok };
         let (ra, rb) = (model.step(Simd::SCALAR, t, pos, &mut kv_a, &mut work_a), model.step(simd, t, pos, &mut kv_b, &mut work_b));
-        match (ra, rb) {
-            (Ok(a), Ok(b)) if a == b && work_a.logits == work_b.logits => {
+        let rc = pmodel.step(simd, t, pos, &mut kv_c, &mut work_c);
+        match (ra, rb, rc) {
+            (Ok(a), Ok(b), Ok(c)) if a == b && a == c && work_a.logits == work_b.logits && work_a.logits == work_c.logits => {
                 tok = a;
                 generated[pos] = a as u8;
             }
             _ => {
-                let _ = writeln!(u, "FAIL: qwen3 scalar and {} differ at position {pos}", simd.name());
+                let _ = writeln!(u, "FAIL: qwen3 GGUF scalar, GGUF {0} and packed {0} differ at position {pos}", simd.name());
                 exit(1);
             }
         }
     }
-    let _ = writeln!(u, "PASS qwen3: 2 layers, QK-norm, NEOX RoPE theta 1e6, GQA 4/2, SwiGLU, tied head, Q8_0 ({} weight bytes); {} positions, every logit equal, scalar == {}", TOTAL, D.max_ctx, simd.name());
+    let _ = writeln!(u, "PASS qwen3: 2 layers, QK-norm, NEOX RoPE theta 1e6, GQA 4/2, SwiGLU, tied head, Q8_0 ({} weight bytes); {} positions, every logit equal: GGUF scalar == GGUF {} == packed {} ({} packed bytes)", TOTAL, D.max_ctx, simd.name(), simd.name(), PTOTAL);
     let _ = writeln!(u, "  generated tokens after the prompt: {:?}", &generated[prompt.len()..prompt.len() + 12]);
 }
 
@@ -538,23 +581,34 @@ fn q8_bench(u: &mut Uart, simd: Simd, rng: &mut Rng) {
     let ns_per_tick = 1_000_000_000 / freq.max(1);
     let macs = (ROWS * COLS) as u64;
     let rb = q8::row_bytes(COLS);
-    let mut check = [0i64; 3];
+    let wexp = q8::wexp_gguf(wm);
+    static mut PM: [u8; q8::packed_bytes(ROWS, COLS)] = [0; q8::packed_bytes(ROWS, COLS)];
+    let pm = unsafe { &mut *core::ptr::addr_of_mut!(PM) };
+    if !q8::pack(wm, ROWS, COLS, pm) {
+        let _ = writeln!(u, "FAIL: pack");
+        exit(1);
+    }
+    let pm: &[u8] = pm;
+    let mut check = [0i64; 4];
     let mut measure = |name: &str, which: usize, u: &mut Uart| {
         let t0 = cntvct();
         let mut sum = 0i64;
         match which {
             0 => {
                 for r in 0..ROWS {
-                    sum = sum.wrapping_add(q8::row_scalar(&wm[r * rb..(r + 1) * rb], &act).unwrap_or(0));
+                    sum = sum.wrapping_add(q8::row_scalar(&wm[r * rb..(r + 1) * rb], &act, wexp).unwrap_or(0));
                 }
             }
             1 => {
                 for r in 0..ROWS {
-                    sum = sum.wrapping_add(q8::row(simd, &wm[r * rb..(r + 1) * rb], &act).unwrap_or(0));
+                    sum = sum.wrapping_add(q8::row(simd, &wm[r * rb..(r + 1) * rb], &act, wexp).unwrap_or(0));
                 }
             }
+            2 => {
+                q8::matvec(simd, wm, ROWS, &act, wexp, |_, v| sum = sum.wrapping_add(v));
+            }
             _ => {
-                q8::matvec(simd, wm, ROWS, &act, |_, v| sum = sum.wrapping_add(v));
+                q8::matvec_packed(simd, pm, ROWS, &act, wexp, |_, v| sum = sum.wrapping_add(v));
             }
         }
         let ticks = cntvct() - t0;
@@ -566,7 +620,8 @@ fn q8_bench(u: &mut Uart, simd: Simd, rng: &mut Rng) {
     measure("scalar reference         ", 0, u);
     measure("NEON 1-row               ", 1, u);
     measure("NEON 4-row (matvec)      ", 2, u);
-    if check[0] != check[1] || check[1] != check[2] {
+    measure("NEON packed 4-row        ", 3, u);
+    if check[0] != check[1] || check[1] != check[2] || check[2] != check[3] {
         let _ = writeln!(u, "FAIL: benchmark results differ");
         exit(1);
     }

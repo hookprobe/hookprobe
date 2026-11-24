@@ -103,6 +103,7 @@ fn binary16_and_binary32_decode_exactly() {
 fn q8_gemv_matches_f64_on_the_same_quantised_operands() {
     let mut r = Rng(11);
     let mut worst_rel_act = 0f64;
+    let mut worst_grid = 0f64;
     for case in 0..3000 {
         let cols = 32 * (1 + (r.next() % 64) as usize);
         let mag = [1e-3, 0.5, 30.0, 3000.0][case % 4];
@@ -129,12 +130,19 @@ fn q8_gemv_matches_f64_on_the_same_quantised_operands() {
         }
         // The integer row equals the f64 sum over the same quantised operands, to rounding.
         let act = Act { q: &xq, scale: &xs };
-        let got = q8::row_scalar(&wb, &act).unwrap();
+        let wexp = q8::wexp_gguf(&wb);
+        let got = q8::row_scalar(&wb, &act, wexp).unwrap();
         let wq = dequant(&wb);
         let want: f64 = (0..cols).map(|c| wq[c] * xq[c] as f64 * xs[c / 32].0 as f64 * 2f64.powi(xs[c / 32].1)).sum();
-        let tol = 1.0 + want.abs() * 1e-12;
-        assert!((got as f64 - want).abs() <= tol, "cols {cols}: {got} vs {want}");
-        assert_eq!(q8::row(Simd::SCALAR, &wb, &act), Some(got));
+        // Stated bound: half a grid step per block plus the final rounding (grid = 2^-K output units), plus
+        // f64 rounding of the reference sum.
+        let k = q8::grid(&act, wexp);
+        let tol = (cols / 32) as f64 * 0.5 * 2f64.powi(-k) + 0.5 + want.abs() * 1e-12;
+        assert!((got as f64 - want).abs() <= tol, "cols {cols}: {got} vs {want} (K {k})");
+        let mag: f64 = (0..cols).map(|c| (wq[c] * xq[c] as f64 * xs[c / 32].0 as f64 * 2f64.powi(xs[c / 32].1)).abs()).sum();
+        let _ = mag;
+        worst_grid = worst_grid.max((got as f64 - want).abs());
+        assert_eq!(q8::row(Simd::SCALAR, &wb, &act, wexp), Some(got));
     }
     assert!(worst_rel_act < 1.0 / 16384.0, "activation scale error {worst_rel_act}");
     // Errors: wrong lengths are refused; matvec calls nothing.
@@ -143,14 +151,14 @@ fn q8_gemv_matches_f64_on_the_same_quantised_operands() {
     assert!(!q8::quantize(&x, &mut xq[..63], &mut xs));
     assert!(q8::quantize(&x, &mut xq, &mut xs));
     let act = Act { q: &xq, scale: &xs };
-    assert_eq!(q8::row_scalar(&[0u8; 67], &act), None);
+    assert_eq!(q8::row_scalar(&[0u8; 67], &act, 0), None);
     let mut called = false;
-    assert!(!q8::matvec(Simd::SCALAR, &[0u8; 68 * 3 - 1], 3, &act, |_, _| called = true));
+    assert!(!q8::matvec(Simd::SCALAR, &[0u8; 68 * 3 - 1], 3, &act, 0, |_, _| called = true));
     assert!(!called);
     // Infinity / NaN scales are refused at admission.
     assert!(q8::scales_finite(&[0, 0x3c, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
     assert!(!q8::scales_finite(&[0, 0x7c, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
-    println!("q8 gemv: 3,000 rows equal to f64 on the same operands; activation scale within {worst_rel_act:.1e}");
+    println!("q8 gemv: 3,000 rows within the stated grid bound of f64 on the same operands (worst error {worst_grid:.3} output LSB, i.e. 2^-16 of the unit); activation scale within {worst_rel_act:.1e}");
 }
 
 // ------------------------------------------------------------------ fixed-point functions
@@ -410,20 +418,20 @@ fn qwen3_integer_engine_tracks_f64_runtime_on_the_same_weights() {
         let b = build_model(seed);
         let layers: Vec<Layer> = b.layers.iter().map(|l| Layer {
             attn_norm: &l[0],
-            wq: Mat { rows: D.n_heads * D.head_dim, cols: D.d_model, w: &l[1] },
-            wk: Mat { rows: D.n_kv_heads * D.head_dim, cols: D.d_model, w: &l[2] },
-            wv: Mat { rows: D.n_kv_heads * D.head_dim, cols: D.d_model, w: &l[3] },
-            wo: Mat { rows: D.d_model, cols: D.n_heads * D.head_dim, w: &l[4] },
+            wq: Mat::gguf(D.n_heads * D.head_dim, D.d_model, &l[1]),
+            wk: Mat::gguf(D.n_kv_heads * D.head_dim, D.d_model, &l[2]),
+            wv: Mat::gguf(D.n_kv_heads * D.head_dim, D.d_model, &l[3]),
+            wo: Mat::gguf(D.d_model, D.n_heads * D.head_dim, &l[4]),
             q_norm: &l[5],
             k_norm: &l[6],
             ffn_norm: &l[7],
-            w_gate: Mat { rows: D.ffn, cols: D.d_model, w: &l[8] },
-            w_up: Mat { rows: D.ffn, cols: D.d_model, w: &l[9] },
-            w_down: Mat { rows: D.d_model, cols: D.ffn, w: &l[10] },
+            w_gate: Mat::gguf(D.ffn, D.d_model, &l[8]),
+            w_up: Mat::gguf(D.ffn, D.d_model, &l[9]),
+            w_down: Mat::gguf(D.d_model, D.ffn, &l[10]),
         }).collect();
         let model = Model {
             dims: D,
-            embed: Mat { rows: D.vocab, cols: D.d_model, w: &b.embed },
+            embed: Mat::gguf(D.vocab, D.d_model, &b.embed),
             layers: &layers,
             final_norm: &b.final_norm,
             head: None,
@@ -474,19 +482,19 @@ fn qwen3_rejects_bad_models_and_inputs() {
     let rope = build::rope_neox_table(D.max_ctx, D.head_dim, THETA);
     let mk = |l: &[Vec<u8>; 11]| Layer {
         attn_norm: &l[0].clone().leak()[..],
-        wq: Mat { rows: 256, cols: 128, w: l[1].clone().leak() },
-        wk: Mat { rows: 128, cols: 128, w: l[2].clone().leak() },
-        wv: Mat { rows: 128, cols: 128, w: l[3].clone().leak() },
-        wo: Mat { rows: 128, cols: 256, w: l[4].clone().leak() },
+        wq: Mat::gguf(256, 128, l[1].clone().leak()),
+        wk: Mat::gguf(128, 128, l[2].clone().leak()),
+        wv: Mat::gguf(128, 128, l[3].clone().leak()),
+        wo: Mat::gguf(128, 256, l[4].clone().leak()),
         q_norm: l[5].clone().leak(),
         k_norm: l[6].clone().leak(),
         ffn_norm: l[7].clone().leak(),
-        w_gate: Mat { rows: 384, cols: 128, w: l[8].clone().leak() },
-        w_up: Mat { rows: 384, cols: 128, w: l[9].clone().leak() },
-        w_down: Mat { rows: 128, cols: 384, w: l[10].clone().leak() },
+        w_gate: Mat::gguf(384, 128, l[8].clone().leak()),
+        w_up: Mat::gguf(384, 128, l[9].clone().leak()),
+        w_down: Mat::gguf(128, 384, l[10].clone().leak()),
     };
     let layers: Vec<Layer> = b.layers.iter().map(mk).collect();
-    let good = Model { dims: D, embed: Mat { rows: 384, cols: 128, w: &b.embed }, layers: &layers, final_norm: &b.final_norm, head: None, rope: &rope, eps: 1e-6f32.to_bits(), kq_scale: 0.125f32.to_bits() };
+    let good = Model { dims: D, embed: Mat::gguf(384, 128, &b.embed), layers: &layers, final_norm: &b.final_norm, head: None, rope: &rope, eps: 1e-6f32.to_bits(), kq_scale: 0.125f32.to_bits() };
     good.check().unwrap();
     // A NaN gain, an infinite weight scale, a short matrix, a wrong rope table: all refused.
     let mut nan_norm = b.final_norm.clone();
@@ -496,6 +504,34 @@ fn qwen3_rejects_bad_models_and_inputs() {
     inf_emb[34 * 9..34 * 9 + 2].copy_from_slice(&0x7c00u16.to_le_bytes());
     assert!(Model { embed: Mat { w: &inf_emb, ..good.embed }, ..good }.check().is_err());
     assert!(Model { embed: Mat { w: &b.embed[..b.embed.len() - 1], ..good.embed }, ..good }.check().is_err());
+    // A wrong weight exponent (too small would let a block term outgrow the overflow proof) is refused.
+    assert!(Model { embed: Mat { wexp: good.embed.wexp - 1, ..good.embed }, ..good }.check().is_err());
+    assert!(Model { embed: Mat { wexp: good.embed.wexp + 1, ..good.embed }, ..good }.check().is_err());
+    // The packed model gives the same logits, bit for bit.
+    let packed: Vec<Vec<u8>> = layers.iter().flat_map(|l| [l.wq, l.wk, l.wv, l.wo, l.w_gate, l.w_up, l.w_down]).chain([good.embed]).map(|m| vec![0u8; q8::packed_bytes(m.rows, m.cols)]).collect();
+    let mut packed = packed.into_iter();
+    let mut pk = |m: &Mat| -> Mat<'static> { m.pack_into(packed.next().unwrap().leak()).unwrap() };
+    let players: Vec<Layer> = layers.iter().map(|l| Layer { wq: pk(&l.wq), wk: pk(&l.wk), wv: pk(&l.wv), wo: pk(&l.wo), w_gate: pk(&l.w_gate), w_up: pk(&l.w_up), w_down: pk(&l.w_down), ..*l }).collect();
+    let pmodel = Model { embed: pk(&good.embed), layers: &players, ..good };
+    pmodel.check().unwrap();
+    {
+        let (kvn, kvs) = D.kv_len();
+        let (a, i8n, scn, i32n) = Work::lens(&D);
+        let mut run = |m: &Model| -> Vec<i64> {
+            let (mut vals, mut shifts) = (vec![0i16; kvn], vec![0u8; kvs]);
+            let (mut ba, mut bb, mut bc, mut bd) = (vec![0i64; a], vec![0i8; i8n], vec![(0, 0); scn], vec![0i32; i32n]);
+            let mut w = Work::new(&D, &mut ba, &mut bb, &mut bc, &mut bd).unwrap();
+            let mut kv = Kv { vals: &mut vals, shifts: &mut shifts };
+            let mut all = vec![];
+            let mut t = 7usize;
+            for pos in 0..D.max_ctx {
+                t = m.step(Simd::SCALAR, t, pos, &mut kv, &mut w).unwrap();
+                all.extend_from_slice(w.logits);
+            }
+            all
+        };
+        assert_eq!(run(&good), run(&pmodel), "packed model logits differ");
+    }
     assert!(Model { rope: &rope[1..], ..good }.check().is_err());
     assert!(Model { eps: f32::INFINITY.to_bits(), ..good }.check().is_err());
     // Bad token, full context, wrong cache size.
@@ -520,4 +556,81 @@ fn qwen3_rejects_bad_models_and_inputs() {
     assert_eq!(n1, D.max_ctx - 3 + 1);
     let n3 = good.generate(Simd::SCALAR, &[5, 9, 200], &[out1[2]], &mut kv, &mut work, &mut out2).unwrap();
     assert!(n3 <= 3 && out2[n3 - 1] == out1[2]);
+}
+
+// ------------------------------------------------------------------ packed layout
+
+#[test]
+fn packed_layout_is_lossless_and_bit_identical() {
+    let mut r = Rng(31);
+    // Every binary16 scale that can occur (finite, both signs, subnormals, ±0) round-trips exactly.
+    let all: Vec<u16> = (0..=u16::MAX).filter(|b| (b >> 10) & 0x1f != 31).collect();
+    let cols = 64usize;
+    let rows = all.len().div_ceil(2);
+    let mut gguf = vec![0u8; rows * q8::row_bytes(cols)];
+    for (i, blk) in gguf.chunks_exact_mut(34).enumerate() {
+        blk[..2].copy_from_slice(&all.get(i).copied().unwrap_or(0).to_le_bytes());
+        for q in blk[2..].iter_mut() {
+            *q = r.next() as u8;
+        }
+    }
+    let mut packed = vec![0u8; q8::packed_bytes(rows, cols)];
+    assert!(q8::pack(&gguf, rows, cols, &mut packed));
+    assert!(q8::packed_valid(&packed, rows, cols));
+    let mut back = vec![0u8; q8::row_bytes(cols)];
+    for row in 0..rows {
+        assert!(q8::unpack_row(&packed, rows, cols, row, &mut back));
+        assert_eq!(back, gguf[row * back.len()..(row + 1) * back.len()], "row {row}");
+    }
+    // Packed and GGUF matvec are bit-identical, for odd row counts (padding) and every activation scale range.
+    let mut same = 0usize;
+    for case in 0..400 {
+        let cols = 32 * (1 + (r.next() % 48) as usize);
+        let rows = 1 + (r.next() % 13) as usize;
+        let w: Vec<f64> = (0..rows * cols).map(|_| r.normal() * [0.001, 0.05, 3.0][case % 3]).collect();
+        let gguf = quant_q8_0(&w);
+        let mut packed = vec![0u8; q8::packed_bytes(rows, cols)];
+        assert!(q8::pack(&gguf, rows, cols, &mut packed));
+        let x: Vec<i64> = (0..cols).map(|_| q16(r.normal() * [1e-3, 1.0, 50.0, 4000.0][case % 4])).collect();
+        let (mut xq, mut xs) = (vec![0i8; cols], vec![(0, 0); cols / 32]);
+        assert!(q8::quantize(&x, &mut xq, &mut xs));
+        let act = Act { q: &xq, scale: &xs };
+        let (mut a, mut b) = (vec![0i64; rows], vec![1i64; rows]);
+        let wexp = q8::wexp_gguf(&gguf);
+        assert_eq!(wexp, q8::wexp_packed(&packed));
+        assert!(q8::matvec(Simd::SCALAR, &gguf, rows, &act, wexp, |i, v| a[i] = v));
+        assert!(q8::matvec_packed(Simd::SCALAR, &packed, rows, &act, wexp, |i, v| b[i] = v));
+        assert_eq!(a, b, "case {case}");
+        for (i, v) in a.iter().enumerate() {
+            assert_eq!(Some(*v), q8::row_scalar(&gguf[i * q8::row_bytes(cols)..(i + 1) * q8::row_bytes(cols)], &act, wexp));
+        }
+        // Embedding lookups agree too.
+        let (mut e1, mut e2) = (vec![0i64; cols], vec![0i64; cols]);
+        let rr = (r.next() as usize) % rows;
+        assert!(q8::dequant_row(&gguf[rr * q8::row_bytes(cols)..(rr + 1) * q8::row_bytes(cols)], 16, &mut e1));
+        assert!(q8::packed_dequant_row(&packed, rows, rr, 16, &mut e2));
+        assert_eq!(e1, e2);
+        same += rows;
+    }
+    // Refusals: infinite scale, non-canonical packed scales, wrong lengths.
+    let mut bad = gguf_one_row(0x7c00);
+    assert!(!q8::pack(&bad, 1, 32, &mut vec![0u8; 144]));
+    bad = gguf_one_row(0x3c00);
+    let mut p = vec![0u8; 144];
+    assert!(q8::pack(&bad, 1, 32, &mut p));
+    for (mw, nsw) in [(2048i16, -10i16), (500, -10), (1500, 6), (1500, -25), (0, -3)] {
+        let mut x = p.clone();
+        x[128..130].copy_from_slice(&mw.to_le_bytes());
+        x[136..138].copy_from_slice(&nsw.to_le_bytes());
+        assert!(!q8::packed_valid(&x, 1, 32), "({mw}, {nsw}) accepted");
+        assert!(!q8::unpack_row(&x, 1, 32, 0, &mut vec![0u8; 34]));
+    }
+    assert!(!q8::packed_valid(&p[..143], 1, 32));
+    println!("packed layout: all 63,488 finite binary16 scales round-trip byte-exact; {same} rows bit-identical to the GGUF layout");
+}
+
+fn gguf_one_row(bits: u16) -> Vec<u8> {
+    let mut v = bits.to_le_bytes().to_vec();
+    v.extend_from_slice(&[3u8; 32]);
+    v
 }

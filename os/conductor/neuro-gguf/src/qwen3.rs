@@ -145,7 +145,7 @@ fn mat<'a>(t: Option<Tensor<'a>>, rows: usize, cols: usize) -> Result<Mat<'a>, B
     if t.ty != tt::Q8_0 || t.matrix() != Some((rows, cols)) {
         return Err(BindError::Tensor);
     }
-    Ok(Mat { rows, cols, w: t.data })
+    Ok(Mat::gguf(rows, cols, t.data))
 }
 
 fn norm<'a>(t: Option<Tensor<'a>>, n: usize) -> Result<&'a [u8], BindError> {

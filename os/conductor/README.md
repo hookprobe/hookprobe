@@ -145,8 +145,9 @@ activation outliers of real pretrained models.
 - **`neuro-kernels::q8`**: `Q8_0` rows in the GGUF block layout, byte for byte (34-byte blocks: binary16
   scale + 32 int8). The converter will copy these bytes, not re-quantise them, so the device runs the exact
   weights Neuro validated. Activations are quantised per block of 32 (`amax/127`), as llama.cpp's CPU
-  path does. The binary16 scales are decoded with integer operations. Accumulation is i128 and provably
-  cannot overflow. Scalar reference plus NEON + DotProd (SDOT).
+  path does. The binary16 scales are decoded with integer operations. Accumulation provably cannot
+  overflow (see "Packed `Q8_0` layout" for the grid that both layouts share). Scalar reference plus NEON +
+  DotProd (SDOT).
 - **`neuro-kernels::hp`**: 64-bit fixed point with 16 fraction bits for everything else. RMSNorm with
   binary32 gains and eps, NEOX ("rotate half") RoPE from a Q30 table, `exp` (2^(k/256) table built at
   compile time by integer square roots, linear interpolation), fused SwiGLU, and attention over an
@@ -201,8 +202,8 @@ The big step is alignment, not the fourth row. GGUF blocks are 34 bytes, and und
 compiler splits each 16-byte load into 16 byte loads. `neon-proof` now sets up an identity MMU (device
 memory for the UART, normal cacheable memory for RAM, `SCTLR_EL1.A` clear), as heqk does for EL0 servers,
 and builds without `strict-align`. KR-1 now asks heqk to clear A explicitly (`KERNEL_REQUESTS.md`). What
-remains per row-block is about 6 instructions of dot product and about 20 of scale arithmetic. Cutting
-that further would need a repacked layout, which would give up running the GGUF bytes as they are.
+remains per row-block is about 6 instructions of dot product and about 20 of scale arithmetic; the packed
+layout below removes most of the latter.
 
 Rough estimate, not a measurement: Qwen3-1.7B is 1.7 × 10⁹ multiply-adds per token, about 2 × 10⁹
 instructions at 1.17. On one A76 core at 2.4 GHz that is about 0.3–0.4 s per token, in the same range as
@@ -213,6 +214,59 @@ reading the 1.8 GB of weights once per token from LPDDR4X. The real number needs
 | Bare metal, emulated A76: 4-row kernel scalar == NEON on 1,676 groups; `matvec` on 3,000 matrices of 1–7 rows (4-row groups plus remainder), extreme and realistic scales, equal to the 1-row reference; a short matrix refused | pass |
 | Whole Qwen3 decoder through the new `matvec`, scalar == NEON, every logit | pass |
 | Real Qwen3-1.7B smoke test unchanged (same logits to the printed digit; "Paris") | pass |
+
+### Packed `Q8_0` layout (lossless)
+
+The scale arithmetic was the remaining cost, so weights can now also run from a packed layout
+(`q8::pack`):
+- **Layout:** rows in groups of four. Per group and per 32 columns there is one 144-byte record: the four
+  rows' int8 weights (128 bytes), then the four binary16 scales pre-decoded to an integer mantissa and
+  exponent (`i16` each).
+- **Aligned:** records are 16-byte aligned, so every load is aligned and the kernel also works on
+  strict-alignment targets.
+- **Cheap scale arithmetic:** for four rows it is about ten vector instructions. These are an integer
+  multiply, two widening multiplies, and a rounding shift (`SRSHL`) into two i64 accumulator vectors.
+
+**Lossless and checkable.** Mantissa and exponent represent each binary16 scale exactly (−0 included).
+`q8::unpack_row` rebuilds the GGUF bytes of any row exactly. So a device can keep only the packed form and
+still verify it against the GGUF file's hash. Packing is the load-time step: `Mat::pack_into`, `no_std`,
+no allocation. Size: +5.9 %.
+
+**One arithmetic for both layouts.** The packed kernel needed a 64-bit accumulator. So both layouts now
+compute each block term exactly and place it, with one rounding, on a per-call grid
+`2^-(L − ce_max − wexp)`. Here `L = 16 − ⌈log2(blocks)⌉`, and `wexp` is the matrix's largest weight
+exponent: computed once, stored with the matrix, verified by `check()`. Every term is below `2^(46+L)`
+and every row sum below `2^62`, so nothing can overflow for any input. The GGUF and packed layouts give
+the same numbers bit for bit.
+
+Accuracy: on 3,000 GEMV rows (activations from 10⁻³ to 6×10⁵ with outlier channels), the worst error
+against f64 is 0.500 output LSB. That is only the final rounding to 2^-16. Sizing the grid from the
+matrix's real weight exponent matters: a first version sized it from the largest possible binary16 scale
+and lost up to 2,883 LSB on large outputs. That was caught by the test and fixed before commit.
+
+Executed instructions per multiply-add, same 512×2048 benchmark (`qemu -icount`, emulated Cortex-A76;
+instructions, not cycles):
+
+| Kernel | Instructions per multiply-add |
+|---|---|
+| scalar reference | 9.47 |
+| NEON 1-row, GGUF layout | 1.62 |
+| NEON 4-row, GGUF layout | 1.02 |
+| **NEON 4-row, packed layout** | **0.37** |
+
+That is about 12 instructions per four rows × 32 columns, scales included. With 0.37 instructions per
+multiply-add, Qwen3-1.7B needs about 0.6 × 10⁹ instructions per token. On an A76 that is no longer the
+limit: reading about 1.9 GB of weights per token is. Rough estimate, not a measurement: about
+0.2–0.3 s/token, set by LPDDR4X bandwidth.
+
+| Gate | Result |
+|---|---|
+| All 63,488 finite binary16 scales (both signs, subnormals, ±0) pack and unpack byte-exact | pass |
+| Packed `matvec` == GGUF `matvec` bit for bit: 2,890 rows over 400 random matrices of 1–13 rows (padding), embedding lookups equal | pass |
+| Refused: infinite scale (pack), non-canonical packed scales (5 kinds), short packed matrix, a `wexp` off by ±1 | pass |
+| Whole Qwen3-shaped model: packed logits == GGUF logits at every step (host) | pass |
+| **Bare metal, emulated A76**: packed (scalar and NEON) == GGUF on 3,000 matrices; whole Qwen3 decoder, GGUF scalar == GGUF NEON == packed NEON, every logit, 32 positions | pass |
+| **Real Qwen3-1.7B**: 1.83 GB packed into 1.94 GB in 2.5 s; every row of every matrix unpacks to the exact GGUF bytes; packed logits == GGUF logits at all 25 steps ("Paris") | pass |
 
 ## The Qwen tokenizer
 
