@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 # ADR 0069 — G19: replay protection for the first handshake message
 
-**Status:** proposed (2026-11-23) — needs operator decision (wire change, both sides)
+**Status:** accepted (operator, 2026-11-24): option A, the monotonic counter. Implemented in `g19ctr.rs` / `controlplane.rs` (device) and `superpop` `pop.rs` (`CtrState`, `--ctr-state`).
 
 ## Context
 
@@ -21,12 +21,12 @@ What has been done (#1498, deployed):
 This closes the cheap version of the attack. It does not survive a PoP restart (the replay set is in RAM), and an
 attacker holding many recorded msg1s can outlast the 4,096-entry window.
 
-## Decision (proposed)
+## Decision
 
 Add a **monotonic initiator counter** to msg1's payload. The PoP refuses any msg1 whose counter is not higher than
 the highest it has accepted for that device, and keeps that high-water mark on disk.
 
-- **Payload:** `fp (8 B) ‖ ctr (8 B, LE u64)`. The counter is inside the encrypted, authenticated part of msg1, so it
+- **Payload:** `fp (32 B, sha256 of the device pk) ‖ ctr (8 B, LE u64)`. The counter is inside the encrypted, authenticated part of msg1, so it
   cannot be altered.
 - **Device:** a 64-bit counter in the sealed store (one record, written before each new msg1). Retransmits of the same
   msg1 keep the same counter. Each new handshake (a fresh ephemeral) takes counter + 1. Cost: one sealed eMMC write per
@@ -60,3 +60,21 @@ the highest it has accepted for that device, and keeps that high-water mark on d
 - QEMU (E1): replay of a recorded msg1 after a PoP restart → refused; a fresh handshake → accepted; old-format device
   → accepted until it sends a counter, then the old format is refused for it.
 - S1 / E2 (QEMU → real PoP) and CM5 (E3) with the existing harnesses.
+
+## Implementation notes (2026-11-24)
+
+- **Device:** the counter lives in its own DataVolume region `G19Ctr` (sectors 2056..2058 of the partition), two
+  records `HQG19C1\0 | ctr | sha256` written alternately (slot = ctr % 2). The newest valid one wins, so a torn write
+  leaves the previous value. `g19ctr::next()` writes ctr + 1 and reads it back before the msg1 is built; if that
+  fails, no msg1 is sent and the control plane retries with its usual backoff. Retransmits reuse the pre-built msg1
+  datagrams, so they carry the same counter. The MSSP enrollment control plane (no counter source) keeps the old
+  payload. Self-tests: `[P-g19ctr]` (record layer) and `[P19-controlplane]` (the real initiator carries `fp ‖ ctr`
+  and sends nothing when the counter is not durable).
+- **PoP:** marks are keyed by fingerprint. The check comes after authentication and before msg2. The mark is raised
+  and made durable after msg2 is built and before it is sent. If it can't be saved, the handshake is refused and the
+  RAM mark is rolled back. New stats: `hs_stale_ctr`, `hs_legacy`, `hs_ctr_unsaved`.
+- **Downgrade note:** once a device has sent a counter, an image without this change (an OTA rollback to an older
+  build) can no longer bring the tunnel up with that PoP. That is the intended no-downgrade rule; recovery is the
+  documented PoP-side mark reset.
+- **Ship order:** PoP first (it accepts both forms), then device images.
+

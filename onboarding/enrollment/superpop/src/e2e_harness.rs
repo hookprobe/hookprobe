@@ -323,6 +323,7 @@ pub fn scenario() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pop;
     use crate::securechannel::InitiatorPending;
 
     /// One device msg1, chunked exactly as the device sends it, plus its pending initiator state.
@@ -434,6 +435,117 @@ mod tests {
         assert_eq!(pop.session_count(), 1, "one live session per device");
         assert!(assigned(&mut pop, &mut d2, data, 5_100), "the new session works");
         assert!(!assigned(&mut pop, &mut d1, data, 5_200), "the replaced session is gone");
+    }
+
+    /// ADR 0069: one device msg1 with payload `fp ‖ ctr` (None = the old `fp`-only payload).
+    fn msg1_ctr(kp: &KeyPair, ctr: Option<u64>) -> (Vec<Vec<u8>>, InitiatorPending) {
+        let mut ent = OsEntropy;
+        let rnd = InitiatorRandomness::from_entropy(&mut ent).unwrap();
+        let mut pl = sha256::digest(kp.pk.as_ref()).to_vec();
+        if let Some(c) = ctr {
+            pl.extend_from_slice(&c.to_le_bytes());
+        }
+        let (msg1, pend) = initiator_write_msg1(kp, &responder().public(), &rnd, &pl).unwrap();
+        let mut chunks = Vec::new();
+        hs_chunk(msg1.as_slice(), |c| {
+            chunks.push(c.to_vec());
+            true
+        });
+        (chunks, pend)
+    }
+
+    fn tmp_state(tag: &str) -> String {
+        let p = std::env::temp_dir().join(format!("superpop-ctr-{}-{tag}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        p.to_string_lossy().into_owned()
+    }
+
+    /// ADR 0069 E1: a msg1 recorded off the wire and replayed after a PoP RESTART is refused (the RAM replay set
+    /// is gone, the durable counter mark is not); a fresh handshake with the next counter is accepted.
+    #[test]
+    fn replay_after_pop_restart_is_refused_by_the_counter() {
+        let path = tmp_state("restart");
+        let a = dev_kp(b"G19-TEST-device-A");
+        let fp = sha256::digest(a.pk.as_ref());
+        let from = addr("10.0.0.5:7654");
+        let (rec, _p) = msg1_ctr(&a, Some(1));
+        {
+            let mut pop = new_pop().with_ctr_state(pop::CtrState::load(&path).unwrap());
+            assert!(!feed(&mut pop, from, &rec, 1_000).is_empty());
+            assert_eq!(pop.stats.handshakes_ok, 1);
+            assert_eq!(pop.ctr_mark(&fp), Some(1));
+        }
+        // restart: a new process loads the marks from disk
+        let mut pop = new_pop().with_ctr_state(pop::CtrState::load(&path).unwrap());
+        assert_eq!(pop.ctr_mark(&fp), Some(1), "the mark survived the restart");
+        assert!(feed(&mut pop, addr("203.0.113.9:7654"), &rec, 100_000).is_empty(), "the replay gets silence");
+        assert_eq!(pop.stats.hs_stale_ctr, 1);
+        assert_eq!(pop.stats.handshakes_ok, 0, "the replay created no session");
+        let (fresh, pend) = msg1_ctr(&a, Some(2));
+        let outs = feed(&mut pop, from, &fresh, 100_100);
+        let mut dev = complete(pend, &outs);
+        assert!(assigned(&mut pop, &mut dev, addr("10.0.0.5:40001"), 100_200), "the next counter is accepted");
+        assert_eq!(pop.ctr_mark(&fp), Some(2));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// ADR 0069 migration: the old payload is accepted until the device has once sent a counter; from then on it
+    /// is refused (no downgrade). Lower and equal counters are refused.
+    #[test]
+    fn old_format_until_first_counter_then_strictly_increasing() {
+        let mut pop = new_pop();
+        let a = dev_kp(b"G19-TEST-device-A");
+        let from = addr("10.0.0.5:7654");
+        let (old1, _) = msg1_ctr(&a, None);
+        assert!(!feed(&mut pop, from, &old1, 1_000).is_empty(), "an old image still connects");
+        assert_eq!(pop.stats.hs_legacy, 1);
+        let (c5, _) = msg1_ctr(&a, Some(5));
+        assert!(!feed(&mut pop, from, &c5, 2_000).is_empty(), "the first counter is accepted");
+        let (old2, _) = msg1_ctr(&a, None);
+        assert!(feed(&mut pop, from, &old2, 3_000).is_empty(), "no downgrade once a counter was seen");
+        let (c5b, _) = msg1_ctr(&a, Some(5));
+        assert!(feed(&mut pop, from, &c5b, 4_000).is_empty(), "an equal counter (new ephemeral) is refused");
+        let (c4, _) = msg1_ctr(&a, Some(4));
+        assert!(feed(&mut pop, addr("10.0.0.6:7654"), &c4, 5_000).is_empty(), "a lower counter is refused");
+        assert_eq!(pop.stats.hs_stale_ctr, 3);
+        assert_eq!(pop.stats.handshakes_ok, 2);
+        // an unknown payload length is a refusal, not a counter
+        let mut ent = OsEntropy;
+        let rnd = InitiatorRandomness::from_entropy(&mut ent).unwrap();
+        let mut pl = sha256::digest(a.pk.as_ref()).to_vec();
+        pl.extend_from_slice(&[1, 2, 3]);
+        let (m, _) = initiator_write_msg1(&a, &responder().public(), &rnd, &pl).unwrap();
+        let mut ch = Vec::new();
+        hs_chunk(m.as_slice(), |c| {
+            ch.push(c.to_vec());
+            true
+        });
+        assert!(feed(&mut pop, addr("10.0.0.7:7654"), &ch, 6_000).is_empty());
+        assert_eq!(pop.stats.handshakes_refused, 1);
+    }
+
+    /// ADR 0069: a mark that cannot be written durably refuses the handshake (no msg2, no session).
+    #[test]
+    fn unsaved_counter_mark_refuses_the_handshake() {
+        let path = std::env::temp_dir().join(format!("superpop-no-such-dir-{}", std::process::id())).join("ctr.txt");
+        let st = pop::CtrState::load(&path.to_string_lossy()).unwrap(); // missing file = no marks yet
+        let mut pop = new_pop().with_ctr_state(st);
+        let a = dev_kp(b"G19-TEST-device-A");
+        let (c1, _) = msg1_ctr(&a, Some(1));
+        assert!(feed(&mut pop, addr("10.0.0.5:7654"), &c1, 1_000).is_empty());
+        assert_eq!(pop.stats.hs_ctr_unsaved, 1);
+        assert_eq!(pop.session_count(), 0);
+        assert_eq!(pop.ctr_mark(&sha256::digest(a.pk.as_ref())), None, "the RAM mark was rolled back");
+    }
+
+    #[test]
+    fn malformed_counter_state_is_refused_at_load() {
+        let path = tmp_state("bad");
+        std::fs::write(&path, "nothex 5\n").unwrap();
+        assert!(pop::CtrState::load(&path).is_err());
+        std::fs::write(&path, format!("{} notanumber\n", "ab".repeat(32))).unwrap();
+        assert!(pop::CtrState::load(&path).is_err());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
