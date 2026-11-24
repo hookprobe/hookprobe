@@ -1,4 +1,4 @@
-# Two kernel requests for the unified runtime
+# Kernel requests for the unified runtime (KR-1 to KR-3)
 
 > **Status: requests to HomePods, 2026-11-24. They change nothing.** `os/kernel/**` is HomePods-owned and
 > was not modified. Evidence is cited against `main` @ `1ce96d52`. Published by operator decision under
@@ -15,7 +15,30 @@ autonomous execution already are (or are built and waiting to be wired). Two thi
 | Applications | the EL0 servers are compiled into the image; nothing can be added, replaced or removed at run time | **KR-2** |
 | Delegated AI (Conductor C1, ADR 0071) | the delegation signer, its sealed counter and epoch, leases and the ledger exist only as a tested library; the kernel has none of them | **KR-3** |
 
-Neither request brings in Linux, POSIX, a filesystem, a dynamic linker or an interpreter. Both keep
+### HomePods' response (2026-11-24, hookprobe/hookprobe#1580, `docs/design/heqk-conductor-kernel-requests-response.md`)
+
+| Request | HomePods | What it means here |
+|---|---|---|
+| **R0** | Answered from the CM5's metal `[T0-inv]` inventory: Cortex-A76 r4p1, FP and AdvSIMD (with FP16), **DotProd = 1**, SVE = 0. `CPTR_EL2.TFP`, `CPACR_EL1.FPEN`, `SCTLR_EL1.A` and `HCR_EL2.E2H` are now read by the `t0inv` build. One USB-flashed boot after the 72 h soak reads them | The engine's SDOT kernels (`neuro-kernels`, `neon-proof`) match the silicon. No SVE path is needed |
+| **KR-1** | Accepted in principle as a proposed ADR. It takes this request's design, plus two hard rules: a second FP/SIMD grant fails the build until registers are scrubbed when the owner changes, and `SCTLR_EL1.A` is cleared explicitly. It needs the operator's decision and the G46 review. Implementation starts after acceptance, and after the soak | It matches the request, including the alignment rule (Q8_0's 34-byte blocks) |
+| **KR-2** | Agreed in this request's order, (a) to (d). The signing policy (vendor root only, or owner-signed third party) is the operator's decision, together with Neuro R5 | It needs an operator decision |
+| `el0-harness` behind a feature | Fine, as a bench feature with the size gate and no shipping change, **on request** | **Requested** (below) |
+| **KR-3** | Not yet seen: it was written after their response (hookprobe/hookprobe#1579) | Waiting for their answer |
+
+**Number clash.** HomePods' KR-1 ADR is filed as `0071-el0-fpsimd-grant.md`, but `main` already has ADR 0071
+(the Conductor, merged in hookprobe/hookprobe#1578). Their ADR needs the next free number, **0072**. The
+references to "the KR-1 ADR" in this file are meant to stay valid whatever number it gets.
+
+**Request: the `el0-harness` bench feature.** Add `os/conductor/el0-harness` to `kernel/build.rs` behind a bench
+feature, as `neuro` was added:
+- no shipping change;
+- the size gate (`.text` 82,716 B, `.bss` 52,392 B, `.data` 0);
+- its address range assigned.
+
+It needs nothing from KR-1, KR-2 or KR-3: zero FP/SIMD instructions and one syscall. It is the first Conductor
+code to run on heqk, and the first place to time Ed25519 verification at opt-level "z" on the A76.
+
+None of the requests brings in Linux, POSIX, a filesystem, a dynamic linker or an interpreter. All keep
 tensor maths and application logic out of EL1.
 
 ---
@@ -56,7 +79,7 @@ tensor maths and application logic out of EL1.
 Not asked: FP in EL1; lazy trapping schemes; SVE/SME (absent on Cortex-A76); any change to the 33 other
 frame words.
 
-### Readouts needed first (Neuro `12` R0, still unpublished)
+### Readouts needed first (Neuro `12` R0: ID registers answered by HomePods on metal, control registers read by `t0inv` after the soak)
 
 `CPACR_EL1` and `CPTR_EL2` as firmware leaves them; `ID_AA64ISAR0_EL1` (DotProd) and
 `ID_AA64PFR0_EL1` (FP, AdvSIMD). `hboot/src/t0inv.rs` already has the `mrs` reader; these are a few more
@@ -261,8 +284,9 @@ a P1 heqk worker on the owner's LAN.
 
 ## Order and what needs no kernel change meanwhile
 
-1. R0 readouts (hours of work; unblock KR-1's design).
-2. KR-1.
+1. R0 readouts: ID registers done (DotProd = 1, SVE = 0); control registers after the 72 h soak (one `t0inv` boot).
+   Meanwhile: the `el0-harness` bench feature.
+2. KR-1: the operator accepts the ADR (to be renumbered 0072), then the QEMU gates, the metal gates and the G46 review.
 3. KR-2 (a) and (b).
 4. ADR 0061 D1–D4, then KR-2 (c)–(d) and Neuro R3–R6 (model region, loader, admission).
 5. KR-3 is independent of KR-1 and KR-2, and can go in parallel: it unblocks Conductor C1.

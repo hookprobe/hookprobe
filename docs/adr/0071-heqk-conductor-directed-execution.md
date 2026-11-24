@@ -31,7 +31,7 @@ Everything from C1 on is awaiting review.
 - [0067](0067-heqk-efficiency-programme-and-ip-hygiene.md): D12 record and D13 counsel.
 - [0069](0069-g19-msg1-replay-protection.md): the counter pattern reused for anti-replay.
 - Neuro docs 30, 39–42, `tools/neuro-research/eval/run_eval.py`.
-- Kernel requests KR-1 and KR-2 (`os/conductor/KERNEL_REQUESTS.md`).
+- Kernel requests KR-1, KR-2 and KR-3 (`os/conductor/KERNEL_REQUESTS.md`). HomePods accepted KR-1 in principle as a proposed ADR (hookprobe/hookprobe#1580, to be renumbered 0072 since this ADR holds 0071), agreed KR-2's order, and answered R0 from metal: Cortex-A76 r4p1, DotProd = 1, SVE = 0.
 
 ## Context
 
