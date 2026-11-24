@@ -1,7 +1,7 @@
 # os/conductor — HookProbe Conductor, C0 spike
 
-> **Status: C0, restricted research spike (approved 2026-11-24).** Not wired into `os/kernel`. Not for
-> publication before the ADR 0067 D12 decision (file first / publish defensively / keep unpublished).
+> **Status: C0, restricted research spike (approved 2026-11-24).** Not wired into `os/kernel`. Published by
+> operator decision under ADR 0067 D12 (2026-11-24; see the D12 record in ADR 0067).
 > Wire formats are **prototypes** built from primitives heqk already ships; they are not a production
 > protocol. Design: *heqk Conductor* design review v2/v3 (private artifact).
 

@@ -8,8 +8,8 @@
 //! socket and allocates nothing.
 //!
 //! Status: C0 spike (design review v2). The wire formats are PROTOTYPES built from primitives heqk already
-//! ships (SHA-256, Ed25519). They are not a production protocol and are not for publication before the
-//! ADR 0067 D12 decision.
+//! ships (SHA-256, Ed25519). They are not a production protocol. Published by operator decision under
+//! ADR 0067 D12 (2026-11-24).
 #![no_std]
 #![forbid(unsafe_code)]
 #![deny(

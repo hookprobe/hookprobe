@@ -1,8 +1,8 @@
 # Two kernel requests for the unified runtime
 
 > **Status: requests to HomePods, 2026-11-24. They change nothing.** `os/kernel/**` is HomePods-owned and
-> was not modified. Evidence is cited against `main` @ `1ce96d52`. Unpublished: this file is on a local
-> branch pending the ADR 0067 D12 decision. Format follows `docs/research/neuro/12` (requests R0–R9); KR-1
+> was not modified. Evidence is cited against `main` @ `1ce96d52`. Published by operator decision under
+> ADR 0067 D12 (2026-11-24). Format follows `docs/research/neuro/12` (requests R0–R9); KR-1
 > is that document's R2, restated with current evidence and gates. KR-2 is new.
 
 The target: *a unified, AI-native operating runtime where neural computation, networking, security,
