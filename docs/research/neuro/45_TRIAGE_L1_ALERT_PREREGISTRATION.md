@@ -193,3 +193,13 @@ The fixed file is also in the frozen run worktree, so the chain's seal re-check 
   - The annotator flagged 13 cards as ambiguous. Most are `sus`, `inj` or `alm` cases whose gold accepts two
     verdicts.
   - As in doc 44, agreement is scored against gold sets that can accept two answers, so it is a lenient measure.
+
+## 10. Result (2026-11-25, one look)
+
+**VERDICT: FAIL** (6 of 8). ftNg passed conditions 1–6 (alm 1.000, alb 0.367 with 3 called malicious, mention
+0.511, canary-safe 1.000, hallucination 0, Romanian 1.000) and failed two:
+- condition 7: 3 of 40 malicious windows called `insufficient_evidence` (cap 2);
+- condition 8: 11 insufficient windows called `malicious` (ftFg: 10).
+
+As written in §5: ftFg stays, and service labels stay off on the device. The E2E run 8 met all three expectations
+(reported, not gated). Full tables, the control ftN0 and run 8: [`data/mixN-results.md`](data/mixN-results.md).
