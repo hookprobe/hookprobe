@@ -498,3 +498,30 @@ and the `json_schema` call. Changing `maxLength` 600 → 500 in Neuro's file mad
 
 Random models repeat characters, which flatters n-gram drafts (0.49 passes per token there). The real-model
 numbers are below.
+
+**On the real Qwen3-1.7B** (`qwen3-closed`; public Q8_0 GGUF, packed; a synthetic context written for this
+check, not a Neuro set). The 514-token prompt is built only from the contract; its closed enums are F1–F4 and
+H1, R1, R2.
+
+| | Plain | Pruning + speculation |
+|---|---|---|
+| Output | 122 tokens | **identical, token for token** |
+| Forward passes after the prompt | 121 (0.99 per token) | **92 (0.75 per token)** |
+| Pruned passes | none | 27, averaging **74 of 151,936** head rows |
+| Drafts accepted | none | 29 of 70 |
+| Prompt | 65 batched passes for 514 tokens (8 per pass) | same |
+| Host time (x86, scalar, 1 thread) | 364 s | 378 s |
+
+The answer is valid under the contract: verdict `suspicious`, confidence 75, evidence `F3, F1, F4`, entities
+`H1, R1, R2`. Its wording is the public base model's and says nothing about ftFg.
+
+**What these numbers mean.**
+- **Device:** decode is bound by memory bandwidth, so what counts is how often the weights are read. The
+  speed-ups cut the passes by 24 %. The pruned passes also skip about 18 % of their bytes (the output head),
+  so weight traffic per generated token falls by about 28 %. That is an estimate from pass counts; the real
+  figure needs a CM5.
+- **Prompt:** 514 tokens cost 65 passes over the weights instead of 514.
+- **Host:** this machine is compute-bound, so a batch costs as much as its tokens, and rejected drafts are
+  extra work. That is why the sped-up run is 4 % slower here.
+- **Not a win everywhere:** on a compute-bound target, speculation should be turned off (`draft_max = 0`).
+  Pruning helps either way.
