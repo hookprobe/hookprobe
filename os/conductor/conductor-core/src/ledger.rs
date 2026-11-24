@@ -19,6 +19,8 @@ pub enum Kind {
     Aborted = 9,
     SloMiss = 10,
     LeaseEnded = 11,
+    QuoteDeclined = 12,
+    QuoteAccepted = 13,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

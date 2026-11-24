@@ -217,7 +217,9 @@ fn signer_does_not_trust_the_harness() {
 #[test]
 fn unpaired_worker_aborts_before_anything_is_sent() {
     let mut k = Kernel::new(policy_p1(), Tier::P1);
-    k.signer.pairings[0] = None;
+    // Revocation: the owner signs a newer revision that has already lapsed.
+    let (rec, sig) = owner_pairing(Tier::P1, public_key(&WORKER_SEED), 0, 2);
+    k.signer.install_pairing(&rec, &sig).unwrap();
     let mut w = MockWorker::new(Tier::P1, vec![ANSWER_DESC.into()]);
     let mut h = Box::new(Harness::new());
     let r = k.run(&mut h, &JobBuilder::default().encode(), env_with(policy_p1(), public_key(&WORKER_SEED), Tier::P1), &mut w);

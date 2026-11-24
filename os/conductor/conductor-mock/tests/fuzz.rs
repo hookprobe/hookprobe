@@ -86,6 +86,9 @@ fn decoders_never_panic() {
         let _ = json::parse(&b);
         let _ = job.decode_into(&b);
         let _ = abi::decode_env(&b);
+        let _ = abi::decode_event(&b);
+        let _ = frame::QuoteRequest::decode(&b);
+        let _ = frame::Quote::open(&b, &dpk);
     }
 }
 
@@ -101,7 +104,9 @@ fn altered_worker_frames_are_never_verified() {
         let long = format!(r#"{{"answer":{{"verdict":"benign","cites":["ev:1"],"summary":"{}"}}}}"#, "z".repeat(i % 1500));
         let mut w = MockWorker::new(Tier::P1, vec![r#"{"tool":"evidence.get","args":{"id":"ev:2"}}"#.into(), long]);
         let mut h = Box::new(Harness::new());
-        let r = k.run(&mut h, &JobBuilder::default().encode(), env_with(policy_p1(), public_key(&WORKER_SEED), Tier::P1), &mut w);
+        // Every other run uses SLO admission, so quote frames are mutated too.
+        let job = if i % 2 == 0 { JobBuilder::default() } else { JobBuilder { slo_ttft: 5_000, ..Default::default() } };
+        let r = k.run(&mut h, &job.encode(), env_with(policy_p1(), public_key(&WORKER_SEED), Tier::P1), &mut w);
         assert_eq!(r.leases_started, r.leases_ended, "lease invariant, iteration {i}");
         if k.mutated {
             caught += 1;

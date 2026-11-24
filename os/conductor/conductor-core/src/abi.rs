@@ -118,6 +118,10 @@ pub fn encode_output(acts: &Actions, h: &Harness, out: &mut [u8]) -> Option<usiz
                 w.u8(1)?;
                 w.u8(tier as u8)?;
             }
+            Action::CloseSession { tier } => {
+                w.u8(9)?;
+                w.u8(tier as u8)?;
+            }
             Action::Sign => {
                 w.u8(2)?;
                 sign = true;

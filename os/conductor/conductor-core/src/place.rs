@@ -52,9 +52,16 @@ pub enum PlaceRefusal {
     NoWorkerAvailable = 3,
     /// The only suitable worker is busy and the job asked for idle-only.
     WorkerBusy = 4,
+    /// Every suitable worker quoted that it cannot meet the job's time targets (or did not answer).
+    NoWorkerMeetsSlo = 5,
 }
 
 pub fn place(required_mask: u8, energy_policy: u8, env: &Env) -> Result<Tier, PlaceRefusal> {
+    place_excluding(required_mask, energy_policy, env, 0)
+}
+
+/// As [`place`], skipping tiers in `exclude` (tiers whose worker already declined this job's SLO).
+pub fn place_excluding(required_mask: u8, energy_policy: u8, env: &Env, exclude: u8) -> Result<Tier, PlaceRefusal> {
     if !env.policy.remote_enabled {
         return Err(PlaceRefusal::RemoteDisabled);
     }
@@ -65,6 +72,9 @@ pub fn place(required_mask: u8, energy_policy: u8, env: &Env) -> Result<Tier, Pl
             continue;
         }
         data_ok = true;
+        if exclude & t.bit() != 0 {
+            continue;
+        }
         let Some(w) = env.worker(t) else { continue };
         if !w.available {
             continue;
@@ -77,6 +87,8 @@ pub fn place(required_mask: u8, energy_policy: u8, env: &Env) -> Result<Tier, Pl
     }
     Err(if !data_ok {
         PlaceRefusal::NoTierForData
+    } else if exclude != 0 {
+        PlaceRefusal::NoWorkerMeetsSlo
     } else if busy {
         PlaceRefusal::WorkerBusy
     } else {

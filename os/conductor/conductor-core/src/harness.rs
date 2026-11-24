@@ -19,7 +19,7 @@ use crate::job::{inert_text, JobSpec};
 use crate::json::{self, JsonError, ModelOutput};
 use crate::ledger::{Kind, Record};
 use crate::limits::*;
-use crate::place::{place, Env, PlaceRefusal};
+use crate::place::{place_excluding, Env, PlaceRefusal};
 use crate::tools::{authorize, ToolCall, ToolRefusal};
 use crate::verify::{verify, Verification};
 
@@ -83,6 +83,8 @@ pub enum Outcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     OpenSession { tier: Tier },
+    /// Close the session to a worker that declined the job (no data was sent to it).
+    CloseSession { tier: Tier },
     /// Ask the signer to sign [`Harness::sign_request`].
     Sign,
     /// Close the data-plane paths for the worker and forget the session's lease. Emitted exactly once per
@@ -136,6 +138,8 @@ enum State {
     Done,
     Loaded,
     AwaitSession,
+    /// SLO admission: a data-free quote request was sent; waiting for the worker's signed quote.
+    AwaitQuote,
     AwaitSign,
     Streaming,
     AwaitTool,
@@ -176,7 +180,16 @@ pub struct Harness {
     pending_kind: u8,
     pending_ev: u16,
     pending_hours: u8,
+    /// Tiers whose worker declined this job's SLO.
+    declined: u8,
+    quote_nonce: [u8; 16],
+    quote_sent_ms: u64,
+    /// The accepted quote's predicted TTFT (0 = no quote), to record a broken promise.
+    quoted_ttft_ms: u32,
 }
+
+/// How long a worker has to answer a quote request.
+pub const QUOTE_TIMEOUT_MS: u64 = 2_000;
 
 impl Harness {
     pub const fn new() -> Self {
@@ -223,6 +236,10 @@ impl Harness {
             pending_kind: 0,
             pending_ev: 0,
             pending_hours: 0,
+            declined: 0,
+            quote_nonce: [0; 16],
+            quote_sent_ms: 0,
+            quoted_ttft_ms: 0,
         }
     }
 
@@ -264,6 +281,10 @@ impl Harness {
         self.first_chunk = false;
         self.lease = false;
         self.pending_kind = 0;
+        self.declined = 0;
+        self.quote_nonce = [0; 16];
+        self.quote_sent_ms = 0;
+        self.quoted_ttft_ms = 0;
     }
 
     fn tier(&self) -> Option<Tier> {
@@ -351,7 +372,17 @@ impl Harness {
                     return self.finish(out, Outcome::Aborted(Abort::HostProtocol));
                 }
                 self.session = binding;
-                self.begin_call(out);
+                if self.job.slo_ttft_ms != 0 || self.job.slo_tpot_ms != 0 {
+                    self.request_quote(out);
+                } else {
+                    self.begin_call(out);
+                }
+            }
+            (State::AwaitQuote, Event::Frame(b)) => self.quote(b, out),
+            (State::AwaitQuote, Event::Tick) => {
+                if self.now_ms.saturating_sub(self.quote_sent_ms) > QUOTE_TIMEOUT_MS {
+                    self.decline(out, 0);
+                }
             }
             (State::AwaitSession, Event::SessionFailed) => self.finish(out, Outcome::Aborted(Abort::Session)),
             (State::AwaitSign, Event::Signed(blob)) => self.signed(blob, out),
@@ -375,7 +406,7 @@ impl Harness {
 
     fn start(&mut self, out: &mut Actions) {
         let required = self.job.evidence().iter().filter(|e| e.required).fold(0u8, |m, e| m | e.class.bit());
-        match place(required, self.job.energy_policy, &self.env) {
+        match place_excluding(required, self.job.energy_policy, &self.env, self.declined) {
             Err(r) => self.finish(out, Outcome::Refused(r)),
             Ok(t) => {
                 self.tier_raw = t as u8;
@@ -396,6 +427,60 @@ impl Harness {
                 self.state = State::AwaitSession;
             }
         }
+    }
+
+    /// Send a data-free quote request on the open session.
+    fn request_quote(&mut self, out: &mut Actions) {
+        let n = sha256(&[b"hookprobe/conductor/quote-nonce/v1\0", &self.session, &self.job.job_id, &[self.declined]]);
+        self.quote_nonce.copy_from_slice(n.get(..16).unwrap_or(&[0; 16]));
+        let est_in = self.job.evidence().iter().map(|e| e.card.len()).fold(self.job.intent.len(), usize::saturating_add);
+        let q = frame::QuoteRequest {
+            job_id: self.job.job_id,
+            model_digest: self.job.model_digest,
+            in_units: units(est_in.saturating_add(512)),
+            max_out_units: self.job.budget.max_out_units_total.min(MAX_OUT_UNITS),
+            slo_ttft_ms: self.job.slo_ttft_ms,
+            slo_tpot_ms: self.job.slo_tpot_ms,
+            offload_hints: self.job.offload_hints,
+            energy_policy: self.job.energy_policy,
+            nonce: self.quote_nonce,
+        };
+        if self.tx.fill_with(|b| q.encode(b)).is_none() {
+            return self.finish(out, Outcome::Aborted(Abort::HostProtocol));
+        }
+        self.quote_sent_ms = self.now_ms;
+        out.push(Action::Send);
+        self.state = State::AwaitQuote;
+    }
+
+    fn quote(&mut self, b: &[u8], out: &mut Actions) {
+        let Some(w) = self.tier().and_then(|t| self.env.worker(t)).copied() else {
+            return self.finish(out, Outcome::Aborted(Abort::HostProtocol));
+        };
+        // A forged, replayed or other-job quote is a protocol violation by the worker.
+        let Some(q) = frame::Quote::open(b, &w.public_key) else { return self.finish(out, Outcome::Rejected(Violation::Malformed)) };
+        if !ct_eq(&q.job_id, &self.job.job_id) || !ct_eq(&q.nonce, &self.quote_nonce) {
+            return self.finish(out, Outcome::Rejected(Violation::Malformed));
+        }
+        if q.meets(self.job.slo_ttft_ms, self.job.slo_tpot_ms) {
+            self.quoted_ttft_ms = q.predicted_ttft_ms;
+            out.push(Action::Ledger(self.record(Kind::QuoteAccepted, u16::from(q.offload_profile), [0; 32])));
+            self.begin_call(out);
+        } else {
+            self.decline(out, u16::from(q.offload_profile));
+        }
+    }
+
+    /// The worker cannot meet the SLO (or did not answer): close its session, try the next tier.
+    fn decline(&mut self, out: &mut Actions, code: u16) {
+        out.push(Action::Ledger(self.record(Kind::QuoteDeclined, code, [0; 32])));
+        if let Some(t) = self.tier() {
+            out.push(Action::CloseSession { tier: t });
+            self.declined |= t.bit();
+        }
+        self.tier_raw = 0;
+        self.included = [false; MAX_EVIDENCE];
+        self.start(out);
     }
 
     fn build_prompt(&mut self) -> Option<()> {
@@ -530,7 +615,9 @@ impl Harness {
                     let ttft = self.now_ms.saturating_sub(self.call_started_ms);
                     if c.req.slo_ttft_ms != 0 && ttft > u64::from(c.req.slo_ttft_ms) {
                         // Recorded for placement feedback; an SLO miss is not a security violation.
-                        out.push(Action::Ledger(self.record(Kind::SloMiss, 1, [0; 32])));
+                        // Code 2: the worker had quoted that it would meet it (a broken promise).
+                        let code = if self.quoted_ttft_ms != 0 { 2 } else { 1 };
+                        out.push(Action::Ledger(self.record(Kind::SloMiss, code, [0; 32])));
                     }
                 }
             }

@@ -23,6 +23,7 @@
 
 pub mod abi;
 pub mod buf;
+pub mod chain;
 pub mod cap;
 pub mod class;
 pub mod crypto;
@@ -31,6 +32,7 @@ pub mod harness;
 pub mod job;
 pub mod json;
 pub mod ledger;
+pub mod pairing;
 pub mod limits;
 pub mod place;
 pub mod tools;

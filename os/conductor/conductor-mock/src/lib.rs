@@ -6,12 +6,14 @@
 use conductor_core::cap::{self, SignRequest};
 use conductor_core::class::{DataClass, OwnerPolicy, Tier};
 use conductor_core::crypto::{public_key, sha256, sign, TAG_RESULT};
-use conductor_core::frame::{result_message, Body, Request, Response, Usage};
+use conductor_core::frame::{self as fr, result_message, Body, Request, Response, Usage};
+use conductor_core::crypto::TAG_QUOTE;
 use conductor_core::harness::{Action, Actions, Event, Harness, Outcome};
 use conductor_core::ledger::Record;
 use conductor_core::limits::{units, MAX_CHUNK};
 use conductor_core::place::{Env, WorkerInfo};
-use conductor_core::signer::{CounterStore, Pairing, Signer};
+use conductor_core::pairing::{PairingRecord, RECORD_LEN as PAIR_LEN, TAG_RECORD};
+use conductor_core::signer::{CounterStore, Signer};
 use conductor_core::tools::ToolCall;
 use conductor_core::worker::{Refuse, WorkerGate};
 
@@ -50,6 +52,16 @@ pub const WORKER_SEED: [u8; 32] = [0x33; 32];
 pub const OTHER_SEED: [u8; 32] = [0x44; 32];
 pub const EGRESS: [u8; 16] = [0x55; 16];
 pub const MODEL: [u8; 32] = [0x66; 32];
+pub const OWNER_SEED: [u8; 32] = [0x77; 32];
+
+/// An owner-signed pairing record, as Mission Control would produce after the owner compares the codes.
+pub fn owner_pairing(tier: Tier, worker_pk: [u8; 32], valid_until_ms: u64, revision: u32) -> (Vec<u8>, [u8; 64]) {
+    let rec = PairingRecord { tier, worker_pk, egress_policy_id: EGRESS, valid_until_ms, revision };
+    let mut b = [0u8; PAIR_LEN];
+    rec.encode(&mut b);
+    let s = sign(&OWNER_SEED, TAG_RECORD, &b).expect("sign");
+    (b.to_vec(), s)
+}
 
 // ---------------------------------------------------------------- job builder
 
@@ -172,6 +184,13 @@ pub struct MockWorker {
     pub refusals: Vec<Refuse>,
     pub prompts: Vec<String>,
     last_frames: Vec<Vec<u8>>,
+    /// What this worker quotes: (can_meet, predicted ttft ms, predicted tpot ms, offload profile).
+    pub quote: (bool, u32, u32, u8),
+    /// Quote misbehaviour: 0 honest, 1 wrong nonce, 2 bad signature, 3 silent.
+    pub quote_tamper: u8,
+    pub quotes_given: usize,
+    /// Quote requests are data-free: record what they carried, to prove it.
+    pub quote_requests: Vec<Vec<u8>>,
 }
 
 impl MockWorker {
@@ -186,11 +205,46 @@ impl MockWorker {
             refusals: vec![],
             prompts: vec![],
             last_frames: vec![],
+            quote: (true, 300, 40, fr::profile::ALL_IN_VRAM),
+            quote_tamper: 0,
+            quotes_given: 0,
+            quote_requests: vec![],
         }
+    }
+
+    pub fn with_seed(mut self, seed: [u8; 32]) -> Self {
+        self.seed = seed;
+        self.gate.my_pk = public_key(&seed);
+        self
+    }
+
+    fn answer_quote(&mut self, tx: &[u8]) -> Vec<Vec<u8>> {
+        self.quote_requests.push(tx.to_vec());
+        let Some(q) = fr::QuoteRequest::decode(tx) else { return vec![] };
+        if self.quote_tamper == 3 {
+            return vec![];
+        }
+        self.quotes_given += 1;
+        let (can_meet, ttft, tpot, prof) = self.quote;
+        let mut nonce = q.nonce;
+        if self.quote_tamper == 1 {
+            nonce[0] ^= 1;
+        }
+        let quote = fr::Quote { job_id: q.job_id, nonce, can_meet, predicted_ttft_ms: ttft, predicted_tpot_ms: tpot, offload_profile: prof, valid_ms: 5_000 };
+        let mut body = [0u8; fr::QUOTE_BODY_LEN];
+        quote.encode_body(&mut body).unwrap();
+        let key = if self.quote_tamper == 2 { OTHER_SEED } else { self.seed };
+        let s = sign(&key, TAG_QUOTE, &body).unwrap();
+        let mut out = body.to_vec();
+        out.extend_from_slice(&s);
+        vec![out]
     }
 
     /// Receive `signed ‖ request` on a session; return the response frames.
     pub fn receive(&mut self, tx: &[u8], session: &[u8; 32], now_ms: u64) -> Vec<Vec<u8>> {
+        if tx.starts_with(&fr::QREQ_MAGIC) {
+            return self.answer_quote(tx);
+        }
         let (signed, request) = tx.split_at(cap::SIGNED_LEN.min(tx.len()));
         let c = match self.gate.accept(signed, session, request, Some(now_ms)) {
             Ok(c) => c,
@@ -275,6 +329,8 @@ pub struct Kernel {
     pub frame_mutator: Option<fn(&mut Rng, &mut Vec<u8>) -> bool>,
     /// Set when the mutator changed at least one frame.
     pub mutated: bool,
+    /// Simulated network + inference latency added before each worker frame is delivered.
+    pub latency_ms: u64,
 }
 
 #[derive(Default, Debug)]
@@ -288,17 +344,31 @@ pub struct Report {
     pub signed: Vec<Vec<u8>>,
     pub sends: usize,
     pub tool_calls: Vec<ToolCall>,
+    pub sessions_opened: Vec<Tier>,
+    pub sessions_closed: Vec<Tier>,
 }
 
 impl Kernel {
     pub fn new(policy: OwnerPolicy, tier: Tier) -> Self {
-        let mut signer = Signer::new(DEVICE_SEED, SALT_KEY, policy, MemCounter(0));
-        signer.pairings[0] = Some(Pairing { tier, worker_pk: public_key(&WORKER_SEED), egress_policy_id: EGRESS });
-        Self { signer, rng: Rng(0x9e3779b97f4a7c15), now: 1_000, tool_data: vec![], max_ticks: 3, cancel_after_sends: None, corrupt_signature: false, frame_mutator: None, mutated: false }
+        let mut signer = Signer::new(DEVICE_SEED, SALT_KEY, public_key(&OWNER_SEED), policy, MemCounter(0));
+        let (rec, sig) = owner_pairing(tier, public_key(&WORKER_SEED), u64::MAX, 1);
+        signer.install_pairing(&rec, &sig).expect("owner-signed pairing");
+        Self { signer, rng: Rng(0x9e3779b97f4a7c15), now: 1_000, tool_data: vec![], max_ticks: 3, cancel_after_sends: None, corrupt_signature: false, frame_mutator: None, mutated: false, latency_ms: 0 }
     }
 
     pub fn run(&mut self, h: &mut Harness, job: &[u8], env: Env, worker: &mut MockWorker) -> Report {
+        let tier = worker.gate.tier;
+        let w = std::mem::replace(worker, MockWorker::new(tier, vec![]));
+        let mut ws = vec![w];
+        let rep = self.run_multi(h, job, env, &mut ws);
+        *worker = ws.pop().expect("worker");
+        rep
+    }
+
+    /// Several workers on different tiers; each Send goes to the worker of the currently open session.
+    pub fn run_multi(&mut self, h: &mut Harness, job: &[u8], env: Env, workers: &mut [MockWorker]) -> Report {
         let mut rep = Report::default();
+        let mut current: Option<Tier> = None;
         h.load(job, env).expect("job decodes");
         let mut out = Actions::default();
         let mut queue: std::collections::VecDeque<Owned> = std::collections::VecDeque::new();
@@ -325,6 +395,9 @@ impl Kernel {
                 }
             };
             self.now += 1;
+            if matches!(ev, Owned::Frame(_)) {
+                self.now += self.latency_ms;
+            }
             let now = self.now;
             match &ev {
                 Owned::Start => h.handle(now, Event::Start, &mut out),
@@ -344,7 +417,14 @@ impl Kernel {
                     Action::OpenSession { tier } => {
                         self.rng.fill(&mut session);
                         queue.push_back(Owned::Session(tier as u8, session));
-                        worker_session(worker, session);
+                        current = Some(tier);
+                        rep.sessions_opened.push(tier);
+                        WORKER_SESSION.with(|c| *c.borrow_mut() = session);
+                    }
+                    Action::CloseSession { tier } => {
+                        assert_eq!(current, Some(tier), "closing a session that is not open");
+                        current = None;
+                        rep.sessions_closed.push(tier);
                     }
                     Action::Sign => {
                         let r = *h.sign_request().expect("sign request");
@@ -370,6 +450,7 @@ impl Kernel {
                             continue;
                         }
                         let s = WORKER_SESSION.with(|c| *c.borrow());
+                        let worker = workers.iter_mut().find(|w| Some(w.gate.tier) == current).expect("a worker for the open session");
                         for mut f in worker.receive(h.tx(), &s, now) {
                             if let Some(m) = self.frame_mutator {
                                 if m(&mut self.rng, &mut f) {
@@ -397,9 +478,6 @@ impl Kernel {
 
 thread_local! {
     static WORKER_SESSION: std::cell::RefCell<[u8; 32]> = const { std::cell::RefCell::new([0; 32]) };
-}
-fn worker_session(_w: &mut MockWorker, s: [u8; 32]) {
-    WORKER_SESSION.with(|c| *c.borrow_mut() = s);
 }
 
 enum Owned {

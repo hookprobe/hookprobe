@@ -9,6 +9,10 @@ use sha2::{Digest, Sha256};
 pub const TAG_HP_EXEC: &[u8] = b"hookprobe/conductor/hp-exec/v1\0";
 /// A worker's signature over its final result.
 pub const TAG_RESULT: &[u8] = b"hookprobe/conductor/result/v1\0";
+/// The device's revocation-epoch announcement (the kill switch reaching workers with no new job).
+/// A worker's signed SLO admission quote.
+pub const TAG_QUOTE: &[u8] = b"hookprobe/conductor/quote/v1\0";
+pub const TAG_EPOCH: &[u8] = b"hookprobe/conductor/epoch/v1\0";
 
 pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
     let mut h = Sha256::new();

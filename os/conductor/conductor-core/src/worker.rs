@@ -33,6 +33,8 @@ pub enum Refuse {
     OpNotGranted,
     ModelMismatch,
     InputTooLarge,
+    /// An epoch announcement that is malformed or not signed by the paired device.
+    Epoch,
 }
 
 pub struct WorkerGate {
@@ -46,6 +48,29 @@ pub struct WorkerGate {
 }
 
 impl WorkerGate {
+    /// Apply a signed epoch announcement from the paired device (the kill switch). Returns the new epoch.
+    /// Only ever raises `min_epoch`; the worker persists it like the high-water mark.
+    pub fn apply_epoch(&mut self, announcement: &[u8]) -> Result<u32, Refuse> {
+        const MSG: usize = 32 + 4 + 8;
+        if announcement.len() != MSG + 64 {
+            return Err(Refuse::Epoch);
+        }
+        let (m, s) = announcement.split_at(MSG);
+        let mut sig = [0u8; 64];
+        sig.copy_from_slice(s);
+        if !crate::crypto::verify(&self.device_pk, crate::crypto::TAG_EPOCH, m, &sig) {
+            return Err(Refuse::Epoch);
+        }
+        let r = &mut crate::wire::Reader::new(m);
+        let pk: [u8; 32] = r.arr().ok_or(Refuse::Epoch)?;
+        let epoch = r.u32().ok_or(Refuse::Epoch)?;
+        if !ct_eq(&pk, &self.device_pk) {
+            return Err(Refuse::Epoch);
+        }
+        self.min_epoch = self.min_epoch.max(epoch);
+        Ok(self.min_epoch)
+    }
+
     /// `now_ms` is the worker's clock if it trusts it; `None` skips the wall-clock window (the device's
     /// lease still ends the job on time — expiry and revocation hold independently).
     pub fn accept(&mut self, signed: &[u8], session: &[u8; 32], request: &[u8], now_ms: Option<u64>) -> Result<HpExec, Refuse> {

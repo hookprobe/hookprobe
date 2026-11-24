@@ -41,17 +41,30 @@ The crypto crates are the kernel's own, pinned to the kernel's versions: `sha2 =
 
 Lease invariant: every `StartLease` is matched by exactly one `EndLease` in every gate and fuzz run.
 
+## Built ahead of C1/C2 (still no kernel change, mock only)
+
+| Piece | What it stops | Evidence | Result |
+|---|---|---|---|
+| **Hash-chained ledger** (`chain.rs`): HMAC chain + sealed anchor + power-loss recovery | edited, removed, reordered, truncated or rewritten history; torn writes | `c1_prep.rs`: every byte edit caught; removed / swapped entries; tail cut caught only via the anchor; history rewritten with the real key caught by the anchor; roll-forward of one unanchored entry; torn tail discarded; tampering before the anchor reported, never repaired; a real job's ledger verifies | pass |
+| **Owner pairing** (`pairing.rs`): commit-then-reveal, six-digit comparison, owner-signed record with revision and expiry | a LAN attacker substituting its worker key; a compromised harness pairing a worker; replaying an old pairing to undo a revocation | MITM key/late-nonce fail the commitment; codes spread uniformly; forged and wrong-purpose owner signatures refused; stale revision refused; P2 refused; lapsed pairing stops signing | pass |
+| **Signed epoch announcement** (kill switch, part 2) | a captured but unused capability surviving the kill switch | announcement revokes an outstanding epoch-1 capability at the worker; forged / other-device announcements refused; epoch never lowered | pass |
+| **SLO admission quotes** (Select-N style; heqk is the upper-level scheduler) | sending data to a worker that cannot meet the time targets; forged or replayed quotes | data-free fixed-size quote request (no evidence or intent bytes); slow worker (NVMe-streaming profile) skipped for the next tier without ever receiving a capability or prompt; nobody meets the SLO → refused with only quote requests sent; wrong nonce or wrong key → REJECTED; a broken promise is recorded (SloMiss code 2) | pass |
+
+Fuzzing now also covers events, quote requests and quotes (1,000,000 decoder inputs) and runs half of the
+20,000 end-to-end mutation runs with SLO admission: an altered frame or quote never produced a Verified
+outcome.
+
 ## Measurements
 
 EL0 binary (`el0-harness`, release, opt-level "s", ed25519-compact at "z"):
 
 | | Bytes |
 |---|---|
-| `.text` | 72,040 |
-| `.rodata` | 2,872 |
+| `.text` | 74,772 |
+| `.rodata` | 2,936 |
 | `.data` | 0 |
-| `.bss` (whole job state, in place) | 47,768 |
-| Worst-case stack from `_start` (static bound: no indirect calls, no register-based sp adjustment) | 13,296 |
+| `.bss` (whole job state, in place) | 47,792 |
+| Worst-case stack from `_start` (static bound: no indirect calls, no register-based sp adjustment) | 13,280 |
 | FP/SIMD instructions | 0 (runs on today's softfloat heqk; no R2 needed) |
 
 Findings fixed during measurement:
@@ -90,10 +103,12 @@ cd os/conductor/el0-harness && cargo build --release
 
 ## Not in C0 (next)
 
-- **C1** (HomePods): the signer in EL1 with a purpose-separated key; the sealed monotonic counter; the
-  revocation epoch announced to workers; the sealed append-only ledger; wiring `el0-harness` behind a
-  feature; its address range; CM5 timing of Ed25519 verify at opt-level "z".
-- **C2**: owner pairing, the compute segment, the reference worker (request-level; engines bind to
-  localhost behind the worker agent), worker quotes (SLO admission), the red-team egress gate.
+- **C1** (HomePods): lift `signer.rs` and `chain.rs` into EL1 with purpose-separated keys (delegation,
+  cache salt, ledger) derived from the sealed root; persist the counter and the ledger anchor in the sealed
+  store (ADR 0069 pattern); broadcast epoch announcements; wire `el0-harness` behind a feature; assign its
+  address range; time Ed25519 verify at opt-level "z" on CM5.
+- **C2**: Mission Control pairing UI (shows the six digits), the compute segment, the reference worker
+  (request-level; engines bind to localhost behind the worker agent; answers quotes from measured
+  per-profile timings), the red-team egress gate.
 - Third-party applications (containers / microVMs on a companion host) are outside C0 and need their own
   ADR.
