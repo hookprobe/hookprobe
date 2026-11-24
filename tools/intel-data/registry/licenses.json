@@ -2267,6 +2267,21 @@
    "verified_on": "2026-11-21"
   },
   {
+   "id": "wiz-website-terms",
+   "name": "Wiz Website Terms of Use (v2.0, effective 2024-06-20)",
+   "spdx": null,
+   "url": "https://www.wiz.io/legal/terms-of-use",
+   "class": "RESTRICTED",
+   "commercial_use": "no",
+   "training_use": "no",
+   "redistribution": "no",
+   "derivatives": "no",
+   "share_alike": false,
+   "attribution_required": true,
+   "notes": "Covers https://www.wiz.io/ 'together with its subdomains, Content, Marks and services'. s.5: no copying, distributing, modifying, derivative works, reproducing, distributing or disclosing Content without prior written authorisation; no automated systems ('robots' and 'spiders') to access the Website. s.6.2: Content is 'for your information and personal use only' and may not be used, copied, distributed or 'otherwise exploited for any other purposes whatsoever without our prior written consent'; downloaded copies must keep copyright notices. No open licence, no data-specific terms and no AI-training grant found. Read 2026-11-24.",
+   "verified_on": "2026-11-24"
+  },
+  {
    "id": "yara-forge-terms",
    "name": "Tool: GPL-3.0; rules: per-source licences (mixed)",
    "spdx": null,

@@ -76,6 +76,7 @@
         "splunk-attack-data",
         "stratus-red-team",
         "volexity-threat-intel",
+        "wiz-cloud-threat-landscape",
         "yara-forge"
       ],
       "status": "partial",

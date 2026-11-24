@@ -5,7 +5,7 @@
 > RESEARCH = research/non-commercial; COMMERCIAL = paid licence; RESTRICTED = agreement/membership; UNKNOWN = not verified.
 > Gate columns are `licensing.decide()` for each purpose: ✅ allowed, — denied.
 
-Sources: COMMERCIAL 11, OPEN 92, RESEARCH 23, RESTRICTED 32, UNKNOWN 51 — total 209.
+Sources: COMMERCIAL 11, OPEN 92, RESEARCH 23, RESTRICTED 33, UNKNOWN 51 — total 210.
 
 ## attack_simulation
 
@@ -273,6 +273,7 @@ Sources: COMMERCIAL 11, OPEN 92, RESEARCH 23, RESTRICTED 32, UNKNOWN 51 — tota
 | `crowdstrike-falcon-intel` | [CrowdStrike Falcon Intelligence](https://www.crowdstrike.com/) | CrowdStrike / US | COMMERCIAL | — | — | — | commercial_contract | 1 | unverified |
 | `microsoft-defender-ti` | [Microsoft Defender Threat Intelligence (in Defender XDR)](https://learn.microsoft.com/en-us/defender-xdr/defender-threat-intelligence) | Microsoft / US | COMMERCIAL | — | — | — | commercial_contract | 1 | partially_verified |
 | `recorded-future` | [Recorded Future Intelligence Cloud](https://www.recordedfuture.com/) | Recorded Future (Mastercard) / US | COMMERCIAL | — | — | — | commercial_contract | 1 | unverified |
+| `wiz-cloud-threat-landscape` | [Wiz Cloud Threat Landscape (threats.wiz.io)](https://threats.wiz.io/) | Wiz Research (Wiz Inc.) / US | RESTRICTED | — | — | — | public_download | 1 | verified |
 
 ## vulnerability
 
@@ -471,4 +472,5 @@ Sources: COMMERCIAL 11, OPEN 92, RESEARCH 23, RESTRICTED 32, UNKNOWN 51 — tota
 | `uq-netflow-nids-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
 | `volexity-threat-intel-terms` | OPEN | yes | yes | yes | no | Per-source terms from the CIRCL-like sources research pass (2026-11-21); see the source entry's evidence. |
 | `vx-underground-papers-terms` | UNKNOWN | unclear | unclear | unclear | no | From the 2026-11-21 licence check of an operator-supplied source list. |
+| `wiz-website-terms` | RESTRICTED | no | no | no | no | Covers https://www.wiz.io/ 'together with its subdomains, Content, Marks and services'. s.5: no copying, distributing, modifying, derivative works, reproducing, |
 | `yara-forge-terms` | UNKNOWN | unclear | unclear | yes | no | Per-source terms from the feeds research pass. |

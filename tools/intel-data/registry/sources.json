@@ -10692,6 +10692,62 @@
    "notes": "Terms page unreadable (HTTP 403). The site also hosts live malware and malware source: never acquire from it in this pipeline."
   },
   {
+   "id": "wiz-cloud-threat-landscape",
+   "name": "Wiz Cloud Threat Landscape (threats.wiz.io)",
+   "organisation": "Wiz Research (Wiz Inc.)",
+   "country": "US",
+   "geographic_coverage": "global (cloud)",
+   "source_url": "https://threats.wiz.io/",
+   "download_url": "https://www.wiz.io/feed/cloud-threats-landscape/stix.json",
+   "api_endpoint": null,
+   "description": "Curated public database of cloud security incidents, threat actors, tools and techniques (ATT&CK-mapped) with D3FEND defences and targeted technologies; STIX JSON and RSS feeds.",
+   "category": "threat_intel",
+   "subcategories": [
+    "cloud",
+    "incidents",
+    "threat_actors",
+    "tools",
+    "adversary_techniques"
+   ],
+   "data_format": [
+    "html",
+    "STIX 2 JSON",
+    "RSS"
+   ],
+   "machine_readable": true,
+   "records": null,
+   "collection_period": null,
+   "publication_date": null,
+   "last_update": "2025-04-03 (About page)",
+   "update_frequency": null,
+   "labels_available": true,
+   "label_quality": "Curated by Wiz Research; incidents included only with enough root-cause information (About page).",
+   "known_limitations": "Cloud, CI/CD and SCM focus; limited overlap with home/SMB gateways (cryptominers, SSH brute force, exposed Docker/Redis/Hadoop, botnet tooling).",
+   "license_id": "wiz-website-terms",
+   "license_class": "RESTRICTED",
+   "commercial_use": "no",
+   "training_use": "no",
+   "redistribution": "no",
+   "attribution": "Keep Wiz copyright notices on any personal copy (s.6.2).",
+   "personal_data": "none",
+   "sensitivity": "low",
+   "access": "public_download",
+   "collaboration_route": "Written consent from Wiz needed for any use beyond personal information (contact listed on the About page; the operator handles any contact).",
+   "recommended_use": "Human reading only (personal/informational). Not for inference lookups, on-device shipping, training, derived lookups or automated fetching without Wiz's written consent.",
+   "collections": [
+    "attack_intelligence"
+   ],
+   "priority": 1,
+   "acquisition": null,
+   "verified_on": "2026-11-24",
+   "verification_status": "verified",
+   "evidence": [
+    "https://www.wiz.io/legal/terms-of-use",
+    "https://threats.wiz.io/about"
+   ],
+   "notes": "Read 2026-11-24, nothing downloaded beyond the HTML pages: the About page states no licence ('curated public instance', 'useful for the cloud security community at large'). The Wiz website terms cover subdomains, restrict Content to information and personal use and forbid automated access; the feed URLs sit on www.wiz.io. The STIX feed was not fetched, so any marking-definitions inside it were not read; a marking could only add permission if it came with Wiz's consent. Feed HEAD: 200, application/json, no Content-Length."
+  },
+  {
    "id": "yara-forge",
    "name": "YARA-Forge rule packages",
    "organisation": "YARA HQ (Florian Roth et al.)",
