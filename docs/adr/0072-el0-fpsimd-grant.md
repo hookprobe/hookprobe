@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
-# ADR 0071 — FP/SIMD for one granted EL0 server (Conductor KR-1 = Neuro R2)
+# ADR 0072 — FP/SIMD for one granted EL0 server (Conductor KR-1 = Neuro R2)
 
 **Status:** proposed (2026-11-24). Needs an operator decision: it changes the EL0 excursion entry and exit, which is
 security-sensitive (G46 security review before the shipping flavour takes it).

@@ -25,9 +25,8 @@ autonomous execution already are (or are built and waiting to be wired). Two thi
 | `el0-harness` behind a feature | Fine, as a bench feature with the size gate and no shipping change, **on request** | **Requested** (below) |
 | **KR-3** | Not yet seen: it was written after their response (hookprobe/hookprobe#1579) | Waiting for their answer |
 
-**Number clash.** HomePods' KR-1 ADR is filed as `0071-el0-fpsimd-grant.md`, but `main` already has ADR 0071
-(the Conductor, merged in hookprobe/hookprobe#1578). Their ADR needs the next free number, **0072**. The
-references to "the KR-1 ADR" in this file are meant to stay valid whatever number it gets.
+**KR-1's ADR is 0072** (`docs/adr/0072-el0-fpsimd-grant.md`). HomePods filed it as 0071, which the Conductor ADR
+already held (hookprobe/hookprobe#1578), so it was renumbered by operator decision (2026-11-24).
 
 **Request: the `el0-harness` bench feature.** Add `os/conductor/el0-harness` to `kernel/build.rs` behind a bench
 feature, as `neuro` was added:
@@ -286,7 +285,7 @@ a P1 heqk worker on the owner's LAN.
 
 1. R0 readouts: ID registers done (DotProd = 1, SVE = 0); control registers after the 72 h soak (one `t0inv` boot).
    Meanwhile: the `el0-harness` bench feature.
-2. KR-1: the operator accepts the ADR (to be renumbered 0072), then the QEMU gates, the metal gates and the G46 review.
+2. KR-1: the operator accepts ADR 0072, then the QEMU gates, the metal gates and the G46 review.
 3. KR-2 (a) and (b).
 4. ADR 0061 D1–D4, then KR-2 (c)–(d) and Neuro R3–R6 (model region, loader, admission).
 5. KR-3 is independent of KR-1 and KR-2, and can go in parallel: it unblocks Conductor C1.
