@@ -13,7 +13,9 @@ scripted, misbehaving mock worker.
 ## C0 boundaries (as approved)
 
 No change to `os/kernel` · no x86 dependency · no cloud deployment · no change to packet enforcement · no new
-production crypto protocol · no public disclosure · no remote application execution · mock worker only.
+production crypto protocol · no remote application execution · mock worker only. (The original "no public
+disclosure" boundary ended with the ADR 0067 D12 decision to publish, 2026-11-24.) Architecture record:
+[ADR 0071](../../docs/adr/0071-heqk-conductor-directed-execution.md).
 
 ## No Linux, no Python (enforced)
 
