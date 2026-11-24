@@ -173,8 +173,46 @@ its dev set only, against llama.cpp on the same file. One known difference: llam
 which does not quantise activations (its CPU path does). The tolerance for that check must cover this, and
 the test above suggests the effect is small.
 
-Not built yet: the converter (`hnx-compile`, waiting on Neuro's GGUF and answers), a 4-row NEON `Q8_0`
-kernel for speed, and any speed number (needs a real A76 after KR-1).
+Not built yet: the converter (`hnx-compile`, waiting on Neuro's GGUF and answers), and any measured speed
+(needs a real A76 after KR-1). The 4-row kernel is below.
+
+### 4-row NEON `Q8_0` kernel
+
+`q8::rows4` runs four rows at once over the GGUF layout unchanged. Each activation block is loaded once
+for the four rows, and the four dot products are reduced with three pairwise adds instead of four
+horizontal sums. `q8::matvec` uses it for every group of four rows, with the 1-row kernel for the
+remainder. The shared scale-combine got a fast path: when the block shift is 0–16, the shifted term
+provably fits an i64 and only the add is 128-bit. Proven-bounded operations in that loop use wrapping
+arithmetic, so they skip overflow checks (the release profile keeps checks everywhere else). Results are
+bit-identical to before: same exact sum, same real-model numbers.
+
+No ARM hardware is available, so speed is given as **executed instructions** on the emulated Cortex-A76.
+`qemu -icount shift=0` makes the generic timer count instructions; this is deterministic, but it is not
+cycles, and memory bandwidth is not modelled. Measured on a 512×2048 matrix with realistic scales:
+
+| Kernel | Instructions per multiply-add |
+|---|---|
+| scalar reference | 9.26 |
+| NEON 1-row, strict alignment (bare-metal default) | 6.19 |
+| NEON 1-row, unaligned loads allowed | 1.41 |
+| **NEON 4-row, unaligned loads allowed** | **1.17** |
+
+The big step is alignment, not the fourth row. GGUF blocks are 34 bytes, and under strict alignment the
+compiler splits each 16-byte load into 16 byte loads. `neon-proof` now sets up an identity MMU (device
+memory for the UART, normal cacheable memory for RAM, `SCTLR_EL1.A` clear), as heqk does for EL0 servers,
+and builds without `strict-align`. KR-1 now asks heqk to clear A explicitly (`KERNEL_REQUESTS.md`). What
+remains per row-block is about 6 instructions of dot product and about 20 of scale arithmetic. Cutting
+that further would need a repacked layout, which would give up running the GGUF bytes as they are.
+
+Rough estimate, not a measurement: Qwen3-1.7B is 1.7 × 10⁹ multiply-adds per token, about 2 × 10⁹
+instructions at 1.17. On one A76 core at 2.4 GHz that is about 0.3–0.4 s per token, in the same range as
+reading the 1.8 GB of weights once per token from LPDDR4X. The real number needs the device.
+
+| Gate | Result |
+|---|---|
+| Bare metal, emulated A76: 4-row kernel scalar == NEON on 1,676 groups; `matvec` on 3,000 matrices of 1–7 rows (4-row groups plus remainder), extreme and realistic scales, equal to the 1-row reference; a short matrix refused | pass |
+| Whole Qwen3 decoder through the new `matvec`, scalar == NEON, every logit | pass |
+| Real Qwen3-1.7B smoke test unchanged (same logits to the printed digit; "Paris") | pass |
 
 ## The Qwen tokenizer
 

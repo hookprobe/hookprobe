@@ -62,10 +62,19 @@ frame words.
 lines there. If `CPTR_EL2.TFP` is set, hboot must clear it for EL0/EL1 or every vector instruction traps
 to EL2.
 
+**Alignment (added 2026-11-24).** GGUF `Q8_0` blocks are 34 bytes, so the kernels' 16-byte loads are
+unaligned. The granted server's model region and arena must be Normal cacheable memory, and
+`SCTLR_EL1.A` must be clear. heqk today ORs M, C, I and WXN into `SCTLR_EL1` (`arch-aarch64/src/mmu.rs`,
+`mmu_cm5.rs`) but never writes A, so it keeps whatever firmware left. The request: clear A explicitly in
+the same write. The kernels are then built without `strict-align`. With strict alignment the compiler
+splits every 16-byte load into 16 byte loads: measured 6.2 instead of 1.4 instructions per multiply-add
+(`neon-proof` benchmark).
+
 ### Gates
 
 | Gate | Where | Pass |
 |---|---|---|
+| `[P-fpsimd-align]` | QEMU | the granted server performs an unaligned 16-byte load from its model region without a fault |
 | `[P-fpsimd-grant]` | QEMU | the granted server runs a NEON self-test (SDOT dot product, known answer) |
 | `[P-fpsimd-deny]` | QEMU | a server without the grant executing one vector instruction faults; the kernel and other servers continue |
 | `[P-fpsimd-leak]` | QEMU | the granted server fills V0–V31 with a pattern; afterwards no other EL0 server and no EL1 path can read it (other servers trap; a second granted test server sees zeros) |

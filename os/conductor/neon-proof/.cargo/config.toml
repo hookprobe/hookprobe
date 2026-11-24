@@ -1,2 +1,8 @@
 [build]
 target = "aarch64-unknown-none"
+
+# The kernels run where an OS maps normal memory (heqk EL0 servers: MMU on, SCTLR_EL1.A clear; this test
+# program sets up the same itself). The bare-metal target defaults to strict alignment, which turns every
+# unaligned 16-byte load of a GGUF Q8_0 block into sixteen byte loads.
+[target.aarch64-unknown-none]
+rustflags = ["-C", "target-feature=-strict-align"]

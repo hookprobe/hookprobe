@@ -110,9 +110,21 @@ pub fn quantize(x: &[i64], q: &mut [i8], scale: &mut [(i32, i32)]) -> bool {
 #[inline(always)]
 fn combine(acc: &mut i128, dot: i32, wbits: u16, xs: (i32, i32)) {
     let (mw, sw) = half_parts(wbits);
-    let term = i64::from(dot) * i64::from(mw) * i64::from(xs.0);
+    // |dot| < 2^19, |mw| < 2^11, 0 ≤ m < 2^16: |term| < 2^46, so the wrapping ops below never wrap; they only
+    // drop the overflow checks the release profile keeps elsewhere (this is the innermost loop).
+    let term = i64::from(dot).wrapping_mul(i64::from(mw)).wrapping_mul(i64::from(xs.0));
     let e = xs.1 - sw + ACC_FRAC as i32;
-    *acc += if e >= 0 { i128::from(term) << e.min(100) } else { rshift_round_128(i128::from(term), (-e).min(126) as u32) };
+    // Fast path, same value: |term| < 2^46, so for 0 ≤ e ≤ 16 the shifted term fits an i64 and only the add
+    // is 128-bit. Real models land here almost always (activation and weight scales near 1).
+    let t = if (0..=16).contains(&e) {
+        i128::from(term.wrapping_shl(e as u32))
+    } else if e >= 0 {
+        i128::from(term).wrapping_shl(e.min(100) as u32)
+    } else {
+        rshift_round_128(i128::from(term), (-e).min(126) as u32)
+    };
+    // |sum| < 2^126 for any input (module documentation), so this add never wraps.
+    *acc = acc.wrapping_add(t);
 }
 
 #[inline(always)]
@@ -155,15 +167,56 @@ pub fn row(simd: crate::Simd, w: &[u8], x: &Act) -> Option<i64> {
     row_scalar(w, x)
 }
 
-/// A whole matrix (`rows` consecutive rows of `cols` columns): `sink(row, value)` for each row.
-/// Returns false (calling nothing) if the lengths do not fit.
+/// Reference for four consecutive rows (`w` holds 4 rows): the 1-row reference four times.
+pub fn rows4_scalar(w: &[u8], x: &Act, out: &mut [i64; 4]) -> bool {
+    let rb = row_bytes(x.q.len());
+    if rb == 0 || w.len() != 4 * rb || !ok(w.get(..rb).unwrap_or(&[]), x) {
+        return false;
+    }
+    for (o, wr) in out.iter_mut().zip(w.chunks_exact(rb)) {
+        *o = row_scalar(wr, x).unwrap_or(0);
+    }
+    true
+}
+
+/// Four consecutive rows with the selected implementation; bit-identical to [`rows4_scalar`]. On NEON each
+/// activation block is loaded once for the four rows and the four dot products are reduced together.
+pub fn rows4(simd: crate::Simd, w: &[u8], x: &Act, out: &mut [i64; 4]) -> bool {
+    if simd.is_neon() {
+        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+        {
+            let rb = row_bytes(x.q.len());
+            if rb == 0 || w.len() != 4 * rb || !ok(w.get(..rb).unwrap_or(&[]), x) {
+                return false;
+            }
+            // SAFETY: lengths checked just above; the `Simd` token carries the CPU-feature promise.
+            unsafe { neon::rows4(w, rb, x, out) };
+            return true;
+        }
+    }
+    rows4_scalar(w, x, out)
+}
+
+/// A whole matrix (`rows` consecutive rows of `cols` columns): `sink(row, value)` for each row, four rows at
+/// a time, then the remainder one by one. Returns false (calling nothing) if the lengths do not fit.
 pub fn matvec(simd: crate::Simd, w: &[u8], rows: usize, x: &Act, mut sink: impl FnMut(usize, i64)) -> bool {
     let rb = row_bytes(x.q.len());
     if rb == 0 || rows.checked_mul(rb) != Some(w.len()) || !ok(w.get(..rb).unwrap_or(&[]), x) {
         return false;
     }
-    for (r, wr) in w.chunks_exact(rb).enumerate() {
+    let mut groups = w.chunks_exact(4 * rb);
+    let mut r = 0usize;
+    for g in groups.by_ref() {
+        let mut o = [0i64; 4];
+        rows4(simd, g, x, &mut o);
+        for v in o {
+            sink(r, v);
+            r += 1;
+        }
+    }
+    for wr in groups.remainder().chunks_exact(rb) {
         sink(r, row(simd, wr, x).unwrap_or(0));
+        r += 1;
     }
     true
 }
@@ -210,5 +263,40 @@ mod neon {
             xp = xp.add(QK);
         }
         finish(acc)
+    }
+
+    /// Four rows at `w`, `w + rb`, `w + 2rb`, `w + 3rb`.
+    ///
+    /// # Safety
+    /// `w.len() == 4 * rb`, `ok(row, x)` holds for each row, and the CPU has NEON + DotProd with FP/SIMD enabled.
+    #[target_feature(enable = "neon,dotprod")]
+    pub unsafe fn rows4(w: &[u8], rb: usize, x: &Act, out: &mut [i64; 4]) {
+        let blocks = x.q.len() / QK;
+        let base = w.as_ptr();
+        let mut xp = x.q.as_ptr();
+        let mut acc = [0i128; 4];
+        let zero = vdupq_n_s32(0);
+        for b in 0..blocks {
+            let x0 = vld1q_s8(xp);
+            let x1 = vld1q_s8(xp.add(16));
+            let p = base.add(b * BLOCK_BYTES);
+            let (p0, p1, p2, p3) = (p, p.add(rb), p.add(2 * rb), p.add(3 * rb));
+            let d0 = vdotq_s32(vdotq_s32(zero, vld1q_s8(p0.add(2).cast()), x0), vld1q_s8(p0.add(18).cast()), x1);
+            let d1 = vdotq_s32(vdotq_s32(zero, vld1q_s8(p1.add(2).cast()), x0), vld1q_s8(p1.add(18).cast()), x1);
+            let d2 = vdotq_s32(vdotq_s32(zero, vld1q_s8(p2.add(2).cast()), x0), vld1q_s8(p2.add(18).cast()), x1);
+            let d3 = vdotq_s32(vdotq_s32(zero, vld1q_s8(p3.add(2).cast()), x0), vld1q_s8(p3.add(18).cast()), x1);
+            // [Σd0, Σd1, Σd2, Σd3] with two pairwise adds instead of four horizontal sums.
+            let s = vpaddq_s32(vpaddq_s32(d0, d1), vpaddq_s32(d2, d3));
+            let xs = *x.scale.get_unchecked(b);
+            let bits = |q: *const u8| u16::from_le_bytes([*q, *q.add(1)]);
+            combine(&mut acc[0], vgetq_lane_s32::<0>(s), bits(p0), xs);
+            combine(&mut acc[1], vgetq_lane_s32::<1>(s), bits(p1), xs);
+            combine(&mut acc[2], vgetq_lane_s32::<2>(s), bits(p2), xs);
+            combine(&mut acc[3], vgetq_lane_s32::<3>(s), bits(p3), xs);
+            xp = xp.add(QK);
+        }
+        for (o, a) in out.iter_mut().zip(acc) {
+            *o = finish(a);
+        }
     }
 }

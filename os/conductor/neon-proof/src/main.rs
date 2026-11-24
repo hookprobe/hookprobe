@@ -19,6 +19,31 @@ _start:
     mov x0, #(3 << 20)
     msr cpacr_el1, x0
     isb
+    // Identity map with 1 GiB blocks, as an OS would give a server: 0-1 GiB device (the UART),
+    // 1-2 GiB normal write-back cacheable (RAM). Normal memory with SCTLR_EL1.A clear allows the
+    // unaligned 16-byte loads of GGUF Q8_0 blocks (34 bytes each); with the MMU off every access is
+    // device memory, where they fault.
+    adrp x0, l1_table
+    mov x1, #0x401                  // block | AF | AttrIdx 0 (device-nGnRnE)
+    str x1, [x0]
+    ldr x1, =0x40000705             // 0x4000_0000 | AF | inner shareable | AttrIdx 1 | block
+    str x1, [x0, #8]
+    ldr x1, =0xff00                 // MAIR: attr0 device-nGnRnE, attr1 normal write-back
+    msr mair_el1, x1
+    ldr x1, =0x200803519            // TCR: T0SZ 25 (39-bit VA, start at L1), WB walks, inner shareable, 4 KiB, EPD1, 40-bit PA
+    msr tcr_el1, x1
+    msr ttbr0_el1, x0
+    dsb ish
+    tlbi vmalle1
+    dsb ish
+    isb
+    mrs x1, sctlr_el1
+    orr x1, x1, #(1 << 0)           // M
+    orr x1, x1, #(1 << 2)           // C
+    orr x1, x1, #(1 << 12)          // I
+    bic x1, x1, #(1 << 1)           // A clear: unaligned access to normal memory allowed
+    msr sctlr_el1, x1
+    isb
     ldr x0, =__bss_start
     ldr x1, =__bss_end
 1:  cmp x0, x1
@@ -27,6 +52,11 @@ _start:
     b 1b
 2:  bl main
 3:  b 3b
+
+    .section .data.pt, "aw"
+    .balign 4096
+l1_table:
+    .space 4096
 "#
 );
 
@@ -167,6 +197,7 @@ extern "C" fn main() -> ! {
     let _ = writeln!(u, "PASS engine: {}x{} Q4 layer ({} byte package, {} MACs per run), {} runs, scalar == {}", ROWS, COLS, n, model.macs(), runs, simd.name());
     lm_proof(&mut u, simd, &mut rng);
     q8_proof(&mut u, simd, &mut rng);
+    q8_bench(&mut u, simd, &mut rng);
     qwen3_proof(&mut u, simd, &mut rng);
     exit(0)
 }
@@ -332,6 +363,59 @@ fn q8_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
         macs += cols as u64;
     }
     let _ = writeln!(u, "PASS q8 kernel: {rows} Q8_0 rows, {macs} MACs, every binary16 exponent, {} identical to the scalar reference", simd.name());
+
+    // The 4-row kernel, and whole matrices (4-row groups plus 1-3 remainder rows) through matvec.
+    const C4: usize = 1024;
+    static mut W7: [u8; 7 * q8::row_bytes(C4)] = [0; 7 * q8::row_bytes(C4)];
+    let w7 = unsafe { &mut *core::ptr::addr_of_mut!(W7) };
+    let (mut groups, mut mats) = (0u64, 0u64);
+    for round in 0..3_000u32 {
+        let cols = 32 * (1 + (rng.next() % 32) as usize);
+        let rb = q8::row_bytes(cols);
+        let nrows = 1 + (rng.next() % 7) as usize;
+        for blk in w7[..nrows * rb].chunks_exact_mut(q8::BLOCK_BYTES) {
+            // Mostly realistic scales (fast path), sometimes extreme ones (general path).
+            let e = if round % 3 == 0 { (rng.next() % 31) as u16 } else { 5 + (rng.next() % 6) as u16 };
+            let bits = (e << 10) | (rng.next() as u16 & 0x83ff);
+            blk[..2].copy_from_slice(&bits.to_le_bytes());
+            for q in blk[2..].iter_mut() {
+                *q = if round % 7 == 0 { 0x81 } else { rng.next() as u8 };
+            }
+        }
+        let mag = [12u32, 20, 28, 44][(round % 4) as usize];
+        for v in xv[..cols].iter_mut() {
+            *v = (rng.next() as i64) >> (63 - mag);
+        }
+        q8::quantize(&xv[..cols], &mut xq[..cols], &mut xs[..cols / 32]);
+        let act = q8::Act { q: &xq[..cols], scale: &xs[..cols / 32] };
+        if nrows >= 4 {
+            let (mut a, mut b) = ([0i64; 4], [1i64; 4]);
+            let ok = q8::rows4_scalar(&w7[..4 * rb], &act, &mut a) && q8::rows4(simd, &w7[..4 * rb], &act, &mut b);
+            if !ok || a != b {
+                let _ = writeln!(u, "FAIL q8 rows4 round {round} cols {cols}: scalar {a:?} neon {b:?}");
+                exit(1);
+            }
+            groups += 1;
+        }
+        let (mut ms, mut mn) = ([0i64; 7], [1i64; 7]);
+        let ok1 = q8::matvec(Simd::SCALAR, &w7[..nrows * rb], nrows, &act, |r, v| ms[r] = v);
+        let ok2 = q8::matvec(simd, &w7[..nrows * rb], nrows, &act, |r, v| mn[r] = v);
+        let mut want = [0i64; 7];
+        for r in 0..nrows {
+            want[r] = q8::row_scalar(&w7[r * rb..(r + 1) * rb], &act).unwrap_or(i64::MIN);
+        }
+        if !ok1 || !ok2 || ms[..nrows] != want[..nrows] || mn[..nrows] != want[..nrows] {
+            let _ = writeln!(u, "FAIL q8 matvec round {round} rows {nrows} cols {cols}");
+            exit(1);
+        }
+        mats += 1;
+    }
+    let mut o = [7i64; 4];
+    if q8::rows4(simd, &w7[..4 * q8::row_bytes(64) - 1], &q8::Act { q: &xq[..64], scale: &xs[..2] }, &mut o) || o != [7; 4] {
+        let _ = writeln!(u, "FAIL: rows4 accepted a short matrix");
+        exit(1);
+    }
+    let _ = writeln!(u, "PASS q8 4-row kernel: {groups} groups and {mats} matrices (1-7 rows, fast and general scale paths), {} identical to the scalar reference", simd.name());
 }
 
 /// A whole Qwen3-shaped decoder (QK-norm, NEOX RoPE θ = 1e6, GQA, SwiGLU, tied head, Q8_0 weights in GGUF
@@ -417,4 +501,73 @@ fn qwen3_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
     }
     let _ = writeln!(u, "PASS qwen3: 2 layers, QK-norm, NEOX RoPE theta 1e6, GQA 4/2, SwiGLU, tied head, Q8_0 ({} weight bytes); {} positions, every logit equal, scalar == {}", TOTAL, D.max_ctx, simd.name());
     let _ = writeln!(u, "  generated tokens after the prompt: {:?}", &generated[prompt.len()..prompt.len() + 12]);
+}
+
+fn cntvct() -> u64 {
+    let v: u64;
+    unsafe { asm!("isb", "mrs {}, cntvct_el0", out(reg) v) };
+    v
+}
+
+/// Executed-instruction proxy: run under `qemu -icount shift=0`, where every instruction advances the
+/// virtual clock by 1 ns, so generic-timer ticks × (10^9 / CNTFRQ) = instructions executed. Deterministic,
+/// but instructions, not cycles: a real A76 issues several per cycle and memory bandwidth is not modelled.
+fn q8_bench(u: &mut Uart, simd: Simd, rng: &mut Rng) {
+    use neuro_kernels::q8;
+    const ROWS: usize = 512;
+    const COLS: usize = 2048;
+    static mut WM: [u8; ROWS * q8::row_bytes(COLS)] = [0; ROWS * q8::row_bytes(COLS)];
+    static mut XB: [i64; COLS] = [0; COLS];
+    static mut XQB: [i8; COLS] = [0; COLS];
+    static mut XSB: [(i32, i32); COLS / 32] = [(0, 0); COLS / 32];
+    let (wm, xb, xq, xs) = unsafe { (&mut *core::ptr::addr_of_mut!(WM), &mut *core::ptr::addr_of_mut!(XB), &mut *core::ptr::addr_of_mut!(XQB), &mut *core::ptr::addr_of_mut!(XSB)) };
+    for blk in wm.chunks_exact_mut(q8::BLOCK_BYTES) {
+        let bits = ((5 + (rng.next() % 6) as u16) << 10) | (rng.next() as u16 & 0x83ff); // scales ~2^-10..2^-5
+        blk[..2].copy_from_slice(&bits.to_le_bytes());
+        for q in blk[2..].iter_mut() {
+            *q = rng.next() as u8;
+        }
+    }
+    for v in xb.iter_mut() {
+        *v = (rng.next() as i64) >> 44; // |x| up to 2^19 in Q16 (≈ 8.0)
+    }
+    q8::quantize(xb, xq, xs);
+    let act = q8::Act { q: xq, scale: xs };
+    let freq: u64;
+    unsafe { asm!("mrs {}, cntfrq_el0", out(reg) freq) };
+    let ns_per_tick = 1_000_000_000 / freq.max(1);
+    let macs = (ROWS * COLS) as u64;
+    let rb = q8::row_bytes(COLS);
+    let mut check = [0i64; 3];
+    let mut measure = |name: &str, which: usize, u: &mut Uart| {
+        let t0 = cntvct();
+        let mut sum = 0i64;
+        match which {
+            0 => {
+                for r in 0..ROWS {
+                    sum = sum.wrapping_add(q8::row_scalar(&wm[r * rb..(r + 1) * rb], &act).unwrap_or(0));
+                }
+            }
+            1 => {
+                for r in 0..ROWS {
+                    sum = sum.wrapping_add(q8::row(simd, &wm[r * rb..(r + 1) * rb], &act).unwrap_or(0));
+                }
+            }
+            _ => {
+                q8::matvec(simd, wm, ROWS, &act, |_, v| sum = sum.wrapping_add(v));
+            }
+        }
+        let ticks = cntvct() - t0;
+        check[which] = sum;
+        let insns = ticks * ns_per_tick;
+        let _ = writeln!(u, "  {name}: {insns} instructions, {}.{:02} per MAC", insns / macs, insns * 100 / macs % 100);
+    };
+    let _ = writeln!(u, "BENCH q8 512x2048 matrix x vector (instruction counts valid only under -icount shift=0):");
+    measure("scalar reference         ", 0, u);
+    measure("NEON 1-row               ", 1, u);
+    measure("NEON 4-row (matvec)      ", 2, u);
+    if check[0] != check[1] || check[1] != check[2] {
+        let _ = writeln!(u, "FAIL: benchmark results differ");
+        exit(1);
+    }
 }
