@@ -1,6 +1,6 @@
 # Conductor / heqk-native engine ↔ Neuro: alignment (2026-11-24)
 
-> Written by the Conductor session after reading Neuro's work up to `origin/main` @ `e478bca` (docs 30, 39–42,
+> Written by the Conductor session after reading Neuro's work up to `origin/main` @ `e478bca`; updated at `4d7ad4f` (end of file) (docs 30, 39–42,
 > `data/e2e-2026-11-24.md`, `tools/neuro-research`). The Neuro session was not reachable from this cloud
 > session; this note is the hand-off. Nothing here changes Neuro's decisions.
 
@@ -57,3 +57,59 @@
 1. Can the ftFg (and later ftKg) GGUF be made available to the build host, with its SHA-256 and licence record?
 2. Which dev set may the fidelity check use, so it never touches a sealed set?
 3. Is the evidence-card compressor format (run 1, stage C) the contract the device side should emit?
+
+## Update: re-aligned with `origin/main` @ `4d7ad4f` (2026-11-24, afternoon)
+
+Two commits landed since `e478bca`. The Conductor branch is rebased onto `4d7ad4f` (no file under
+`os/conductor` changed upstream; all gates still pass).
+
+### What changed on the Neuro side, and what it changes here
+
+1. **Doc 42: ftKg failed (p = 0.052; triage regression on blind v7, 12 % of malicious cases called benign).**
+   **ftFg stays the explainer, without investigation.** For the device engine this settles the target:
+   ftFg only. ftKg's GGUF hash (`fb3c9a05…`) is recorded in doc 42, but it is not a target.
+   - The explainer turn is **one shot**: evidence in, one JSON answer out, no tool calls. The Conductor harness
+     runs it without the tool loop. The typed tools stay built for a later investigation model.
+   - Doc 42 suggests a **separate investigation adapter**, loaded only for investigation turns. If Neuro pursues
+     it, the engine needs two packed models sharing one base, or LoRA merged at load. Not built; noted so it is
+     not designed twice.
+2. **ftFg's file identity is in the repo** (doc 26, `data/mixF-dev-results.md`): `gguf-mixF-q8_0.gguf`, SHA-256
+   `0b0d276ed5a9f0a5b6597830c3f751411db6d62f3d962ec58e1f12d19f3161ed`. That answers half of question 1. **Still
+   needed:** the file itself (it lives on the Neuro build host, not in the repo) and the licence record for the
+   LoRA weights. The base model, Qwen3-1.7B, is Apache-2.0.
+3. **The configuration Neuro validated is more than the weights.** From `run_eval.py`, `mixF_chain.sh` and doc 26:
+   - llama.cpp `b12477`, `--reasoning off`, temperature 0;
+   - **evidence-closed decoding** (`--mode closed`): a per-request JSON schema whose `evidence` and `entities` items
+     are enums of exactly the fact ids (`F1…`) and aliases (`H1`, `R1`, `D1…`) present in the context. It has
+     closed enums for verdict, severity and next step, and an integer confidence of 0–100. llama-server compiles
+     it to a grammar, so a hallucinated entity cannot be emitted;
+   - guard A on the input, echo filter E and rule T (doc 40) on the output.
+
+   **Consequence for the engine:** to claim fidelity with ftFg-AE, the engine must decode under the same
+   constraint. **New engine item: evidence-closed constrained decoding.** At each step, the schema's automaton
+   masks the logits before the argmax. Integer only; no regex engine is needed, because the schema shape is fixed
+   and only the enums change per request. Until it exists, the fidelity check can cover the free mode only.
+4. **Reference numbers for comparison (not re-measured here).** E2E run 1 (ftFg, Mac, llama-server on Metal):
+   1.34 s median per answer, 122 tok/s, 3.4 GB RSS. Run 2 (ftKg): 1.24 s median, 125 tok/s. Metal does not
+   quantise activations, so the engine-vs-llama.cpp comparison should use llama.cpp's CPU backend, or allow for
+   the difference (README, "GGUF reader").
+
+### What changed on the HomePods side
+
+- **ADR 0069's msg1 counter is proven on CM5 metal and the live S0 PoP** (`docs/design/metal-evidence/
+  20261124-adr69-g19-counter-cm5.md`). All 17 checks hold:
+  - a recorded msg1 replayed after a PoP restart is refused;
+  - the counter is durable across restart and reboot (`G19Ctr` on the DataVolume);
+  - there is no downgrade path.
+- HP-EXEC's anti-replay is the same pattern: a monotonic sealed counter on the device and a persisted high-water
+  mark on the worker. So C1's counter can reuse a metal-proven mechanism instead of a new one. No change to the
+  C0 design.
+
+### Updated questions for Neuro
+
+1. The ftFg file `gguf-mixF-q8_0.gguf` (SHA-256 `0b0d276e…61ed`) on the build host, plus the LoRA licence record.
+2. Which dev set the fidelity check may use. Unchanged; it never touches a sealed set, and inv-blind v1 is spent.
+3. Is the evidence card from the run 1 compressor (stage C) the contract the device side should emit? Unchanged.
+4. **New:** for the device, is `closed` mode (the per-request enum schema) part of the explainer contract? If yes,
+   the engine implements it before the fidelity check. And which of guard A, filter E and rule T run on the device
+   or in the harness, and which stay off-device?

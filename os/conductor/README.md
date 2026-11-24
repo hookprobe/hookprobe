@@ -443,3 +443,12 @@ cd os/conductor/el0-harness && cargo build --release
   kernel requests. No Linux-hosted worker.
 - Third-party applications (containers / microVMs on a companion host) are outside C0 and need their own
   ADR.
+
+## Next engine item (alignment with `origin/main` @ `4d7ad4f`)
+
+Doc 42 failed ftKg, so **ftFg stays the explainer**: one shot, no tools. Neuro validated it with **evidence-closed
+decoding**: a per-request JSON schema whose `evidence` and `entities` enums are exactly the fact ids and aliases
+in the context, compiled by llama-server into a grammar. Temperature is 0 and reasoning is off. To claim fidelity
+with that configuration, the engine needs the same constraint: a fixed-shape schema automaton that masks logits
+before the argmax, integer only, with no regex engine. Not built yet. Details and the updated questions are in
+`NEURO_ALIGNMENT.md`.
