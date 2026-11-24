@@ -173,6 +173,9 @@ pub struct Harness {
     /// The evidence cards of the current prompt as the device wrote them (`F<id> <card>` lines). The provider
     /// is shown these after guard A; guard E, its template and guard G read them as they are here.
     cards: Buf<MAX_PROMPT>,
+    /// Tool results as received, one per line group. Never shown to a provider (the transcript holds them
+    /// after guard A); guard E reads them, as Neuro's E reads the original context.
+    results_raw: Buf<MAX_PROMPT>,
     req_frame: Buf<REQ_MAX>,
     request_hash: [u8; 32],
     sign_req: SignRequest,
@@ -234,6 +237,7 @@ impl Harness {
             transcript: Buf::new(),
             prompt: Buf::new(),
             cards: Buf::new(),
+            results_raw: Buf::new(),
             req_frame: Buf::new(),
             request_hash: [0; 32],
             sign_req: SignRequest::ZERO,
@@ -280,6 +284,7 @@ impl Harness {
         self.included = [false; MAX_EVIDENCE];
         self.prompt_classes = 0;
         self.transcript.clear();
+        self.results_raw.clear();
         self.prompt.clear();
         self.req_frame.clear();
         self.request_hash = [0; 32];
@@ -695,9 +700,9 @@ impl Harness {
             }
             Ok(ModelOutput::Answer(mut a)) => {
                 // Guard E (Neuro doc 24): prose that repeats eight or more characters of a quoted value of the
-                // cards is replaced by the deterministic template sentence. Verdict, evidence, entities and
-                // next step stay as the provider gave them.
-                if guard::echoes(self.cards.as_slice(), self.summary.as_slice()) {
+                // cards or of a tool result, as received, is replaced by the deterministic template sentence.
+                // Verdict, evidence, entities and next step stay as the provider gave them.
+                if guard::echoes(self.cards.as_slice(), self.summary.as_slice()) || guard::echoes(self.results_raw.as_slice(), self.summary.as_slice()) {
                     let before = sha256(&[self.summary.as_slice()]);
                     self.summary.clear();
                     if guard::template_summary(self.cards.as_slice(), LANG, &mut BufSink(&mut self.summary)).is_err() {
@@ -790,7 +795,10 @@ impl Harness {
             self.transcript.push(b"]\n")?;
             // Guard A on the way in, as for the cards: a result can quote what the network carried.
             guard::guard_a(data, &mut BufSink(&mut self.transcript)).ok()?;
-            self.transcript.push(b"\n")
+            self.transcript.push(b"\n")?;
+            // The result as received, for guard E only. The newline keeps a quote from pairing across results.
+            self.results_raw.push(data)?;
+            self.results_raw.push(b"\n")
         };
         if entry().is_none() {
             return self.finish(out, Outcome::Aborted(Abort::PromptTooLarge));

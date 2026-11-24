@@ -221,15 +221,20 @@ Neuro's own functions and has a drift gate on the Python sources.
 - **Guard G and the grounding checks** now also read the cards as written (before, they read the prompt, which
   held the same bytes).
 
-**Three things for Neuro to confirm or correct:**
-1. **Tool results.** E checks the cards only. A result is shown after guard A and is not kept as received, so its
-   quoted values cannot be echoed and are not checked. In `inv_eval.py` the RESULT lines are part of the context
-   E would read.
-2. **Language.** The device's prompt and E's template sentence are English only (`Lang::En`). The Romanian
-   template is mirrored and tested, but nothing on the device selects it yet.
-3. **Differences from Python, all outside what the compressor emits:** `\S`, `\d`, `\w` and `strip` are ASCII; a
-   context that is not UTF-8 is refused; both Greek sigmas compare equal in E, which can add a fallback Python
-   would not make but cannot miss one.
+**Neuro's answers to three questions (2026-11-24), and what the device does:**
+1. **E reads the original context, tool results included.** Done: the harness keeps every tool result as received
+   (never shown to a provider) and E checks the cards and those results. The template sentence is still built
+   from the cards only; Conductor's tool-result lines are not fact cards.
+2. **English only on the device is fine.** The Romanian template stays mirrored and tested, and unselected.
+3. **ASCII semantics are fine for cards** (`quote_untrusted` writes quoted values as ASCII JSON), on two conditions:
+   - *Refusal must fail closed.* It does: a context guard A refuses is never sent (the job aborts), an answer E
+     cannot read counts as an echo, and a template that cannot be written rejects the answer.
+   - *Tool results may carry raw non-ASCII.* Guard A and E's test are not ASCII-only: character counts, the
+     word count and `INSTRUCTION_LIKE` follow Python on Unicode text, including the characters `re.I` folds onto
+     `i` and `s` (long s, dotless i, dotted capital I). The vectors and a harness test cover non-ASCII values.
+     The ASCII-only parts are `\S`, `\d`, `\w` and `strip` in the template's row patterns, which read cards.
+   - If the compressor's `quote_untrusted` is ported later, it must use the same folding: an ASCII-only
+     matcher would under-flag.
 
 **Not done:** the ftFg fidelity run on dev v8 builds its prompts without guard A (the tool predates this). It
 compares the two runtimes on identical prompts, so the result stands, but the prompts are not the guarded ones
