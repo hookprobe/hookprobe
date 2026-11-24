@@ -16,7 +16,11 @@ User=superpop
 Group=superpop
 EnvironmentFile=/etc/superpop/superpop.env
 ExecStart=/usr/local/bin/superpop run --key-file /etc/superpop/pop.key --devices /etc/superpop/devices \
-  --bind ${SUPERPOP_BIND} --tun ${SUPERPOP_TUN} --tenant ${SUPERPOP_TENANT} --pool ${SUPERPOP_POOL}
+  --bind ${SUPERPOP_BIND} --tun ${SUPERPOP_TUN} --tenant ${SUPERPOP_TENANT} --pool ${SUPERPOP_POOL} \
+  --ctr-state /var/lib/superpop/ctr.txt
+# ADR 0069: the msg1 counter marks (durable; systemd creates /var/lib/superpop owned by the service user)
+StateDirectory=superpop
+StateDirectoryMode=0700
 # '+' = runs as root outside the sandbox: wait for the TUN, then address/forwarding-check/NAT/MSS (superpop-net.sh).
 ExecStartPost=+/bin/sh -c 'for i in $(seq 50); do ip link show "$SUPERPOP_TUN" >/dev/null 2>&1 && exec /usr/local/sbin/superpop-net.sh "$SUPERPOP_TUN" "$SUPERPOP_WAN_IF" "$SUPERPOP_POOL" "$SUPERPOP_GW"; sleep 0.1; done; echo "superpop: $SUPERPOP_TUN never appeared" >&2; exit 1'
 ExecStopPost=-+/usr/sbin/nft delete table inet superpop

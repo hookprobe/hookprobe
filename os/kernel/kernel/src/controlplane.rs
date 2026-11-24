@@ -87,6 +87,11 @@ pub struct ControlPlane {
     fails: u32,
     /// completed sessions retired by the lifetime / record-count rekey
     pub rekeys: u32,
+    /// ADR 0069 (G19): the durable msg1 counter source. Some = msg1's payload is `fp ‖ ctr` (LE u64), the counter
+    /// persisted before the msg1 is built; None (MSSP enrollment, QEMU) = the payload is `fp` alone.
+    msg1_ctr: Option<fn() -> Option<u64>>,
+    /// the counter in the msg1 now in flight (0 = none / the old payload)
+    pub last_ctr: u64,
 }
 
 impl ControlPlane {
@@ -116,7 +121,15 @@ impl ControlPlane {
             next_try_ms: 0,
             fails: 0,
             rekeys: 0,
+            msg1_ctr: None,
+            last_ctr: 0,
         }
+    }
+
+    /// ADR 0069: carry a durable, strictly increasing counter in every new msg1 (`fp ‖ ctr`). `next` persists the
+    /// counter before returning it; None = not durable, and no msg1 is sent this attempt.
+    pub fn set_msg1_counter(&mut self, next: fn() -> Option<u64>) {
+        self.msg1_ctr = Some(next);
     }
 
     /// G19: send the handshake UNICAST to `ip` through the next hop `mac` (the WAN gateway) instead of a LAN
@@ -186,7 +199,20 @@ impl ControlPlane {
     /// Build msg1 + pre-chunk it into the egress datagram buffer, and move to SentMsg1. The drawn
     /// ephemerals survive inside `self.pending` across the msg1→msg2 gap (owned, no lifetime).
     fn start(&mut self, rnd: &InitiatorRandomness) -> bool {
-        let (msg1, ipend) = match initiator_write_msg1(&self.dev_kp, &self.resp_pub, rnd, &self.device_fp) {
+        let mut payload = [0u8; 40];
+        payload[..32].copy_from_slice(&self.device_fp);
+        let plen = match self.msg1_ctr {
+            Some(next) => match next() {
+                Some(c) => {
+                    payload[32..].copy_from_slice(&c.to_le_bytes());
+                    self.last_ctr = c;
+                    40
+                }
+                None => return false, // not durable: send nothing (the caller backs off)
+            },
+            None => 32,
+        };
+        let (msg1, ipend) = match initiator_write_msg1(&self.dev_kp, &self.resp_pub, rnd, &payload[..plen]) {
             Some(x) => x,
             None => return false,
         };
@@ -487,7 +513,42 @@ pub fn cp_selftest() {
     let retried = cp.state() == CpState::Idle; // ready to try again (a fresh draw on the next tick)
     let lifecycle = retired && rekeyed && failed && held && retried;
 
-    let pass = started && msg1_complete && msg2_ok.0 && msg2_ok.1 && lifecycle;
-    kprint!(" [P19-controlplane] {} — smoltcp-FREE hand-framed Noise handshake over the single-drain transport: msg1-chunked({} dgrams)+started={} responder-reassembled-msg1={} Established={} crossed-keys-match+tenant/peer-learned={} | session lifecycle: retired at 24 h with key wiped={} re-handshake with FRESH ephemerals -> new keys={} unanswered handshake fails={} backs off={} retries={}\n",
-        yn(pass), msg1_dgrams, yn(started), yn(msg1_complete), yn(msg2_ok.0), yn(msg2_ok.1), yn(retired), yn(rekeyed), yn(failed), yn(held), yn(retried));
+    // (9) ADR 0069: with a counter source the msg1 payload is `fp ‖ ctr` (authenticated inside msg1); a source that
+    //     cannot make the counter durable sends NO msg1.
+    fn ctr7() -> Option<u64> {
+        Some(7)
+    }
+    fn ctr_none() -> Option<u64> {
+        None
+    }
+    let tv2 = crate::securechannel::test_vectors();
+    let (pk2, fp2) = (tv2.dev.pk, boot_abi::sha256::digest(&tv2.dev.pk[..]));
+    let mut cc = ControlPlane::new(tv2.resp.public(), tv2.dev, cp_mac, [10, 200, 0, 2]);
+    cc.set_msg1_counter(ctr7);
+    let mut r4 = Some(tv2.irand);
+    cc.tick(0, true, &mut || r4.take());
+    let mut re4 = HsReasm::new();
+    let mut whole = false;
+    while let Some((dg, n)) = cc.poll_egress() {
+        if let Some(framed) = udp_payload_for_port(&dg[..n], HS_PORT) {
+            whole |= matches!(re4.feed(framed), Ok(Some(_)));
+        }
+    }
+    let mut want = [0u8; 40];
+    want[..32].copy_from_slice(&fp2);
+    want[32..].copy_from_slice(&7u64.to_le_bytes());
+    let carried = whole
+        && cc.last_ctr == 7
+        && responder_read_msg1(&tv2.resp, &pk2, re4.message()).map_or(false, |p| p.payload1.as_slice() == &want[..]);
+    let tv3 = crate::securechannel::test_vectors();
+    let mut cn = ControlPlane::new(tv3.resp.public(), tv3.dev, cp_mac, [10, 200, 0, 2]);
+    cn.set_msg1_counter(ctr_none);
+    let mut r5 = Some(tv3.irand);
+    cn.tick(0, true, &mut || r5.take());
+    let withheld = cn.state() == CpState::Idle && cn.poll_egress().is_none();
+    let counter = carried && withheld;
+
+    let pass = started && msg1_complete && msg2_ok.0 && msg2_ok.1 && lifecycle && counter;
+    kprint!(" [P19-controlplane] {} — smoltcp-FREE hand-framed Noise handshake over the single-drain transport: msg1-chunked({} dgrams)+started={} responder-reassembled-msg1={} Established={} crossed-keys-match+tenant/peer-learned={} | session lifecycle: retired at 24 h with key wiped={} re-handshake with FRESH ephemerals -> new keys={} unanswered handshake fails={} backs off={} retries={} | ADR 0069 msg1 counter: fp||ctr carried={} not durable -> no msg1={}\n",
+        yn(pass), msg1_dgrams, yn(started), yn(msg1_complete), yn(msg2_ok.0), yn(msg2_ok.1), yn(retired), yn(rekeyed), yn(failed), yn(held), yn(retried), yn(carried), yn(withheld));
 }

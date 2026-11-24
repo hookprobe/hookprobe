@@ -15,6 +15,7 @@
 //! | `ReachFloor` | 0 | 16 | segmentation reach-floor log (existing, M4.5) |
 //! | (reserved) | 16 | 2032 | bench self-tests (offset 1024, p15-bench) — never a product writer |
 //! | `Header` | 2048 | 8 | layout magic + version (format-on-first-use) |
+//! | `G19Ctr` | 2056 | 2 | ADR 0069 G19 msg1 counter (two records written alternately) |
 //! | `Journal` | 4096 | 512 | ADR 0055 owner policy journal (append area + A/B checkpoints), 256 KiB |
 //! | `Store` | 8192 | 2 x 56 MiB | ADR 0056 artifact store: A/B slot per artifact type + manifest |
 //! | `Staging` | after Store | 20 MiB | ADR 0056 upload staging |
@@ -23,6 +24,7 @@
 /// Sector offsets / sizes inside the partition. `const` so the layout is reviewable in one place.
 pub const REACH_FLOOR: (u64, u64) = (0, 16);
 pub const HEADER: (u64, u64) = (2048, 8);
+pub const G19_CTR: (u64, u64) = (2056, 2);
 pub const JOURNAL: (u64, u64) = (4096, 512);
 pub const STORE_SLOT_SECT: u64 = 56 * 2048; // 56 MiB per A/B half: every ADR 0056 type at its cap, with room
 pub const STORE: (u64, u64) = (8192, 2 * STORE_SLOT_SECT);
@@ -36,6 +38,7 @@ pub const MIN_SECT: u64 = EVIDENCE_OFF + EVIDENCE_MIN;
 pub enum Region {
     ReachFloor,
     Header,
+    G19Ctr,
     Journal,
     Store,
     Staging,
@@ -62,6 +65,7 @@ impl DataVol {
         let (off, len) = match r {
             Region::ReachFloor => REACH_FLOOR,
             Region::Header => HEADER,
+            Region::G19Ctr => G19_CTR,
             Region::Journal => JOURNAL,
             Region::Store => STORE,
             Region::Staging => STAGING,
@@ -115,7 +119,7 @@ pub fn selftest() -> bool {
     part(&mut mbr, 1, 0xDA, p2, 15_000_000);
     let dv = DataVol::from_mbr(&mbr);
     let found = dv.map(|d| d.bounds()) == Some((p2 as u64, p2 as u64 + 15_000_000));
-    let regions = [Region::ReachFloor, Region::Header, Region::Journal, Region::Store, Region::Staging, Region::Evidence];
+    let regions = [Region::ReachFloor, Region::Header, Region::G19Ctr, Region::Journal, Region::Store, Region::Staging, Region::Evidence];
     let (mut inside, mut disjoint) = (true, true);
     if let Some(d) = dv {
         let (blo, bhi) = d.bounds();

@@ -3,7 +3,8 @@
 //! authoritative spec (`onboarding/enrollment/superpop/README.md`):
 //!
 //! * handshake: the existing PQ-hybrid Noise IK (`controlplane`, chunked msg1/msg2) sent UNICAST to `<pop>:7654`
-//!   through the WAN gateway; msg1 payload = sha256(device pk), msg2 payload = tenant;
+//!   through the WAN gateway; msg1 payload = sha256(device pk) ‖ ctr (LE u64, ADR 0069: durable, strictly
+//!   increasing; the PoP refuses ctr <= the highest it accepted), msg2 payload = tenant;
 //! * data: UDP 7655, datagram = `"HQT1" ‖ sid(8) ‖ LE64 seq ‖ ciphertext ‖ tag16` (`seal_record` /
 //!   `AntiReplayRx::open_record`, RFC 6479 window), AD = `"HQT1" ‖ sid`,
 //!   sid = SHA-256("HQ-G19-sid-v1" ‖ handshake_hash)[0..8];
@@ -313,6 +314,9 @@ pub fn tick(now_ms: i64, wan_up: bool, wan_ip: [u8; 4], wan_mac: [u8; 6], gw_mac
         let (Some(rp), Some(kp)) = (crate::securechannel::ResponderPub::from_provisioned(xpk, &blob[32..]), dev_kp()) else { return };
         let mut c = ControlPlane::new(rp, kp, wan_mac, wan_ip);
         c.set_unicast(gw_mac, cfg.pop);
+        // ADR 0069: on metal every new msg1 carries the durable counter (DataVolume `G19Ctr`)
+        #[cfg(all(feature = "cm5", feature = "p15-write"))]
+        c.set_msg1_counter(crate::g19ctr::next);
         unsafe { (*core::ptr::addr_of_mut!(CP)).write(c) };
         r.cp_set = true;
         r.wan_ip = wan_ip;

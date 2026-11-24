@@ -3,8 +3,11 @@
 //!
 //! Handshake (UDP 7654): reassemble the chunked msg1 per source, authenticate it against the
 //! operator allowlist (PQ-hybrid Noise IK, the kernel's own securechannel), require the msg1
-//! payload to equal sha256(authenticated device pk), answer msg2 (payload = tenant LE64) unicast
+//! payload to start with sha256(authenticated device pk), answer msg2 (payload = tenant LE64) unicast
 //! to the source, install a session keyed by `sid`.
+//! ADR 0069: the msg1 payload is `fp ‖ ctr` (LE u64). A msg1 is accepted only if ctr is above the highest counter
+//! accepted for that device; the high-water mark is written durably (`CtrState`) before msg2 is sent. Migration:
+//! the old 32-byte payload is accepted until the device has once sent a counter, never after (no downgrade).
 //! Data (UDP 7655): G19 v1 records (see wire.rs). DATA is anti-spoofed (inner src must be the
 //! device's assigned address) and never routed device→device; replies from the TUN are sealed to
 //! the device's CURRENT endpoint (updated on every authenticated record — NAT rebinding/roaming).
@@ -18,7 +21,9 @@ use crate::wire::{self, Assign, Msg, Sid};
 use boot_abi::sha256;
 use ed25519_compact::PublicKey as EdPub;
 use std::collections::HashMap;
+use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 
 /// A session idle (no authenticated record) this long is dropped; devices keepalive every 15 s.
 pub const SESSION_IDLE_MS: u64 = 120_000;
@@ -41,6 +46,94 @@ const HS_DUP_RESENDS: u32 = 8;
 /// longer tear down the device's live session. Remembered for a session lifetime, bounded in count. (A PoP
 /// restart forgets them; the full fix is an initiator timestamp in msg1, a wire change for the ADR process.)
 const HS_SEEN_MAX: usize = 4096;
+
+/// ADR 0069: the per-device msg1 counter high-water marks, keyed by fingerprint (stable across edits of the
+/// devices file). With a path, every raise is written to `path.tmp`, fsynced, renamed over `path`, and the
+/// directory fsynced — before the msg2 that accepts it goes out. File: one `fp-hex ctr` line per device.
+#[derive(Default)]
+pub struct CtrState {
+    marks: HashMap<[u8; 32], u64>,
+    path: Option<PathBuf>,
+}
+
+impl CtrState {
+    /// In memory only (tests).
+    pub fn memory() -> CtrState {
+        CtrState::default()
+    }
+
+    /// Load `path` (a missing file = no marks yet). A malformed file is an error: the PoP must not start with its
+    /// replay floor silently reset.
+    pub fn load(path: &str) -> Result<CtrState, String> {
+        let mut marks = HashMap::new();
+        match std::fs::read_to_string(path) {
+            Ok(txt) => {
+                for (i, l) in txt.lines().enumerate() {
+                    let l = l.trim();
+                    if l.is_empty() || l.starts_with('#') {
+                        continue;
+                    }
+                    let bad = || format!("{path}:{}: expected `fp-hex counter`", i + 1);
+                    let mut it = l.split_whitespace();
+                    let (Some(f), Some(c), None) = (it.next(), it.next(), it.next()) else { return Err(bad()) };
+                    if f.len() != 64 {
+                        return Err(bad());
+                    }
+                    let mut fp = [0u8; 32];
+                    for (j, b) in fp.iter_mut().enumerate() {
+                        *b = u8::from_str_radix(&f[2 * j..2 * j + 2], 16).map_err(|_| bad())?;
+                    }
+                    marks.insert(fp, c.parse::<u64>().map_err(|_| bad())?);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{path}: {e}")),
+        }
+        Ok(CtrState { marks, path: Some(PathBuf::from(path)) })
+    }
+
+    pub fn get(&self, fp: &[u8; 32]) -> Option<u64> {
+        self.marks.get(fp).copied()
+    }
+
+    /// Raise `fp`'s mark to `ctr` and make it durable. Err = not durable: the caller refuses the handshake (the
+    /// in-memory mark is rolled back so state and disk agree).
+    pub fn raise(&mut self, fp: [u8; 32], ctr: u64) -> std::io::Result<()> {
+        let prev = self.marks.insert(fp, ctr);
+        if let Err(e) = self.persist() {
+            match prev {
+                Some(p) => self.marks.insert(fp, p),
+                None => self.marks.remove(&fp),
+            };
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    fn persist(&self) -> std::io::Result<()> {
+        let Some(path) = &self.path else { return Ok(()) };
+        let mut lines: Vec<String> = self.marks.iter().map(|(fp, c)| {
+            let h: String = fp.iter().map(|b| format!("{b:02x}")).collect();
+            format!("{h} {c}\n")
+        }).collect();
+        lines.sort();
+        let tmp = path.with_extension("tmp");
+        {
+            let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(&tmp)?;
+            f.write_all(b"# superpop ADR 0069 msg1 counter high-water marks: fp-hex counter\n")?;
+            for l in &lines {
+                f.write_all(l.as_bytes())?;
+            }
+            f.sync_all()?;
+        }
+        std::fs::rename(&tmp, path)?;
+        if let Some(dir) = path.parent() {
+            let d = if dir.as_os_str().is_empty() { std::path::Path::new(".") } else { dir };
+            std::fs::File::open(d)?.sync_all()?;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone)]
 pub struct Device {
@@ -113,6 +206,13 @@ pub struct Stats {
     pub hs_duplicate: u64,
     /// byte-identical msg1 seen after the duplicate window: ignored (no session teardown)
     pub hs_replayed: u64,
+    /// ADR 0069: msg1 refused because its counter is not above the device's mark (or an old-format msg1 from a
+    /// device that already sent a counter)
+    pub hs_stale_ctr: u64,
+    /// ADR 0069: old-format msg1 (no counter) accepted during the migration
+    pub hs_legacy: u64,
+    /// ADR 0069: msg1 refused because the counter mark could not be written durably
+    pub hs_ctr_unsaved: u64,
 }
 
 /// The msg2 a completed msg1 produced, kept for the duplicate window.
@@ -135,6 +235,8 @@ pub struct Pop {
     msg2_cache: HashMap<[u8; 32], Msg2Cache>,
     /// sha256(msg1) of every ACCEPTED msg1 → when (replay guard; bounded)
     msg1_seen: HashMap<[u8; 32], u64>,
+    /// ADR 0069: per-device msg1 counter marks
+    ctr: CtrState,
     /// The latest event time seen (TUN reads carry none): drives the senders' time-based rekey.
     now_ms: u64,
     /// The thresholds this PoP's senders rekey at (once the device announced CAPS).
@@ -170,10 +272,22 @@ impl Pop {
             hs_budget: HashMap::new(),
             msg2_cache: HashMap::new(),
             msg1_seen: HashMap::new(),
+            ctr: CtrState::memory(),
             now_ms: 0,
             rekey: RekeyPolicy::DEFAULT,
             stats: Stats::default(),
         })
+    }
+
+    /// ADR 0069: use durable counter marks (`superpop run --ctr-state FILE`).
+    pub fn with_ctr_state(mut self, st: CtrState) -> Pop {
+        self.ctr = st;
+        self
+    }
+
+    /// The counter mark for a device (tests / status).
+    pub fn ctr_mark(&self, fp: &[u8; 32]) -> Option<u64> {
+        self.ctr.get(fp)
     }
 
     pub fn session_count(&self) -> usize {
@@ -259,10 +373,35 @@ impl Pop {
             return vec![]; // unauthenticated: no keys, so silence (no CLOSE possible)
         };
         // Review Q2-H1 (as responder-sim): the claimed fingerprint must be the authenticated key's.
-        if pend.payload1.as_slice() != &self.devices[di].fp[..] {
+        let fp = self.devices[di].fp;
+        let pl = pend.payload1.as_slice();
+        if pl.len() < 32 || pl[..32] != fp[..] {
             self.stats.handshakes_refused += 1;
             return vec![];
         }
+        // ADR 0069: the counter must be above the device's mark; the old 32-byte payload only until the device has
+        // once sent a counter.
+        let new_ctr = match pl.len() {
+            32 => {
+                if self.ctr.get(&fp).is_some() {
+                    self.stats.hs_stale_ctr += 1; // a downgrade to the old format
+                    return vec![];
+                }
+                None
+            }
+            40 => {
+                let c = u64::from_le_bytes(pl[32..40].try_into().expect("8 bytes"));
+                if self.ctr.get(&fp).is_some_and(|m| c <= m) {
+                    self.stats.hs_stale_ctr += 1;
+                    return vec![];
+                }
+                Some(c)
+            }
+            _ => {
+                self.stats.handshakes_refused += 1;
+                return vec![];
+            }
+        };
         let rnd = match ResponderRandomness::from_entropy(ent) {
             Ok(r) => r,
             Err(_) => return vec![],
@@ -271,6 +410,18 @@ impl Pop {
             self.stats.handshakes_refused += 1;
             return vec![];
         };
+        // ADR 0069: the mark is durable before msg2 leaves; not durable = no handshake (the device retries).
+        match new_ctr {
+            Some(c) => {
+                if self.ctr.raise(fp, c).is_err() {
+                    self.stats.hs_ctr_unsaved += 1;
+                    let mut session = session;
+                    session.wipe();
+                    return vec![];
+                }
+            }
+            None => self.stats.hs_legacy += 1,
+        }
         let mut out = Vec::new();
         hs_chunk(msg2.as_slice(), |c| {
             out.push(Out::Hs(from, c.to_vec()));

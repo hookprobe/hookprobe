@@ -12,7 +12,7 @@ so its handshake and record bytes are the device's by construction.
 
 | | |
 |---|---|
-| Handshake | the existing chunked msg1/msg2 framing, **unicast** UDP to `<pop>:7654`; msg1 payload = `sha256(device pk)`; msg2 payload = tenant LE64. msg2 goes back to the msg1 source address/port. |
+| Handshake | the existing chunked msg1/msg2 framing, **unicast** UDP to `<pop>:7654`; msg1 payload = `sha256(device pk) ‖ ctr` (ctr LE64, ADR 0069: strictly increasing per device; the old `sha256(device pk)`-only payload is accepted until the device has once sent a counter); msg2 payload = tenant LE64. msg2 goes back to the msg1 source address/port. |
 | Data | UDP `7655`, datagram = `"HQT1"(4) ‖ sid(8) ‖ LE64 seq ‖ ciphertext ‖ tag16` (`Session::seal_record` / `AntiReplayRx::open_record`, RFC 6479 window) |
 | AD | `"HQT1" ‖ sid` |
 | sid | `SHA-256("HQ-G19-sid-v1" ‖ Session.handshake_hash)[0..8]`, fresh per session, unlinkable |
@@ -39,6 +39,7 @@ PoP policy, enforced here:
 - **No device-to-device routing:** dst inside the pool is dropped.
 - **One live session per device:** a re-handshake replaces and wipes the old session.
 - **Expiry:** idle sessions are dropped after 120 s, and any session after 25 h; devices re-handshake every 24 h.
+- **msg1 replay (ADR 0069):** a msg1 whose counter is not above the device's high-water mark is refused (`hs_stale_ctr`), and so is an old-format msg1 from a device that already sent a counter. Run with `--ctr-state /var/lib/superpop/ctr.txt`: each raise is written (temp file, fsync, rename, directory fsync) before msg2 is sent; a mark that cannot be written refuses the handshake (`hs_ctr_unsaved`). Without `--ctr-state` the marks are in memory and a restart re-opens the replay window. **Recovery** for a device restored from an old disk image (its counter is below the mark, so every handshake is `hs_stale_ctr`): stop the PoP, delete that device's line from the state file (the fingerprint is `sha256(pk)`), start it again; the next handshake sets a new mark. Record the action in the operator log.
 - **Handshake rate limit:** 6 completed msg1 per source IP per minute, with at most 256 concurrent reassemblies.
 - **Unauthorised devices:** a device that isn't allowlisted completes no handshake, so it gets **silence**. There are no keys to send it an authenticated CLOSE with.
 

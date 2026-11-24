@@ -4,13 +4,16 @@
 //!   superpop pub    --key-file F           print the public blob (x25519 pk ‖ ML-KEM ek, hex) to bake
 //!                                          into device images as the pinned PoP key
 //!   superpop run    --key-file F --devices FILE [--tenant HEX] [--dns IP] [--mtu N] [--pool CIDR]
-//!                   [--tun NAME] [--bind IP]
+//!                   [--tun NAME] [--bind IP] [--ctr-state FILE]
 //!   superpop selftest                      in-process device↔PoP end-to-end (no network, no TUN)
 //!   superpop devsim …                      a device simulator over real UDP (test tooling; see devsim.rs)
 //!
 //! Devices file: one device per line, `name  <ed25519-pk-hex, 64 chars>  <inner-ipv4>`; `#` comments.
 //! The pk is the one the device prints at boot (`[NETCP] device identity (SRK-derived) pk=…`).
 //! Networking (TUN address, forwarding, NAT) is set up by `superpop-net.sh`.
+//! `--ctr-state FILE` (ADR 0069): the per-device msg1 counter marks, written durably before each msg2. Without it the
+//! marks live in memory and a PoP restart re-opens the replay window. Recovery for a device restored from an old
+//! disk image (its counter is now below the mark): stop the PoP, delete that device's line, start it again.
 
 #[path = "../../responder-sim/src/entropy.rs"]
 #[allow(dead_code)]
@@ -149,7 +152,18 @@ fn run(args: &[String]) -> Result<(), String> {
     let bind = arg(args, "--bind").unwrap_or_else(|| "0.0.0.0".into());
     let ndev = devices.len();
     print_pub(&key);
-    let pop = Arc::new(Mutex::new(Pop::new(key, cfg, devices)?));
+    let ctr = match arg(args, "--ctr-state") {
+        Some(p) => {
+            let st = pop::CtrState::load(&p)?;
+            println!("superpop: msg1 counter marks in {p} (ADR 0069)");
+            st
+        }
+        None => {
+            println!("superpop: WARNING no --ctr-state: msg1 counter marks are in memory only (a restart re-opens the replay window)");
+            pop::CtrState::memory()
+        }
+    };
+    let pop = Arc::new(Mutex::new(Pop::new(key, cfg, devices)?.with_ctr_state(ctr)));
 
     let hs = Arc::new(UdpSocket::bind((bind.as_str(), wire::HS_PORT)).map_err(|e| format!("bind :7654: {e}"))?);
     let data = Arc::new(UdpSocket::bind((bind.as_str(), wire::DATA_PORT)).map_err(|e| format!("bind :7655: {e}"))?);

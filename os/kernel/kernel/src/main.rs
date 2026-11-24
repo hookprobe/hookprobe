@@ -227,6 +227,9 @@ mod enroll;
 mod controlplane;
 #[cfg(feature = "securechannel")]
 mod g19;
+/// ADR 0069: the durable G19 msg1 counter (DataVolume `G19Ctr`).
+#[cfg(feature = "securechannel")]
+mod g19ctr;
 // M6 (ADR 0044 D3 B2) — on-device evidence/telemetry export over the enrolled channel.
 #[cfg(feature = "securechannel")]
 mod export;
@@ -7977,6 +7980,7 @@ pub extern "C" fn kmain() -> ! {
         // metal (the metal half is the host MSSP-sim, deferred).
         controlplane::cp_selftest();
         let _ = g19::selftest();
+        let _ = g19ctr::selftest();
         let _ = securechannel::rekey_selftest(); // W4: in-session Noise rekey on the record layer
         let _ = g19::rekey_selftest(); // W4: rekey + continuity on the G19 tunnel
     }
