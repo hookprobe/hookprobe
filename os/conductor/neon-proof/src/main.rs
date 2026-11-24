@@ -437,7 +437,7 @@ fn q8_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
 /// layout, binary32 gains) run scalar and NEON from the same prompt: every logit of every step equal.
 fn qwen3_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
     use neuro_kernels::q8::row_bytes;
-    use neuro_lm::qwen3::{Kv, Layer, Mat, Model, Work};
+    use neuro_lm::qwen3::{Head, Kv, Layer, Mat, Model, Work};
     use neuro_lm::Dims;
     const D: Dims = Dims { vocab: 128, d_model: 64, n_layers: 2, n_heads: 4, n_kv_heads: 2, head_dim: 32, ffn: 128, max_ctx: 32 };
     const QD: usize = 128;
@@ -525,6 +525,10 @@ fn qwen3_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
     let Some(mut work_c) = Work::new(&D, 1, &mut wc.0, &mut wc.1, &mut wc.2, &mut wc.3) else { exit(1) };
     let mut kv_c = Kv { vals: &mut kvc.0, shifts: &mut kvc.1 };
     let prompt = [3usize, 77, 12, 101, 64];
+    // Every position's scalar logits and input token, for the batched check below.
+    static mut SEQ: [i64; 32 * 128] = [0; 32 * 128];
+    let seq = unsafe { &mut *core::ptr::addr_of_mut!(SEQ) };
+    let mut inputs = [0usize; 32];
     let mut tok = 0usize;
     let mut generated = [0u8; 32];
     for pos in 0..D.max_ctx {
@@ -533,6 +537,8 @@ fn qwen3_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
         let rc = pmodel.step(simd, t, pos, &mut kv_c, &mut work_c);
         match (ra, rb, rc) {
             (Ok(a), Ok(b), Ok(c)) if a == b && a == c && work_a.logits == work_b.logits && work_a.logits == work_c.logits => {
+                seq[pos * 128..(pos + 1) * 128].copy_from_slice(work_a.logits);
+                inputs[pos] = t;
                 tok = a;
                 generated[pos] = a as u8;
             }
@@ -543,6 +549,29 @@ fn qwen3_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
         }
     }
     let _ = writeln!(u, "PASS qwen3: 2 layers, QK-norm, NEOX RoPE theta 1e6, GQA 4/2, SwiGLU, tied head, Q8_0 ({} weight bytes); {} positions, every logit equal: GGUF scalar == GGUF {} == packed {} ({} packed bytes)", TOTAL, D.max_ctx, simd.name(), simd.name(), PTOTAL);
+    // Batched forward on NEON (packed weights, 4 tokens per pass): every column equals the scalar one-token
+    // logits at its position. This is the pass that verifies speculative drafts.
+    const B4: usize = 4;
+    static mut KV_D: ([i16; KVN], [u8; KVS]) = ([0; KVN], [0; KVS]);
+    static mut WD: ([i64; B4 * (A64 - 32) + 32], [i8; B4 * 128], [(i32, i32); B4 * 4], [i32; 32]) = ([0; B4 * (A64 - 32) + 32], [0; B4 * 128], [(0, 0); B4 * 4], [0; 32]);
+    let (kvd, wd) = unsafe { (&mut *core::ptr::addr_of_mut!(KV_D), &mut *core::ptr::addr_of_mut!(WD)) };
+    let Some(mut work_d) = Work::new(&D, B4, &mut wd.0, &mut wd.1, &mut wd.2, &mut wd.3) else { exit(1) };
+    let mut kv_d = Kv { vals: &mut kvd.0, shifts: &mut kvd.1 };
+    let mut p = 0usize;
+    while p < D.max_ctx {
+        if pmodel.forward(simd, &inputs[p..p + B4], p, &mut kv_d, &mut work_d, Head::All).is_err() {
+            let _ = writeln!(u, "FAIL: batched forward refused");
+            exit(1);
+        }
+        for j in 0..B4 {
+            if work_d.logits_of(j, 128) != &seq[(p + j) * 128..(p + j + 1) * 128] {
+                let _ = writeln!(u, "FAIL: batched {} column {j} at {} differs from the scalar step", simd.name(), p + j);
+                exit(1);
+            }
+        }
+        p += B4;
+    }
+    let _ = writeln!(u, "PASS qwen3 batched: packed {} forward, 4 tokens per pass, every column of all {} positions equal to the scalar one-token logits", simd.name(), D.max_ctx);
     let _ = writeln!(u, "  generated tokens after the prompt: {:?}", &generated[prompt.len()..prompt.len() + 12]);
 }
 

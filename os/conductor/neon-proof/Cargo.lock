@@ -80,6 +80,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "neuro-contract"
+version = "0.0.26"
+
+[[package]]
 name = "neuro-engine"
 version = "0.0.26"
 dependencies = [
@@ -95,6 +99,7 @@ version = "0.0.26"
 name = "neuro-lm"
 version = "0.0.26"
 dependencies = [
+ "neuro-contract",
  "neuro-kernels",
 ]
 
