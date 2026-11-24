@@ -1338,11 +1338,12 @@ pub fn dfs_cac_state() -> Option<u32> {
     if ok { Some(u32::from_le_bytes([out[0], out[1], out[2], out[3]])) } else { None }
 }
 
-/// 802.11h spectrum management as the firmware has it (`WLC_GET_SPECT_MANAGMENT`, 107; 0 off, 1 loose, 2 strict, 3
+/// 802.11h spectrum management as the firmware has it (`WLC_GET_SPECT_MANAGMENT`, 245; 0 off, 1 loose 11h, 2 strict 11h, 3
 /// strict + 11d). heqk never sets it (no `WLC_SET_SPECT_MANAGMENT` / `spect` iovar), so this is the firmware default —
 /// read for the Infineon case (2026-11-23: "keep spect 1 for a DFS AP"). Read-only GET. None = no answer.
 pub fn spect_mode() -> Option<u32> {
-    const WLC_GET_SPECT_MANAGMENT: u32 = 107;
+    // 245 (wlioctl_defs.h: SET 244 / GET 245). 107 is WLC_GET_MONITOR — #1554 read that by mistake.
+    const WLC_GET_SPECT_MANAGMENT: u32 = 245;
     let mut out = [0u8; 4];
     let (ok, _) = bcdc_dcmd(WLC_GET_SPECT_MANAGMENT, 0, &[0u8; 4], &mut out);
     if ok { Some(u32::from_le_bytes(out)) } else { None }
