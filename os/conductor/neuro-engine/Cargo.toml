@@ -1,0 +1,24 @@
+# neuro-engine, step 1 (N0): an integer specialist engine for heqk. no_std, no alloc, no unsafe, no float.
+# A model is DATA: a package with a memory plan and an execution plan over a closed table of kernels
+# (Neuro docs 05 "static plan interpreter" and 06 "HNX"). Packages contain no code.
+# The package layout here is a labelled PROTOTYPE ("HNX0") of the doc 06 design, not the final format.
+# Lives in this workspace for now; its home on adoption is os/neuro.
+[package]
+name = "neuro-engine"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# SHA-256 only, the kernel's own version (integrity of the package root; SIGNATURE verification is the
+# kernel's job before the engine ever sees the bytes, Neuro request R5).
+sha2 = { version = "=0.10.9", default-features = false }
+neuro-kernels = { path = "../neuro-kernels" }
+
+[dev-dependencies]
+neuro-l1 = { path = "../../neuro/neuro-l1" }
+neuro-kernels = { path = "../neuro-kernels" }

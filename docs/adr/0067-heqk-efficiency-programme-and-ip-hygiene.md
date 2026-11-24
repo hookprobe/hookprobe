@@ -172,6 +172,17 @@ This record does not say that every implementation detail is public, and it does
 status of any patent claim. Counsel establishes the disclosure dates, the technical scope disclosed and
 what protection remains (D13, review B).
 
+*D12 decision for the heqk Conductor and the heqk-native engine (operator, 2026-11-24): publish.* The work
+held local on branch `conductor/c0-local` is published by its push to this repo. It covers:
+- HP-EXEC delegation capabilities, the harness, verifier, ledger and pairing (`os/conductor/conductor-core`);
+- the integer Q8_0 / fixed-point Qwen3 engine and the lossless packed weight layout;
+- the GGUF reader and the Qwen tokenizer with NFC;
+- evidence-closed decoding from `neuro-contract`;
+- the exact speed-ups: batched verification, grammar-pruned head, verified speculation.
+
+The dated Technical Disclosure Commons copy that defensive publication also asks for is an operator step
+and is not done. Counsel review (D13) still applies before shipping.
+
 **D13. Counsel reviews before shipping**, as three separate reviews, each answering copyright,
 open-source licence obligations, patent infringement and patentability as different questions:
 

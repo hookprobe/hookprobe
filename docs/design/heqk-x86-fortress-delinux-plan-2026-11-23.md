@@ -83,6 +83,21 @@ Rejected alternatives:
 
 ## 4a. "Can we run Claude from heqk?" (operator question, 2026-11-23)
 
+> **Row (a) superseded (operator decision, 2026-11-24): the heqk Conductor is the plan for Claude (or any model)
+> as heqk's on-device AI.** The Conductor (`os/conductor`, ADR 0071 to be written) already designs and builds
+> what row (a) lists, and more:
+> - per-call capabilities (HP-EXEC);
+> - typed tool authorization;
+> - data-class flow checks on what leaves the device;
+> - five verifier statuses;
+> - a sealed ledger;
+> - Neuro's answer contract;
+> - BYO and local providers, including the native integer engine.
+>
+> Row (a)'s outbound TLS 1.3 client remains a HomePods piece: it is the Conductor's transport for the
+> external-API tier (P5). Rows (b) and (c) are unchanged. See `os/conductor/NEURO_ALIGNMENT.md` and the
+> Conductor design review.
+
 The model never runs on the box; it is served by the Anthropic API over HTTPS. What runs
 locally is a **harness**: a loop that calls the Messages API and executes the tools the model
 asks for. So the question splits three ways:

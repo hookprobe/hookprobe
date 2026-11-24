@@ -1,0 +1,22 @@
+# The device-side Conductor logic: protocol, capability format, data classes, typed tools, verifier,
+# placement and the sans-IO harness state machine. no_std, no alloc, no unsafe.
+# Crypto: the SAME crates and versions the kernel already ships (sha2 0.10.9, ed25519-compact 2.3.1).
+[package]
+name = "conductor-core"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# Signing exists only for the (future EL1) delegation signer and the mock worker. The EL0 harness build
+# leaves it off, so the harness binary contains no signing code at all.
+signer = []
+
+[dependencies]
+neuro-contract = { path = "../neuro-contract" }
+sha2 = { version = "=0.10.9", default-features = false }
+ed25519-compact = { version = "=2.3.1", default-features = false }

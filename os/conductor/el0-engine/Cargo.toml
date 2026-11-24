@@ -1,0 +1,24 @@
+# neuro-engine as an EL0 excursion server for heqk (step 1: built and measured; NOT wired into os/kernel).
+# Scalar integer only: it needs no FP/SIMD grant and runs on today's heqk.
+[package]
+name = "el0-engine"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[workspace]
+
+[[bin]]
+name = "el0-engine"
+path = "src/main.rs"
+
+[dependencies]
+neuro-engine = { path = "../neuro-engine" }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
+overflow-checks = true

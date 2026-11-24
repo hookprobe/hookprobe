@@ -1,0 +1,31 @@
+# The Conductor harness as an EL0 excursion server for heqk (C0: builds and is measured; NOT wired into
+# os/kernel — that, its address range and moving its ABI into hal/ are HomePods decisions).
+# Detached crate, like os/neuro/el0-neuro. conductor-core WITHOUT the `signer` feature: this binary
+# contains no signing code and holds no key.
+[package]
+name = "el0-harness"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[workspace]
+
+[[bin]]
+name = "el0-harness"
+path = "src/main.rs"
+
+[dependencies]
+conductor-core = { path = "../conductor-core" }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
+overflow-checks = true
+
+# ed25519-compact's double_scalarmult_vartime unrolls to ~95 KB even at opt-level "s" (the kernel notes the
+# same function, os/kernel/Cargo.toml). Verification runs twice per model call, so size wins over speed.
+[profile.release.package.ed25519-compact]
+opt-level = "z"

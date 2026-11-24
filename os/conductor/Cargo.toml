@@ -1,0 +1,13 @@
+# HookProbe Conductor, C0 spike (design review v2, approved 2026-11-24 as a restricted spike).
+# Lives OUTSIDE os/kernel (HomePods-owned). No kernel change. Published by operator decision under ADR 0067
+# D12 (2026-11-24). el0-harness is a detached crate (its own [workspace]), like os/neuro/el0-neuro.
+[workspace]
+resolver = "2"
+members = ["conductor-core", "conductor-mock", "runtime-proof", "neuro-engine", "neuro-kernels", "neuro-hnx", "neuro-lm", "neuro-build", "tok-build", "neuro-gguf", "neuro-contract"]
+
+[profile.release]
+panic = "abort"
+overflow-checks = true
+
+[profile.dev]
+panic = "abort"

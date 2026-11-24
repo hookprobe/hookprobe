@@ -1,0 +1,17 @@
+# neuro-contract: the explainer's answer contract, the one definition on the device side (mirrors Neuro's
+# run_eval.py; tests/drift.rs fails on any difference). Prompt text, per-request id rule, schema text, and the
+# answer automaton shared by constrained decoding and the verifier. no_std, no alloc, no unsafe, no float.
+[package]
+name = "neuro-contract"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+regex = "1"

@@ -27,3 +27,7 @@ cargo os/neuro/el0-neuro
 cargo os/neuro/neuro-core
 cargo os/neuro/neuro-dp
 cargo os/neuro/neuro-l1
+cargo os/conductor
+cargo os/conductor/el0-harness
+cargo os/conductor/el0-engine
+cargo os/conductor/neon-proof

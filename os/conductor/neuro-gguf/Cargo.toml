@@ -1,0 +1,15 @@
+# neuro-gguf: reads GGUF v3 model files (as llama.cpp writes them) zero-copy, and binds a Qwen3 GGUF to the
+# integer decoder. no_std, no alloc, no unsafe, no float. Runs on the device over the admitted model region,
+# so the device executes the exact bytes of the file Neuro validated.
+[package]
+name = "neuro-gguf"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+neuro-lm = { path = "../neuro-lm" }
