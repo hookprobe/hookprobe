@@ -266,3 +266,31 @@ fn long_pieces_match_and_stay_bounded() {
         println!("{name}: {n} ids in {dt:?} (equal to HF)");
     }
 }
+
+/// The tokenizer read from the GGUF equals the one read from tokenizer.json (set both env vars).
+#[test]
+fn gguf_tokenizer_equals_tokenizer_json() {
+    let (Some(hf_path), Ok(gguf_path)) = (std::env::var("QWEN3_TOKENIZER_JSON").ok(), std::env::var("QWEN3_GGUF")) else {
+        println!("SKIPPED: set QWEN3_TOKENIZER_JSON and QWEN3_GGUF");
+        return;
+    };
+    let bytes = std::fs::read(gguf_path).unwrap();
+    let g = neuro_gguf::Gguf::open(&bytes).unwrap();
+    let from_gguf_blob = blob(&from_gguf(&g).unwrap(), ranges(), nfc()).unwrap();
+    let from_json_blob = blob(&from_hf_json(&std::fs::read_to_string(hf_path).unwrap()).unwrap(), ranges(), nfc()).unwrap();
+    let (a, b) = (Tokenizer::new(&from_gguf_blob).unwrap(), Tokenizer::new(&from_json_blob).unwrap());
+    assert_eq!(a.vocab(), 151_936);
+    for id in 0..b.vocab() {
+        assert_eq!(a.bytes(id), b.bytes(id), "token {id}");
+    }
+    let mut r = Rng(1234);
+    let (mut oa, mut ob) = (vec![0u32; 1 << 14], vec![0u32; 1 << 14]);
+    let (mut cps, mut buf) = (vec![0u32; 1 << 16], vec![0u8; 1 << 16]);
+    for i in 0..20_000 {
+        let s = if i == 0 { "<|im_start|>user\nWhy?<|im_end|>\n<tool_call>{}</tool_call>".to_string() } else { random_text(&mut r, 60) };
+        let na = a.encode_nfc(s.as_bytes(), &mut oa, &mut cps, &mut buf).unwrap();
+        let nb = b.encode_nfc(s.as_bytes(), &mut ob, &mut cps, &mut buf).unwrap();
+        assert_eq!(&oa[..na], &ob[..nb], "{s:?}");
+    }
+    println!("gguf tokenizer: same bytes for all {} ids as tokenizer.json, same encoding on 20,000 texts (+{} padding ids)", b.vocab(), a.vocab() - b.vocab());
+}

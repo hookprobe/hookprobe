@@ -207,6 +207,54 @@ Known difference to plan for: llama.cpp (the runtime Neuro measured with) has it
 pre-tokenizer and its own Unicode tables. The fidelity check should compare token ids with llama.cpp on the
 dev set, not only with HF.
 
+## GGUF reader, and the first real model on the integer engine
+
+`neuro-gguf` reads GGUF v3 files, the format Neuro's models are exported in, directly on the device:
+zero-copy over the admitted model region, `no_std`, no allocation, no `unsafe`, no floating point.
+`Gguf::open` validates the whole header once:
+- every length, count, type and dimension is checked, with checked arithmetic;
+- tensors must be aligned, inside the data section, in increasing order and non-overlapping;
+- keys and tensor names must be unique.
+
+`neuro_gguf::qwen3` binds a Qwen3 GGUF to the integer decoder. Every matrix must be `Q8_0` and every norm
+binary32, with exactly the shapes the hyperparameters imply. Anything else is refused, never converted.
+The attention scale is computed with integers and is bit-identical to llama.cpp's `1.0f/sqrtf(head_dim)`.
+The tokenizer is read from the same file's metadata (`tok_build::from_gguf`). So weights and vocabulary
+both come from the one file Neuro hands over, and the weight bytes the device multiplies are that file's
+bytes. Not taken from the GGUF: the RoPE table, which is built on the build host from
+`qwen3.rope.freq_base` and shipped in the signed package.
+
+| Gate | Result |
+|---|---|
+| Synthetic GGUF with every value type (u8 … f64, strings, string and integer arrays) and tensors read back exactly | pass |
+| Refused for the right reason: magic, versions 1/2/4, truncation anywhere, absurd counts, unknown value or tensor type, nested array, duplicate key or tensor name, partial block, 0 or 5 dimensions, non-UTF-8 key, misaligned / overlapping / out-of-range tensor, bad alignment value | pass |
+| 500,000 mutated files: no panic | pass |
+| Integer `1/sqrt(n)` equals IEEE `1.0f/sqrtf(n)` for every n up to 65,536 | pass |
+| Binder refuses: wrong architecture, missing layer, a well-formed `Q4_0` matrix where `Q8_0` is required, context beyond training, wrong RoPE table | pass |
+| The tokenizer read from the GGUF has the same bytes for all 151,669 ids as `tokenizer.json`, and the same encoding on 20,000 texts | pass |
+| Builds for `aarch64-unknown-none-softfloat`; in the no-float / no-Linux / no-Python gate | pass |
+
+**Converter smoke test on a real model** (`tok-build` binary `qwen3-smoke`; NOT a model track, and Neuro
+owns models and evaluation). Input: public Qwen3-1.7B Q8_0 GGUF, revision 90862c4b, SHA-256
+`061b54da…cb1a`, Apache-2.0, kept outside the repo. The real 1.8 GB file is opened (header validated in
+64 ms) and bound. A chat prompt goes through the device tokenizer and is run greedily on the integer
+engine. Every step is compared with an independent f64 runtime that dequantises the same bytes.
+
+| Prompt | Integer engine answer | Greedy token = f64 | Logit 1 − cosine (mean / worst) |
+|---|---|---|---|
+| "What is the capital of France? Answer in one word." | `Paris` + `<\|im_end\|>` | 24 / 25 (the miss is inside the prompt: "\n" vs "\n\n" after `<\|im_end\|>`, f64 gap 0.24) | 5.4×10⁻⁴ / 1.4×10⁻³ |
+| A port-scan description (40 attempts on 22/23/80/443 in 2 s) | a fluent one-sentence answer | 81 / 81 | 3.1×10⁻⁴ / 1.4×10⁻³ |
+
+Where the 10⁻³ comes from (`REF_DIAG=1`): llama.cpp's own CPU path is no closer to pure float. Quantising
+activations exactly as it does moves the f64 runtime's logits up to 2.6×10⁻³ from float, more than the
+integer engine's 1.4×10⁻³. Any two 8-bit-activation implementations differ at this level, because
+per-block rounding amplifies 10⁻⁶ differences upstream. Consequence for the fidelity check with Neuro: it
+must be stated in token agreement and margins on the dev set, not bit-exactness.
+
+The answer to the security prompt is the generic public model's; this says nothing about ftFg's quality.
+Speed on the build host: 1.2 s/token, scalar, one thread. That is not a device number: no SIMD, no 4-row
+kernel, and x86.
+
 ## Crates
 
 | Crate | What | Target |

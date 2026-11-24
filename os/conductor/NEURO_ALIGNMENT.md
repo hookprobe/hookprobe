@@ -44,7 +44,10 @@
 - `neuro-lm`: Q8 GEMV kernel (scalar + NEON SDOT), Qwen3 QK-norm, the Qwen2 pre-tokenizer. **Status
   2026-11-24: the `Q8_0` kernels and the Qwen3 decoder are built and verified (README, "The 8-bit path and
   Qwen3"); the Qwen tokenizer is built and equal to HF `tokenizers` on the Qwen3 vocabulary (README, "The Qwen
-  tokenizer").** Nothing was trained or evaluated.
+  tokenizer").** **The GGUF reader is built: a public Qwen3-1.7B Q8_0 GGUF runs end to end on the
+  integer engine (converter smoke test only). Plugging in ftFg needs only its GGUF (question 1).** Note for
+  question 2: fidelity must be judged by token agreement and margins, since llama.cpp's own CPU path differs
+  from float by about as much as this engine does. Nothing was trained or evaluated.
 - **Fidelity, not quality:** the integer engine's logits and greedy outputs against llama.cpp on the SAME GGUF,
   on Neuro's **dev** set only (never a sealed set). If the outputs match within a stated tolerance, Neuro's
   quality results carry over; if they do not, that is a bug report, not a new evaluation.

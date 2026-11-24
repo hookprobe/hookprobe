@@ -119,7 +119,10 @@ pub fn unicode_ranges() -> Vec<(u32, u32, u32)> {
 }
 
 /// Assemble the blob (layout in `neuro_lm::tok`).
-pub fn blob(src: &Source, ranges: &[(u32, u32, u32)], nfc: &(Vec<(u32, Vec<u32>)>, Vec<(u32, u32, u32)>)) -> Result<Vec<u8>, String> {
+/// NFC tables: (code point, full canonical decomposition) and (a, b, primary composite).
+pub type NfcTables = (Vec<(u32, Vec<u32>)>, Vec<(u32, u32, u32)>);
+
+pub fn blob(src: &Source, ranges: &[(u32, u32, u32)], nfc: &NfcTables) -> Result<Vec<u8>, String> {
     let (decomp, comp) = nfc;
     let n_dpool: usize = decomp.iter().map(|d| d.1.len()).sum();
     let n = src.tokens.len();
@@ -202,7 +205,7 @@ pub fn blob(src: &Source, ranges: &[(u32, u32, u32)], nfc: &(Vec<(u32, Vec<u32>)
 
 /// NFC tables: full canonical decompositions (cp, code points) and primary compositions (a, b, composite),
 /// both without Hangul (the device does Hangul algorithmically).
-pub fn nfc_tables() -> (Vec<(u32, Vec<u32>)>, Vec<(u32, u32, u32)>) {
+pub fn nfc_tables() -> NfcTables {
     use unicode_normalization::char::{compose, decompose_canonical};
     use unicode_normalization::{is_nfc_quick, IsNormalized};
     let hangul = |c: u32| (0xac00..0xd7a4).contains(&c) || (0x1100..0x1200).contains(&c);
@@ -235,4 +238,49 @@ pub fn nfc_tables() -> (Vec<(u32, Vec<u32>)>, Vec<(u32, u32, u32)>) {
     }
     comp.sort();
     (decomp, comp)
+}
+
+/// Read the tokenizer from GGUF metadata as llama.cpp's converter writes it (`tokenizer.ggml.model` =
+/// "gpt2", byte-level tokens, "a b" merges). Control (3) and user-defined (4) tokens are added tokens,
+/// matched on the raw text; unused padding entries (5) stay in the vocabulary but are never produced.
+pub fn from_gguf(g: &neuro_gguf::Gguf) -> Result<Source, String> {
+    if g.get_str(b"tokenizer.ggml.model") != Some(b"gpt2") {
+        return Err("tokenizer.ggml.model is not gpt2 (byte-level BPE)".into());
+    }
+    let toks = g.get_array(b"tokenizer.ggml.tokens").ok_or("no tokenizer.ggml.tokens")?;
+    let types = g.get_array(b"tokenizer.ggml.token_type").ok_or("no tokenizer.ggml.token_type")?;
+    let merges = g.get_array(b"tokenizer.ggml.merges").ok_or("no tokenizer.ggml.merges")?;
+    if types.len != toks.len {
+        return Err("token_type length differs from tokens".into());
+    }
+    let inv: HashMap<char, u8> = byte_to_char().iter().enumerate().map(|(b, &c)| (c, b as u8)).collect();
+    let mut tokens = vec![];
+    let mut added = vec![];
+    let mut id_of: HashMap<Vec<u8>, u32> = HashMap::new();
+    for (i, t) in toks.strings().enumerate() {
+        let s = std::str::from_utf8(t).map_err(|e| e.to_string())?;
+        let ty = types.int(i as u64).ok_or("bad token_type")?;
+        let bytes = match ty {
+            1 => s.chars().map(|c| inv.get(&c).copied().ok_or_else(|| format!("token {i} {s:?} is not byte-level"))).collect::<Result<Vec<u8>, _>>()?,
+            3 | 4 => {
+                added.push(i as u32);
+                t.to_vec()
+            }
+            5 => t.to_vec(),
+            other => return Err(format!("token {i} has unsupported type {other}")),
+        };
+        if ty == 1 {
+            id_of.entry(t.to_vec()).or_insert(i as u32);
+        }
+        tokens.push(bytes);
+    }
+    let mut ms = vec![];
+    for m in merges.strings() {
+        let s = std::str::from_utf8(m).map_err(|e| e.to_string())?;
+        let (a, b) = s.split_once(' ').ok_or_else(|| format!("bad merge {s:?}"))?;
+        let ia = *id_of.get(a.as_bytes()).ok_or_else(|| format!("merge part {a:?} not in vocab"))?;
+        let ib = *id_of.get(b.as_bytes()).ok_or_else(|| format!("merge part {b:?} not in vocab"))?;
+        ms.push((ia, ib));
+    }
+    Ok(Source { tokens, merges: ms, added })
 }

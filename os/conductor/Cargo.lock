@@ -426,6 +426,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "neuro-gguf"
+version = "0.0.26"
+dependencies = [
+ "neuro-lm",
+]
+
+[[package]]
 name = "neuro-hnx"
 version = "0.0.26"
 dependencies = [
@@ -769,6 +776,9 @@ name = "tok-build"
 version = "0.0.26"
 dependencies = [
  "fancy-regex",
+ "neuro-build",
+ "neuro-gguf",
+ "neuro-kernels",
  "neuro-lm",
  "regex",
  "serde_json",
