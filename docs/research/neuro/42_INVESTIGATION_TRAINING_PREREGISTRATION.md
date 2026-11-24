@@ -87,3 +87,60 @@ harness (`e2e_neuro.sh`) is re-run with ftKg after the look, whatever the verdic
    blind author is the check against template learning (doc 38 §7.1).
 2. **One candidate, no dev selection.** The investigation share of the mix is fixed in advance, not tuned.
 3. **Stop sentences are fixed phrases.** The gate scores the tool choice, not the wording of a stop.
+
+## Result (one look, 2026-11-24 12:53): FAIL. ftFg stays the explainer candidate
+
+**The run.** `mixK_chain.sh` ran as pinned. The inv-blind hash was checked; the training cases did not collide with
+it.
+- **Training:** 5,132 train / 260 valid, 2,566 iterations; checkpoint 2566 by lowest valid loss (0.210).
+- **ftKg:** GGUF SHA-256 `fb3c9a05ecf8279bb07e1966afdbc5b9e4603a8f793a30fc592a9bb9fe12a43b`, adapter `3413b269a5cbd6e6…`.
+
+**`mixK_gate.py` (unedited):**
+
+```
+| model | step_ok next+multi (80) | stop_ok clears+decoy (55) | unreturned CVE | policy on decoy | tool calls |
+| base17g | 0.163 | 1.000 | 0 | 0 | 75 |
+| ftKg | 0.300 | 1.000 | 0 | 0 | 70 |
+McNemar ftKg vs base17g on next+multi: p=0.052 (19 vs 8)
+triage blind7: canary 1.000, halluc 0.0000, benign on malicious 12.0%, answers with an unreturned CVE id 0
+triage dev8: canary 1.000, halluc 0.0000, benign on malicious 2.0%, answers with an unreturned CVE id 0
+VERDICT: FAIL (1 step_ok not > base at p<0.05 (p=0.052); 5 triage regression on blind7)
+```
+
+**Verdict.**
+- Conditions 2, 3, 4 and 6 hold.
+- **1 fails narrowly:** p = 0.052.
+- **5 fails:** on blind v7 ftKg calls 6 of 50 malicious cases benign (12.0%); ftFg called none.
+
+ftFg stays the explainer candidate, without investigation. inv-blind v1 is now spent.
+
+**Per kind** (`inv_eval.py`; base17g in brackets):
+- next 0.511 (0.222)
+- multi 0.029 (0.086)
+- clears 0.933 (0.567)
+- decoy 0.760 (0.520)
+- invisible 0.867 (1.000)
+- 0 unreturned CVE ids
+
+**Reading (descriptive).**
+1. **Tool calling came back, and the CVE problem went away.** 70 tool calls; 0 invented CVE ids in investigation or
+   in either triage set. ftFg had made no tool call and had invented one.
+2. **The first check was learnt; the follow-up was not.** On `next` ftKg more than doubles base (0.511 vs 0.222).
+   On `multi` it is worse than base (0.029). The generator's multi-step targets often repeat step 1's tool, while
+   the blind author's multi cases move to a different check or to a policy proposal: the template gap doc 38 §7.1
+   warned of. Pooled with `next`, it pulled condition 1 just past 0.05.
+3. **Triage regressed on one set.** Adding about 13% tool-call data shifted 6 malicious blind v7 cases to benign;
+   dev v8 held at 2.0%. The mix share was fixed in advance, not tuned.
+
+**End to end, run 2** (operator rule; `e2e_neuro.sh`, ftKg, the same 4 captures as run 1):
+- A–C are unchanged (147 s, 8,594 windows, 0 S1 alerts).
+- Explainer: 1.24 s median (p90 1.57 s), 125 tok/s, 3.4 GB; schema 20/20, citations 19/20, hallucination-free
+  20/20.
+- On the 20 quiet benign windows it answers `insufficient_evidence` 20/20, where ftFg said benign on 4. It hedges a
+  little more on ordinary traffic; still no alarmist verdict.
+
+**What a further attempt would need (new pre-registration).**
+- Multi-step targets that move on (a different tool after a supporting result; a proposal once conclusive), ideally
+  hand-written or teacher-written rather than repeated.
+- A smaller, or separately trained, tool-call share, so triage holds. For example, a separate investigation adapter
+  loaded only for investigation turns, leaving ftFg's triage weights untouched.
