@@ -12,8 +12,10 @@
 //!   the engine AND parses answers for the verifier ([`parse`]).
 //!
 //! The automaton accepts exactly what llama.cpp's grammar for this schema accepts (llama-server compiles the
-//! `json_schema` response format into it): keys in schema order, whitespace only where its `space` rule
-//! allows (`"" | " " | "\n"{1,2} [ \t]{0,20}`), strings as its `char` rule (any code point but `"`, `\`,
+//! `json_schema` response format into it): keys in schema order, whitespace only where the grammar has its
+//! `space` rule (`"" | " " | "\n"{1,2} [ \t]{0,20}`): after `{`, `[` and `,`, on both sides of `:`, and before
+//! `]` and `}`. There is none between a value and the `,` after it, and none after the final `}` (llama.cpp
+//! 054a1ba, Neuro's b12477: its value rules no longer end in `space`). Strings as its `char` rule (any code point but `"`, `\`,
 //! DEL and C0 controls, or the escapes `\" \\ \b \f \n \r \t \uXXXX`), UTF-8 decoded leniently as llama.cpp
 //! does, integers 0..=100 without leading zeros.
 //!
@@ -350,6 +352,8 @@ enum Ph {
     /// After a comma: an item must follow.
     ArrItem,
     ArrNext,
+    /// After the whitespace that can only lead to `]`.
+    ArrClose,
     Int,
     AfterValue,
     Done,
@@ -460,13 +464,19 @@ impl<'a> Machine<'a> {
         self.ws = Ws::Start;
     }
 
+    /// A value ended. The grammar is `kv ("," space kv)* space "}"`: a `,` follows at once; only the `}` after
+    /// the last value may have whitespace before it.
     fn value_done(&mut self) {
-        self.space(Ph::AfterValue);
+        self.ph = Ph::AfterValue;
+        self.ws = if self.field < F_CONFIDENCE { Ws::Off } else { Ws::Start };
     }
 
+    /// An item ended. The grammar is `"[" space (item ("," space item)*)? space "]"`: a `,` follows at once;
+    /// whitespace here can only lead to the `]`.
     fn item_done(&mut self) {
         self.items += 1;
-        self.space(Ph::ArrNext);
+        self.ph = Ph::ArrNext;
+        self.ws = Ws::Off;
     }
 
     /// Feed one byte. Returns `None` if the byte is not allowed here (the state is then unspecified: callers
@@ -564,6 +574,11 @@ impl<'a> Machine<'a> {
                     self.value_done();
                     return Some(Event::None);
                 }
+                // The `space` before `]`. After `[` it is a second one: `"[" space space "]"` when empty.
+                if matches!(b, b' ' | b'\n') && self.ph != Ph::ArrItem {
+                    self.space(Ph::ArrClose);
+                    return self.step(b);
+                }
                 if self.ph == Ph::ArrNext {
                     if b != b',' || self.items >= LIST_MAX {
                         return None;
@@ -581,6 +596,13 @@ impl<'a> Machine<'a> {
                 } else {
                     self.start_str();
                 }
+                Some(Event::None)
+            }
+            Ph::ArrClose => {
+                if b != b']' {
+                    return None;
+                }
+                self.value_done();
                 Some(Event::None)
             }
             Ph::Lit => {
@@ -629,7 +651,7 @@ impl<'a> Machine<'a> {
                 }
                 let v = self.num;
                 self.value_done();
-                // The terminating byte belongs to what follows (space, ',' or '}').
+                // The terminating byte belongs to what follows (space or '}').
                 let ev = self.step(b)?;
                 Some(if ev == Event::None { Event::Int(v) } else { ev })
             }
@@ -645,7 +667,8 @@ impl<'a> Machine<'a> {
                     if b != b'}' {
                         return None;
                     }
-                    self.space(Ph::Done);
+                    self.ph = Ph::Done;
+                    self.ws = Ws::Off;
                 }
                 Some(Event::None)
             }

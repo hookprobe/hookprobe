@@ -19,6 +19,7 @@ neuro-gguf = { path = "../neuro-gguf" }
 neuro-kernels = { path = "../neuro-kernels" }
 neuro-build = { path = "../neuro-build" }
 serde_json = "1"
+sha2 = "=0.10.9"
 regex = "1"
 unicode-normalization = "0.1"
 

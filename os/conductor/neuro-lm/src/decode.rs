@@ -63,7 +63,9 @@ fn allowed(m: &Machine, tok: &Tokenizer, eog: &[u32], id: u32) -> bool {
 }
 
 /// Masked greedy choice: the highest logit among allowed tokens, lowest id on ties.
-fn pick(logits: &[i64], m: &Machine, tok: &Tokenizer, eog: &[u32]) -> Option<u32> {
+/// The constrained greedy choice: the highest logit among the tokens the answer automaton allows (an end-of-
+/// generation id only where the answer may end). Public for the fidelity check, which replays it per step.
+pub fn pick(logits: &[i64], m: &Machine, tok: &Tokenizer, eog: &[u32]) -> Option<u32> {
     // Fast path: the unconstrained argmax is usually allowed.
     let mut best: Option<(usize, i64)> = None;
     for (i, &v) in logits.iter().enumerate() {
