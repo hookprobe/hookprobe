@@ -56,6 +56,31 @@ known amount of work. The plan is interruptible step by step.
 Not in step 1: package signature verification (the kernel's job, R5), a recurrent cell, SIMD kernels
 (step 2, needs KR-1 to run on the device), a language model.
 
+## neuro-kernels, step 2: 4-bit GEMV, scalar and NEON
+
+Signed 4-bit weights × int8 activations, in a 4-row interleaved layout fixed at pack time (Neuro docs 02
+and 03), int32 accumulation per row and one integer rescale per row: no float anywhere. The engine gains
+the kernel `GEMV_Q4_I8`.
+
+| Gate | Result |
+|---|---|
+| Host: 200 random Q4 layers (with padding rows and columns) × 10 inputs match a reference on the unpacked matrix; unpadded shapes and negative multipliers refused | pass |
+| **Bare metal, emulated Cortex-A76** (`neon-proof`, no OS): NEON + DotProd kernel identical to the scalar reference on 20,000 groups (42,251,520 MACs), edge values included | pass |
+| Bare metal, through the engine: a packaged 64×256 Q4 layer, 2,000 runs, scalar output == NEON output | pass |
+| The same binary on a CPU without DotProd (emulated Cortex-A57) reads the ID register and refuses | pass |
+| Softfloat device build (`el0-engine`): NEON module not compiled, 0 FP/SIMD instructions, `.text` 10,084 B | pass |
+
+The NEON path exists only in hard-float builds (`aarch64-unknown-none`) and is reached only through a token
+whose construction is the caller's promise that the CPU has the features and FP/SIMD is enabled: on heqk,
+the KR-1 grant. Until KR-1 lands it cannot run on a device.
+
+Not measured: speed. An emulator's timing means nothing; tokens per second need a real Cortex-A76 (CM5 after
+KR-1, or a Pi 5 bench). Not built: attention, normalisation, tokenizer, sampling, the HNX loader (step 3).
+
+```bash
+cd os/conductor/neon-proof && cargo build --release && qemu-system-aarch64 -M virt -cpu cortex-a76 -m 64M -nographic -nic none -semihosting -kernel target/aarch64-unknown-none/release/neon-proof
+```
+
 ## Crates
 
 | Crate | What | Target |

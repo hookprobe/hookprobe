@@ -23,6 +23,7 @@
     clippy::cast_possible_truncation
 )]
 
+pub use neuro_kernels::Simd;
 use sha2::{Digest, Sha256};
 
 pub const MAGIC: [u8; 4] = *b"HNX0";
@@ -51,6 +52,10 @@ pub mod kernel {
     pub const ARGMAX_I8: u8 = 4;
     /// One i32 compared with a threshold → one u8 (1 if greater).
     pub const GT_I32: u8 = 5;
+    /// i8 inputs × signed 4-bit weights (4-row interleaved layout, `neuro_kernels`) + i32 bias, then a
+    /// per-row integer rescale: clamp(round(acc·mult[row] / 2^shift) + zero) → i8. rows % 4 == 0,
+    /// cols % 32 == 0 (the packer pads). The language-model GEMV.
+    pub const GEMV_Q4_I8: u8 = 6;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -272,6 +277,16 @@ impl<'p> Model<'p> {
                     }
                     (wrange(w_off, cells)?, wrange(b_off, rows.checked_mul(4).ok_or(R::Shape)?)?)
                 }
+                kernel::GEMV_Q4_I8 => {
+                    if rows == 0 || cols == 0 || rows % 4 != 0 || cols % 32 != 0 || input.len != cols || output.len != rows {
+                        return Err(R::Shape);
+                    }
+                    if shift > 31 || !(-128..=127).contains(&zero) || mult != 0 {
+                        return Err(R::Params);
+                    }
+                    // bias[rows] then mult[rows], both i32.
+                    (wrange(w_off, cells / 2)?, wrange(b_off, rows.checked_mul(8).ok_or(R::Shape)?)?)
+                }
                 kernel::RELU_I8 => {
                     if input.len != output.len || rows != 0 || cols != 0 || shift != 0 || mult != 0 || zero != 0 || w_off != 0 || b_off != 0 {
                         return Err(R::Shape);
@@ -310,6 +325,20 @@ impl<'p> Model<'p> {
                     }
                     if bound > i64::from(i32::MAX) {
                         return Err(R::AccumulatorBound);
+                    }
+                }
+                macs = macs.saturating_add(u64::try_from(cells).unwrap_or(u64::MAX));
+            }
+            if k == kernel::GEMV_Q4_I8 {
+                let bb = pkg.get(b.off..b.off.saturating_add(b.len)).ok_or(R::WeightsOutOfBounds)?;
+                // |w| ≤ 8 and |x| ≤ 128, so a row adds at most 1024·cols to |bias|.
+                let span = i64::try_from(cols).unwrap_or(i64::MAX).saturating_mul(1024);
+                for row in 0..rows {
+                    if i32_at(bb, row).abs().saturating_add(span) > i64::from(i32::MAX) {
+                        return Err(R::AccumulatorBound);
+                    }
+                    if i32_at(bb, rows.saturating_add(row)) < 0 {
+                        return Err(R::Params);
                     }
                 }
                 macs = macs.saturating_add(u64::try_from(cells).unwrap_or(u64::MAX));
@@ -358,11 +387,16 @@ impl<'p> Model<'p> {
 
     /// Run one step. Returns `Ok(true)` while steps remain. Safe to interleave with anything else.
     pub fn step(&self, arena: &mut [u8], cursor: &mut usize) -> Result<bool, RunError> {
+        self.step_with(Simd::SCALAR, arena, cursor)
+    }
+
+    /// As [`Model::step`], with the SIMD implementation the caller is entitled to (on heqk: KR-1).
+    pub fn step_with(&self, simd: Simd, arena: &mut [u8], cursor: &mut usize) -> Result<bool, RunError> {
         if arena.len() < self.arena_bytes {
             return Err(RunError::ArenaTooSmall);
         }
         let st = self.steps.get(*cursor).filter(|_| *cursor < self.n_steps).ok_or(RunError::Finished)?;
-        exec(self.pkg, st, arena);
+        exec(self.pkg, st, arena, simd);
         *cursor = cursor.saturating_add(1);
         Ok(*cursor < self.n_steps)
     }
@@ -378,14 +412,18 @@ impl<'p> Model<'p> {
 
     /// Run the whole plan.
     pub fn run(&self, arena: &mut [u8], input: &[u8], output: &mut [u8]) -> Result<(), RunError> {
+        self.run_with(Simd::SCALAR, arena, input, output)
+    }
+
+    pub fn run_with(&self, simd: Simd, arena: &mut [u8], input: &[u8], output: &mut [u8]) -> Result<(), RunError> {
         let mut c = self.begin(arena, input)?;
-        while self.step(arena, &mut c)? {}
+        while self.step_with(simd, arena, &mut c)? {}
         self.finish(arena, output)
     }
 }
 
 /// Execute one validated step. Every range was checked at admission; `get` keeps this panic-free anyway.
-fn exec(pkg: &[u8], st: &Step, arena: &mut [u8]) {
+fn exec(pkg: &[u8], st: &Step, arena: &mut [u8], simd: Simd) {
     let w = pkg.get(st.w.off..st.w.off.saturating_add(st.w.len)).unwrap_or(&[]);
     let b = pkg.get(st.b.off..st.b.off.saturating_add(st.b.len)).unwrap_or(&[]);
     let (i0, i1) = (st.input.off, st.input.off.saturating_add(st.input.len));
@@ -430,6 +468,23 @@ fn exec(pkg: &[u8], st: &Step, arena: &mut [u8]) {
                         }
                         let y = (acc.saturating_mul(i64::from(st.mult)).saturating_add(round) >> st.shift).saturating_add(i64::from(st.zero));
                         *out = i8::try_from(y.clamp(-128, 127)).unwrap_or(0).to_le_bytes()[0];
+                    }
+                }
+                kernel::GEMV_Q4_I8 => {
+                    let gb = neuro_kernels::group_bytes(st.cols);
+                    let round: i64 = if st.shift == 0 { 0 } else { 1i64 << (st.shift.saturating_sub(1)) };
+                    for (g, (wg, out4)) in w.chunks_exact(gb.max(1)).zip(output.as_chunks_mut::<4>().0.iter_mut()).enumerate() {
+                        let r0 = g.saturating_mul(4);
+                        let mut acc = [0i32; 4];
+                        for (i, a) in acc.iter_mut().enumerate() {
+                            *a = i32::try_from(i32_at(b, r0.saturating_add(i))).unwrap_or(0);
+                        }
+                        neuro_kernels::gemv_q4_group(simd, wg, input, &mut acc);
+                        for (i, (o, a)) in out4.iter_mut().zip(acc).enumerate() {
+                            let m = i32_at(b, st.rows.saturating_add(r0).saturating_add(i));
+                            let y = (i64::from(a).saturating_mul(m).saturating_add(round) >> st.shift).saturating_add(i64::from(st.zero));
+                            *o = i8::try_from(y.clamp(-128, 127)).unwrap_or(0).to_le_bytes()[0];
+                        }
                     }
                 }
                 kernel::RELU_I8 => {

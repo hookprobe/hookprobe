@@ -17,6 +17,8 @@ path = "src/lib.rs"
 # SHA-256 only, the kernel's own version (integrity of the package root; SIGNATURE verification is the
 # kernel's job before the engine ever sees the bytes, Neuro request R5).
 sha2 = { version = "=0.10.9", default-features = false }
+neuro-kernels = { path = "../neuro-kernels" }
 
 [dev-dependencies]
 neuro-l1 = { path = "../../neuro/neuro-l1" }
+neuro-kernels = { path = "../neuro-kernels" }

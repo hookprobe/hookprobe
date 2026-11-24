@@ -73,8 +73,13 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 name = "neuro-engine"
 version = "0.0.26"
 dependencies = [
+ "neuro-kernels",
  "sha2",
 ]
+
+[[package]]
+name = "neuro-kernels"
+version = "0.0.26"
 
 [[package]]
 name = "sha2"

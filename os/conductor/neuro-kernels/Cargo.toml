@@ -1,0 +1,16 @@
+# neuro-kernels: the tensor kernels behind neuro-engine. Step 2: 4-bit weights × int8 activations (GEMV),
+# with a scalar reference and an AArch64 NEON + DotProd (SDOT) path for Cortex-A76.
+# no_std, no alloc, no float. `unsafe` exists ONLY in the NEON module (intrinsics), behind a token whose
+# construction is the caller's promise that the CPU has the features and FP/SIMD is enabled for this
+# context (on heqk: the KR-1 grant).
+[package]
+name = "neuro-kernels"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

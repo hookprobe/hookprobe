@@ -307,3 +307,61 @@ fn fuzzed_packages_never_panic() {
     println!("fuzz: {admitted} admitted and run, {refused} refused");
     assert!(admitted > 100 && refused > 100);
 }
+
+/// Step 2: 4-bit weights. Random layers in the packed 4-row interleaved layout match a reference that works
+/// on the plain (unpacked) matrix, including padding rows and columns.
+#[test]
+fn q4_layers_match_the_unpacked_reference() {
+    let mut rng = Rng(0x0404_0404);
+    for case in 0..200 {
+        let (real_rows, real_cols) = (1 + rng.below(40) as usize, 1 + rng.below(200) as usize);
+        let (rows, cols) = (real_rows.div_ceil(4) * 4, real_cols.div_ceil(32) * 32);
+        // plain matrix, padded with zero weights
+        let mut m = vec![vec![0i8; cols]; rows];
+        for row in m.iter_mut().take(real_rows) {
+            for v in row.iter_mut().take(real_cols) {
+                *v = (rng.below(16) as i8) - 8;
+            }
+        }
+        let bias: Vec<i32> = (0..rows).map(|r| if r < real_rows { (rng.next() as i32) >> 10 } else { 0 }).collect();
+        let mult: Vec<i32> = (0..rows).map(|_| 1 + rng.below(1 << 12) as i32).collect();
+        let (shift, zero) = (rng.below(20) as u8, rng.below(11) as i32 - 5);
+        let mut weights = vec![];
+        for g in m.chunks(4) {
+            let mut out = vec![0u8; neuro_kernels::group_bytes(cols)];
+            assert!(neuro_kernels::pack_group([&g[0], &g[1], &g[2], &g[3]], &mut out));
+            weights.extend(out);
+        }
+        let b_off = weights.len() as u32;
+        for v in bias.iter().chain(&mult) {
+            weights.extend_from_slice(&v.to_le_bytes());
+        }
+        let slots = [(0, cols as u32), (cols as u32, rows as u32)];
+        let steps = [St { kernel: kernel::GEMV_Q4_I8, shift, input: 0, output: 1, rows: rows as u16, cols: cols as u16, w_off: 0, b_off, mult: 0, zero }];
+        let pkg = pack(&slots, &steps, &weights, (cols + rows) as u32, 0, 1);
+        let model = Model::admit(&pkg).unwrap_or_else(|e| panic!("case {case}: {e:?}"));
+        assert_eq!(model.macs(), (rows * cols) as u64);
+        let mut arena = vec![0u8; model.arena_bytes()];
+        for _ in 0..10 {
+            let x: Vec<i8> = (0..cols).map(|c| if c < real_cols { rng.next() as i8 } else { 0 }).collect();
+            let mut out = vec![0u8; rows];
+            model.run(&mut arena, &x.iter().map(|&a| a as u8).collect::<Vec<_>>(), &mut out).unwrap();
+            for r in 0..rows {
+                let acc: i128 = m[r].iter().zip(&x).map(|(&w, &v)| w as i128 * v as i128).sum::<i128>() + bias[r] as i128;
+                let round = if shift == 0 { 0 } else { 1i128 << (shift - 1) };
+                let want = (((acc * mult[r] as i128 + round) >> shift) + zero as i128).clamp(-128, 127) as i8;
+                assert_eq!(out[r] as i8, want, "case {case} row {r}");
+            }
+        }
+    }
+    // Shapes that are not padded, and a negative per-row multiplier, are refused.
+    let w = vec![0u8; 64 + 32];
+    let bad = |rows: u16, cols: u16, inl: u32, outl: u32| Model::admit(&pack(&[(0, inl), (inl, outl)], &[St { kernel: kernel::GEMV_Q4_I8, input: 0, output: 1, rows, cols, w_off: 0, b_off: 64, ..NONE }], &w, inl + outl, 0, 1)).err();
+    assert_eq!(bad(4, 32, 32, 4), None);
+    assert_eq!(bad(3, 32, 32, 3), Some(Refusal::Shape));
+    assert_eq!(bad(4, 31, 31, 4), Some(Refusal::Shape));
+    let mut w2 = w.clone();
+    w2[64 + 16..64 + 20].copy_from_slice(&(-1i32).to_le_bytes());
+    let p = pack(&[(0, 32), (32, 4)], &[St { kernel: kernel::GEMV_Q4_I8, input: 0, output: 1, rows: 4, cols: 32, w_off: 0, b_off: 64, ..NONE }], &w2, 36, 0, 1);
+    assert_eq!(Model::admit(&p).err(), Some(Refusal::Params));
+}

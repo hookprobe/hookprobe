@@ -1,0 +1,26 @@
+# neon-proof: a BARE-METAL test program (no OS of any kind) that runs the NEON kernels on an emulated
+# Cortex-A76 and compares them with the scalar reference. Boots at EL1 on QEMU `virt`, enables FP/SIMD
+# itself, prints on the PL011 UART, exits through semihosting. Build-host test tooling; never shipped.
+[package]
+name = "neon-proof"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[workspace]
+
+[[bin]]
+name = "neon-proof"
+path = "src/main.rs"
+
+[dependencies]
+neuro-kernels = { path = "../neuro-kernels" }
+neuro-engine = { path = "../neuro-engine" }
+
+[profile.release]
+panic = "abort"
+opt-level = 2
+lto = true
+codegen-units = 1
+overflow-checks = true
