@@ -46,6 +46,8 @@ impl BlockDev for DevRef {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Phase {
     Receiving,
+    /// F7: an `os_image` being verified by the AP loop (`step`).
+    Verifying,
     Verified,
 }
 
@@ -81,6 +83,133 @@ fn code(ty: Option<Ty>, os: bool) -> u8 {
 }
 fn cur_code() -> u8 {
     up().as_ref().map_or(0xff, |u| code(Some(u.ty), u.os))
+}
+
+// ---- F7: asynchronous verify / install of an `os_image` (opt-in `async=1` on finish / activate) ----
+enum Job {
+    None,
+    #[cfg(feature = "p15-write")]
+    Check { id: u64, job: crate::otaimg::CheckJob },
+    #[cfg(feature = "p15-write")]
+    Install { tag: [u8; 4], now_ms: u64, reason: [u8; 64], rl: usize, job: crate::otaimg::InstallJob },
+}
+static mut JOB: Job = Job::None;
+/// activate's `async=1` (set by the HTTP wrapper only; the management ABI path stays synchronous).
+static ACT_ASYNC: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+fn async_req(body: &[u8]) -> bool {
+    let mut b = [0u8; 192];
+    form_get(body, "async", &mut b) == Some("1")
+}
+/// What `GET /api/upload/job` reports: kind, state, error, progress (done, total) and the result fields.
+struct JobState {
+    kind: [u8; 8],
+    state: [u8; 8],
+    err: &'static str,
+    done: u64,
+    total: u64,
+    gen: u64,
+    len: u64,
+    digest: [u8; 32],
+    journal_seq: Option<u64>,
+}
+static mut JS: JobState = JobState { kind: [0; 8], state: [0; 8], err: "", done: 0, total: 0, gen: 0, len: 0, digest: [0; 32], journal_seq: None };
+fn job_state(kind: &[u8], state: &[u8], err: &'static str) {
+    let js = unsafe { &mut *core::ptr::addr_of_mut!(JS) };
+    js.kind = [0; 8];
+    js.kind[..kind.len()].copy_from_slice(kind);
+    js.state = [0; 8];
+    js.state[..state.len()].copy_from_slice(state);
+    js.err = err;
+}
+fn cstr(b: &[u8; 8]) -> &str {
+    core::str::from_utf8(&b[..b.iter().position(|x| *x == 0).unwrap_or(8)]).unwrap_or("")
+}
+
+/// The AP loop, every pass: advance an asynchronous verify / install by at most one bounded step (64 KiB hashed or
+/// 64 KiB copied), so Wi-Fi and forwarding keep running. Nothing to do = one branch.
+pub fn step(now_ms: u64) {
+    #[cfg(feature = "p15-write")]
+    {
+        let job = unsafe { &mut *core::ptr::addr_of_mut!(JOB) };
+        if matches!(job, Job::None) {
+            return;
+        }
+        let Some(d) = dev() else { return };
+        let js = unsafe { &mut *core::ptr::addr_of_mut!(JS) };
+        let t0 = crate::clock::ticks();
+        let stage = match job { Job::Check { job, .. } => job.progress().2, Job::Install { job, .. } => 10 + job.progress().2, Job::None => 0 };
+        let slow = |what: &str| {
+            let ms = crate::clock::ticks().wrapping_sub(t0) / (crate::clock::freq() / 1000).max(1);
+            if ms > 100 {
+                arch_aarch64::_print(format_args!(" [UPLOAD-SLOW] job step ({} stage {}) took {} ms\n", what, stage, ms));
+            }
+        };
+        match job {
+            Job::Check { id, job: cj } => {
+                let id = *id;
+                let r = cj.step(&*d, crate::otaimg::STEP_BYTES);
+                slow("verify");
+                (js.done, js.total, _) = cj.progress();
+                let Some(r) = r else { return };
+                unsafe { JOB = Job::None };
+                match (up().as_mut(), r) {
+                    (Some(u), Ok(plan)) if u.id == id && u.phase == Phase::Verifying => {
+                        let (svn, _, _) = boot_facts();
+                        u.plan = Some(plan);
+                        u.phase = Phase::Verified;
+                        (u.gen, u.len, u.digest, u.last_ms) = (plan.svn, plan.len, plan.hash, now_ms);
+                        (js.gen, js.len, js.digest) = (plan.svn, plan.len, plan.hash);
+                        let _ = svn;
+                        job_state(b"verify", b"done", "");
+                    }
+                    (_, Ok(_)) => job_state(b"verify", b"failed", "the upload was aborted while it was being verified"),
+                    (_, Err(e)) => {
+                        job_state(b"verify", b"failed", e);
+                        end(); // a failed verification ends the upload (as the synchronous finish does)
+                    }
+                }
+            }
+            Job::Install { tag, now_ms: t0, reason, rl, job: ij } => {
+                let r = ij.step(d, crate::otaimg::STEP_SECTORS, crate::otaimg::STEP_BYTES);
+                slow("install");
+                (js.done, js.total, _) = ij.progress();
+                let Some(r) = r else { return };
+                let (tag, t0, reason, rl, plan) = (*tag, *t0, *reason, *rl, ij.plan());
+                unsafe { JOB = Job::None };
+                match r {
+                    Ok(()) => {
+                        unsafe { TRIAL_REBOOT = true };
+                        js.journal_seq = crate::ownerapi::audit_artifact("os_image", 1, &reason[..rl], tag, t0);
+                        js.gen = plan.svn;
+                        job_state(b"install", b"done", "");
+                    }
+                    Err(e) => {
+                        let _ = crate::ownerapi::audit_artifact("os_image", 2, &reason[..rl], tag, t0);
+                        job_state(b"install", b"failed", e);
+                    }
+                }
+            }
+            Job::None => {}
+        }
+    }
+    #[cfg(not(feature = "p15-write"))]
+    let _ = now_ms;
+}
+
+/// `GET /api/upload/job`: the asynchronous verify / install's state (kind "" = none since boot).
+pub fn render_job(w: &mut crate::mcstate::JsonBuf) {
+    use core::fmt::Write;
+    let js = unsafe { &*core::ptr::addr_of!(JS) };
+    let _ = write!(w, "{{\"kind\":\"{}\",\"state\":\"{}\",\"done\":{},\"total\":{},\"error\":", cstr(&js.kind), cstr(&js.state), js.done, js.total);
+    w.string(js.err);
+    let _ = write!(w, ",\"generation\":{},\"length\":{},\"digest\":\"", js.gen, js.len);
+    for b in js.digest {
+        let _ = write!(w, "{:02x}", b);
+    }
+    let _ = match js.journal_seq {
+        Some(q) => write!(w, "\",\"journal_seq\":{}}}", q),
+        None => write!(w, "\",\"journal_seq\":null}}"),
+    };
 }
 
 /// Set by an `os_image` activation: the AP loop reboots into the trial slot once the HTTP
@@ -136,6 +265,14 @@ fn ram_staged(u: &Up) -> bool {
 }
 /// End the upload in flight and scrub the RAM stage (it may hold a secret).
 fn end() {
+    // F7: an upload that ends (abort / failure / takeover) takes its pending verification with it
+    #[cfg(feature = "p15-write")]
+    unsafe {
+        if matches!(&*core::ptr::addr_of!(JOB), Job::Check { .. }) {
+            JOB = Job::None;
+            job_state(b"verify", b"failed", "the upload ended before verification finished");
+        }
+    }
     *up() = None;
     for b in stage_ram().iter_mut() {
         unsafe { core::ptr::write_volatile(b, 0) };
@@ -365,6 +502,8 @@ pub fn chunk(c: &Ctx, query: &str, body: &[u8]) -> Result<u64, &'static str> {
 }
 
 pub struct Finished {
+    /// F7: an `os_image` finish with `async=1` — verification runs in the AP loop; poll `GET /api/upload/job`.
+    pub pending: bool,
     pub gen: u64,
     pub active_gen: u64,
     pub len: u64,
@@ -418,6 +557,16 @@ fn finish_inner(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
         return Err("sha256 mismatch");
     }
     #[cfg(feature = "p15-write")]
+    if u.os && async_req(body) {
+        let (_, floor, running) = boot_facts();
+        // SAFETY: single-threaded (the AP loop); JOB is only touched here, in activate and in `step`.
+        unsafe { JOB = Job::Check { id: u.id, job: crate::otaimg::CheckJob::new(slo, u.size, floor, running) } };
+        job_state(b"verify", b"running", "");
+        u.phase = Phase::Verifying;
+        u.last_ms = c.now_ms;
+        return Ok(Finished { pending: true, gen: 0, active_gen: 0, len: 0, digest: [0; 32] });
+    }
+    #[cfg(feature = "p15-write")]
     if u.os {
         let (svn, floor, running) = boot_facts();
         let plan = crate::otaimg::check(&*d, slo, u.size, floor, running)?;
@@ -427,7 +576,7 @@ fn finish_inner(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
         u.len = plan.len;
         u.digest = plan.hash;
         u.last_ms = c.now_ms;
-        return Ok(Finished { gen: plan.svn, active_gen: svn, len: plan.len, digest: plan.hash });
+        return Ok(Finished { pending: false, gen: plan.svn, active_gen: svn, len: plan.len, digest: plan.hash });
     }
     let mut sig = [0u8; 512];
     let ram = ram_dev();
@@ -471,10 +620,12 @@ fn finish_inner(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
     u.len = len;
     u.digest = content_digest(u.ty, &sig);
     u.last_ms = c.now_ms;
-    Ok(Finished { gen, active_gen: active, len, digest: u.digest })
+    Ok(Finished { pending: false, gen, active_gen: active, len, digest: u.digest })
 }
 
 pub struct Activated {
+    /// F7: an `os_image` activate with `async=1` — the slot write runs in the AP loop; poll `GET /api/upload/job`.
+    pub pending: bool,
     pub gen: u64,
     pub journal_seq: Option<u64>,
     /// ADR 0058: a staged type (wan / wifi / policy) applies at the next boot, not now.
@@ -496,6 +647,7 @@ pub fn activate(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<
 }
 fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Activated, &'static str> {
     guards(c, body)?;
+    ACT_ASYNC.store(async_req(body), core::sync::atomic::Ordering::Relaxed);
     let mut b = [[0u8; 192]; 2];
     let [ref mut b0, ref mut b1] = b;
     let id = form_get(body, "id", b0).and_then(id_of);
@@ -562,10 +714,15 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
             w.len
         };
         let tag = tag;
+        if ACT_ASYNC.load(core::sync::atomic::Ordering::Relaxed) {
+            unsafe { JOB = Job::Install { tag, now_ms, reason, rl, job: crate::otaimg::InstallJob::new(slo, plan) } };
+            job_state(b"install", b"running", "");
+            return Ok(Activated { pending: true, gen: plan.svn, journal_seq: None, staged: true, at_rest: None, live: false, needs_confirm: false });
+        }
         return match crate::otaimg::install(d, slo, &plan) {
             Ok(()) => {
                 unsafe { TRIAL_REBOOT = true };
-                Ok(Activated { gen: plan.svn, journal_seq: crate::ownerapi::audit_artifact("os_image", 1, &reason[..rl], tag, now_ms), staged: true, at_rest: None, live: false, needs_confirm: false })
+                Ok(Activated { pending: false, gen: plan.svn, journal_seq: crate::ownerapi::audit_artifact("os_image", 1, &reason[..rl], tag, now_ms), staged: true, at_rest: None, live: false, needs_confirm: false })
             }
             Err(e) => {
                 let _ = crate::ownerapi::audit_artifact("os_image", 2, &reason[..rl], tag, now_ms);
@@ -616,7 +773,7 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
             LAST_AT_REST = "volatile_ram_only";
         };
         let journal_seq = crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, now_ms);
-        return Ok(Activated { gen: g, journal_seq, staged: false, at_rest: Some("volatile_ram_only"), live: true, needs_confirm });
+        return Ok(Activated { pending: false, gen: g, journal_seq, staged: false, at_rest: Some("volatile_ram_only"), live: true, needs_confirm });
     } else if secret {
         // Q3: no device key (blank OTP) — a secret is never written in plaintext (and a per-file upload is next-boot)
         end();
@@ -651,7 +808,7 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
             unsafe {
                 LAST_LIVE = (live, ty.staged() && !live, needs_confirm)
             };
-            Ok(Activated { gen, journal_seq, staged: ty.staged() && !live, at_rest, live, needs_confirm })
+            Ok(Activated { pending: false, gen, journal_seq, staged: ty.staged() && !live, at_rest, live, needs_confirm })
         }
         Err(artstore::ActErr::LoaderRefused) => {
             let _ = crate::ownerapi::audit_artifact(ty.info().name, 2, &reason[..rl], tag, now_ms);
@@ -712,7 +869,7 @@ fn rollback_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
         rl = w.len;
     }
     match res {
-        Ok(gen) => Ok((Activated { gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, c.now_ms), staged: ty.staged(), at_rest: None, live: false, needs_confirm: false }, ty as u8)),
+        Ok(gen) => Ok((Activated { pending: false, gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, c.now_ms), staged: ty.staged(), at_rest: None, live: false, needs_confirm: false }, ty as u8)),
         Err(artstore::ActErr::NothingToRollBack) => Err("nothing to roll back to (no verified previous generation)"),
         Err(artstore::ActErr::LoaderRefused) => Err("the loader refused the previous pack — the current one stays active"),
         Err(artstore::ActErr::NoStore) => Err("no artifact store"),

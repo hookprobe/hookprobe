@@ -167,6 +167,271 @@ pub fn install<D: BlockDev>(d: &mut D, slo: u64, plan: &Plan) -> Result<(), &'st
     Ok(())
 }
 
+// ---- F7 (pre-soak finding 7): the same check / install, resumable — the AP loop advances them a bounded amount per
+// pass so Wi-Fi and forwarding keep running during an update (the synchronous forms block the loop ~5 s each). The
+// steps, refusals and their order are exactly `check` / `install`'s; only the hashing and copying are sliced.
+
+/// A SHA-256 over bytes [off, off+len) of the image at sector `base`, advanced `step` bytes at a time.
+struct HashRun {
+    base: u64,
+    pos: u64,
+    end: u64,
+    h: Hasher,
+}
+impl HashRun {
+    fn new(base: u64, off: u64, len: u64) -> Self {
+        HashRun { base, pos: off, end: off + len, h: Hasher::new() }
+    }
+    /// Some(true) = done, Some(false) = more to do, None = read error.
+    fn step<D: BlockDev>(&mut self, d: &D, max: u64) -> Option<bool> {
+        let n = (self.end - self.pos).min(max);
+        let h = &mut self.h;
+        if n > 0 && !each_dyn(d, self.base, self.pos, n, &mut |b| h.update(b)) {
+            return None;
+        }
+        self.pos += n;
+        Some(self.pos == self.end)
+    }
+    fn digest(&mut self) -> [u8; 32] {
+        core::mem::replace(&mut self.h, Hasher::new()).finish()
+    }
+    fn progress(&self) -> (u64, u64) {
+        (self.pos, self.end)
+    }
+}
+
+/// `each` for an unsized device (the upload module holds `dyn BlockDev`).
+fn each_dyn<D: BlockDev>(d: &D, base: u64, off: u64, len: u64, f: &mut dyn FnMut(&[u8])) -> bool {
+    // SAFETY: single-threaded (the AP loop / a self-test); BUF is only used inside each / each_dyn.
+    let buf = unsafe { &mut *core::ptr::addr_of_mut!(BUF) };
+    let (mut pos, end) = (off, off + len);
+    while pos < end {
+        let lba = base + pos / 512;
+        let skip = (pos % 512) as usize;
+        let want = ((end - pos) as usize + skip).min(buf.len());
+        let n = want.div_ceil(512) * 512;
+        if d.read_blocks(lba, &mut buf[..n]).is_err() {
+            return false;
+        }
+        let take = want - skip;
+        f(&buf[skip..skip + take]);
+        pos += take as u64;
+    }
+    true
+}
+
+fn header_dyn<D: BlockDev>(d: &D, base: u64) -> Option<&'static PayloadHeader> {
+    // SAFETY: single-threaded; HDR is 8-aligned and exactly header-sized.
+    let hb = unsafe { &mut *core::ptr::addr_of_mut!(HDR) };
+    let mut at = 0usize;
+    if !each_dyn(d, base, OFF, HDR_LEN, &mut |b| {
+        hb.0[at..at + b.len()].copy_from_slice(b);
+        at += b.len();
+    }) {
+        return None;
+    }
+    Some(unsafe { &*(hb.0.as_ptr() as *const PayloadHeader) })
+}
+
+/// Bytes hashed per step: 64 KiB (~a few ms of eMMC read + SHA-256 on the CM5).
+pub const STEP_BYTES: u64 = 64 * 1024;
+/// Sectors copied per install step (64 KiB).
+pub const STEP_SECTORS: u64 = 128;
+
+/// `check`, resumable. `step` returns None while running, Some(result) once.
+pub struct CheckJob {
+    slo: u64,
+    len: u64,
+    floor: u64,
+    running: Option<[u8; 32]>,
+    st: u8,
+    hr: HashRun,
+    svn: u64,
+    vhash: [u8; 32],
+    run_lo: u64,
+    run_hi: u64,
+    run_active: u8,
+    run_active_lo: u64,
+    hb_new: [u8; 32],
+}
+
+impl CheckJob {
+    pub fn new(slo: u64, len: u64, floor: u64, running: Option<[u8; 32]>) -> Self {
+        CheckJob { slo, len, floor, running, st: 0, hr: HashRun::new(0, 0, 0), svn: 0, vhash: [0; 32], run_lo: 0, run_hi: 0, run_active: 0, run_active_lo: 0, hb_new: [0; 32] }
+    }
+    /// (bytes hashed so far in this stage, total of this stage, stage 0..=4).
+    pub fn progress(&self) -> (u64, u64, u8) {
+        let (p, e) = self.hr.progress();
+        (p, e, self.st)
+    }
+    pub fn step<D: BlockDev>(&mut self, d: &D, max: u64) -> Option<Result<Plan, &'static str>> {
+        match self.st {
+            0 => {
+                if !(IMG_MIN..=IMG_MAX).contains(&self.len) {
+                    return Some(Err("not a boot image (size outside the boot loader's load window)"));
+                }
+                let Some(hdr) = header_dyn(d, self.slo) else { return Some(Err("staging read failed")) };
+                if verify::check_header(hdr).is_err() {
+                    return Some(Err("not a heqk boot image (header magic / size / geometry)"));
+                }
+                if OFF + HDR_LEN + hdr.size != self.len {
+                    return Some(Err("image length does not match its header"));
+                }
+                self.hr = HashRun::new(self.slo, OFF + HDR_LEN, hdr.size);
+                self.st = 1;
+                None
+            }
+            1 => match self.hr.step(d, max) {
+                None => Some(Err("staging read failed")),
+                Some(false) => None,
+                Some(true) => {
+                    let body = self.hr.digest();
+                    let Some(hdr) = header_dyn(d, self.slo) else { return Some(Err("staging read failed")) };
+                    let v = match verify::verify_digest(hdr, &body, self.floor) {
+                        Ok(v) => v,
+                        Err(VerifyErr::BelowFloor) => return Some(Err("rollback refused: security version below the running image / floor")),
+                        Err(VerifyErr::BadEd25519 | VerifyErr::BadSlhDsa) => return Some(Err("bad signature (not the release keys)")),
+                        Err(_) => return Some(Err("not a heqk boot image")),
+                    };
+                    let Some(run) = hal::abslot::inactive_slot_run(|l, b| d.read_block(l, b).is_ok()) else {
+                        return Some(Err("not the factory A/B layout — reflash over USB once"));
+                    };
+                    if self.len > run.size as u64 {
+                        return Some(Err("image larger than the slot file"));
+                    }
+                    (self.svn, self.vhash) = (v.svn, v.hash);
+                    (self.run_lo, self.run_hi, self.run_active, self.run_active_lo) = (run.lo, run.hi, run.active, run.active_lo);
+                    self.hr = HashRun::new(self.slo, 0, OFF);
+                    self.st = 2;
+                    None
+                }
+            },
+            2 => match self.hr.step(d, max) {
+                None => Some(Err("staging read failed")),
+                Some(false) => None,
+                Some(true) => {
+                    self.hb_new = self.hr.digest();
+                    self.hr = HashRun::new(self.run_active_lo, 0, OFF);
+                    self.st = 3;
+                    None
+                }
+            },
+            3 => match self.hr.step(d, max) {
+                None => Some(Err("staging read failed")),
+                Some(false) => None,
+                Some(true) => {
+                    if self.hr.digest() != self.hb_new {
+                        return Some(Err("boot loader differs from the installed one (boot-loader updates are USB-only)"));
+                    }
+                    let mut mbr = [0u8; 512];
+                    if d.read_block(0, &mut mbr).is_err() {
+                        return Some(Err("MBR read failed"));
+                    }
+                    let p1 = crate::store::parse_mbr(&mbr)[0].start;
+                    let want = if self.run_active == b'a' { crate::abboot::Slot::B } else { crate::abboot::Slot::A };
+                    if crate::abboot::trial(d, p1) != Ok(want) {
+                        return Some(Err("tryboot.txt does not name the inactive slot"));
+                    }
+                    if self.running.is_none() {
+                        return Some(Ok(self.plan()));
+                    }
+                    let size = match header_dyn(d, self.run_active_lo) {
+                        Some(h) if h.size != 0 && h.size <= verify::MAX_PAYLOAD_BODY => h.size,
+                        _ => return Some(Err("a trial boot is running — commit or reboot before the next update")),
+                    };
+                    self.hr = HashRun::new(self.run_active_lo, OFF + HDR_LEN, size);
+                    self.st = 4;
+                    None
+                }
+            },
+            4 => match self.hr.step(d, max) {
+                None => Some(Err("staging read failed")),
+                Some(false) => None,
+                Some(true) => {
+                    if Some(self.hr.digest()) != self.running {
+                        return Some(Err("a trial boot is running — commit or reboot before the next update"));
+                    }
+                    Some(Ok(self.plan()))
+                }
+            },
+            _ => Some(Err("internal: job already finished")),
+        }
+    }
+    fn plan(&mut self) -> Plan {
+        self.st = 5;
+        Plan { svn: self.svn, hash: self.vhash, len: self.len, lo: self.run_lo, hi: self.run_hi, active: self.run_active }
+    }
+}
+
+/// `install`, resumable: admit the inactive slot, copy `STEP_SECTORS` per step, revoke, re-hash the payload from the
+/// slot. On any failure the slot is revoked and the running slot is untouched (exactly `install`'s contract).
+pub struct InstallJob {
+    slo: u64,
+    plan: Plan,
+    i: u64,
+    st: u8,
+    hr: HashRun,
+}
+
+impl InstallJob {
+    pub fn new(slo: u64, plan: Plan) -> Self {
+        InstallJob { slo, plan, i: 0, st: 0, hr: HashRun::new(0, 0, 0) }
+    }
+    pub fn plan(&self) -> Plan {
+        self.plan
+    }
+    /// (sectors copied, sectors total, stage 0..=2).
+    pub fn progress(&self) -> (u64, u64, u8) {
+        if self.st == 2 { let (p, e) = self.hr.progress(); (p, e, 2) } else { (self.i, self.plan.len.div_ceil(512), self.st) }
+    }
+    pub fn step<D: BlockDev>(&mut self, d: &mut D, sectors: u64, hash_bytes: u64) -> Option<Result<(), &'static str>> {
+        match self.st {
+            0 => {
+                match d.admit_inactive_slot() {
+                    Some((lo, hi, _)) if lo == self.plan.lo && hi == self.plan.hi => {}
+                    _ => {
+                        d.revoke_inactive_slot();
+                        return Some(Err("the storage driver did not admit the inactive slot"));
+                    }
+                }
+                self.st = 1;
+                None
+            }
+            1 => {
+                let n = self.plan.len.div_ceil(512);
+                let mut s = [0u8; 512];
+                let stop = (self.i + sectors).min(n);
+                while self.i < stop {
+                    if d.read_block(self.slo + self.i, &mut s).is_err() || d.write_block(self.plan.lo + self.i, &s).is_err() {
+                        d.revoke_inactive_slot();
+                        return Some(Err("slot write failed — the running slot is untouched"));
+                    }
+                    self.i += 1;
+                }
+                if self.i == n {
+                    d.revoke_inactive_slot();
+                    let size = match header_dyn(&*d, self.plan.lo) {
+                        Some(h) if h.size != 0 && h.size <= verify::MAX_PAYLOAD_BODY => h.size,
+                        _ => return Some(Err("slot read-back does not match the verified image")),
+                    };
+                    self.hr = HashRun::new(self.plan.lo, OFF + HDR_LEN, size);
+                    self.st = 2;
+                }
+                None
+            }
+            2 => match self.hr.step(&*d, hash_bytes) {
+                None => Some(Err("slot read-back does not match the verified image")),
+                Some(false) => None,
+                Some(true) => {
+                    self.st = 3;
+                    if self.hr.digest() == self.plan.hash { Some(Ok(())) } else { Some(Err("slot read-back does not match the verified image")) }
+                }
+            },
+            _ => Some(Err("internal: job already finished")),
+        }
+    }
+}
+
 /// Is this boot a TRIAL of the inactive slot? (HBoot measured a payload different from the one
 /// the cold-boot slot holds.) None = unknown (no A/B layout / read error).
 pub fn running_trial<D: BlockDev>(d: &D, running: [u8; 32]) -> Option<bool> {
@@ -224,6 +489,40 @@ pub fn selftest() {
     flip(d, slo + 3, &mut s);
     let hboot = check(&*d, slo, len, 1, None) == Err("boot loader differs from the installed one (boot-loader updates are USB-only)");
     flip(d, slo + 3, &mut s);
+    // F7: the resumable jobs, in deliberately tiny steps (many resumes), reach exactly the synchronous results
+    let run_check = |d: &arch_aarch64::virtio_blk::VirtioBlk, len: u64, floor: u64| -> (Result<Plan, &'static str>, u32) {
+        let mut j = CheckJob::new(slo, len, floor, None);
+        let mut steps = 0u32;
+        loop {
+            steps += 1;
+            if let Some(r) = j.step(d, 4096) {
+                return (r, steps);
+            }
+        }
+    };
+    let (ar, asteps) = run_check(&*d, len, 1);
+    let async_same = ar == ok && asteps > 100;
+    let async_floor = run_check(&*d, len, 3).0 == Err("rollback refused: security version below the running image / floor");
+    flip(d, pay, &mut s);
+    let async_badsig = run_check(&*d, len, 1).0 == Err("bad signature (not the release keys)");
+    flip(d, pay, &mut s);
+    let (async_installed, isteps) = match ok {
+        Ok(p) => {
+            let mut j = InstallJob::new(slo, p);
+            let mut steps = 0u32;
+            let r = loop {
+                steps += 1;
+                if let Some(r) = j.step(d, 8, 4096) {
+                    break r;
+                }
+            };
+            (r.is_ok() && payload_hash(&*d, run.lo) == Some(p.hash), steps)
+        }
+        Err(_) => (false, 0),
+    };
+    let async_ok = async_same && async_floor && async_badsig && async_installed && isteps > 100;
+    kprint!(" [P15-otaimg-async] {} — F7: the same check / install resumed in small steps (4 KiB hashed / 8 sectors copied per step): plan identical to the synchronous check={} ({} steps); svn<floor refused={}; flipped payload byte refused={}; installed + payload re-hashed from the slot={} ({} steps)\n",
+        if async_ok { "PASS" } else { "FAIL" }, async_same, asteps, async_floor, async_badsig, async_installed, isteps);
     let installed = match ok {
         Ok(p) => install(d, slo, &p).is_ok() && payload_hash(&*d, run.lo) == Some(p.hash),
         Err(_) => false,
@@ -262,7 +561,7 @@ pub fn selftest() {
     // re-installing the running build is refused (metal 2026-11-19); an unknown running hash never matches
     let h = [0x5au8; 32];
     let same_refused = same_build(Some(h), &h) && !same_build(None, &h) && !same_build(Some([1u8; 32]), &h) && !same_build(Some([0u8; 32]), &[0u8; 32]);
-    let pass = good && floor && short && trial_running && badsig && hboot && installed && a_same && trial && committed && same_refused;
+    let pass = good && floor && short && trial_running && badsig && hboot && async_ok && installed && a_same && trial && committed && same_refused;
     kprint!(" [P15-otaimg] {} — OS-image update on a factory A/B disk: a {}-byte signed image staged sector by sector, checked (shared verifier over a streamed digest, SVN floor, A/B layout, HBoot prefix pinned, tryboot names the inactive slot) -> slot B={} ; refused: svn<floor={} wrong length={} flipped payload byte={} different HBoot prefix={} trial in progress={} ; installed into slot B + payload re-hashed from the slot={} ; slot A untouched={} ; boot identity check={} ; trial of B -> commit (config=B, tryboot=A) -> cold boot of B={} ; the build already running is refused at activation (no slot write, no reboot)={}\n",
         if pass { "PASS" } else { "FAIL" }, len, good, floor, short, badsig, hboot, trial_running, installed, a_same, trial, committed, same_refused);
 }

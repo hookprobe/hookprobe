@@ -4340,6 +4340,8 @@ fn cm5_p10_probe() {
                                     reset_at = Some(now().wrapping_add(2 * freq));
                                     reset_why = hal::superv::PLANNED_FACTORY_RESET;
                                 }
+                                // F7: an asynchronous OS-image verify / install advances one bounded step per pass
+                                upload::step(now() / (freq / 1000).max(1));
                                 if upload::take_trial_reboot() {
                                     trial_at = Some(now().wrapping_add(2 * freq));
                                     kprint!(" [OTA] new image written to the inactive slot and verified from the slot — trial boot in 2 s (tryboot one-shot; an unhealthy trial falls back to this slot)\n");
