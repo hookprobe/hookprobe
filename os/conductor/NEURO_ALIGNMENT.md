@@ -133,3 +133,31 @@ Two commits landed since `e478bca`. The Conductor branch is rebased onto `4d7ad4
   The fidelity check on the dev set should compare token ids, as noted above.
 - **Conductor's tool calls** stay a Conductor extension (ftFg makes none). The tool line is added to the
   system prompt only when a job grants tools.
+
+## Update: re-aligned with `origin/main` @ `478845f` (2026-11-24, night)
+
+The branch is rebased onto `478845f`. No file under `os/conductor` changed upstream, and `run_eval.py` is
+unchanged, so the contract still holds (the drift gate passes).
+
+**Neuro.**
+- **E2E attack path** (`data/e2e-attack-2026-11-24.md`): the alert → explanation path now runs on synthetic
+  attacks. ftFg got the scan's verdict right, but invented the technique id "T1" and called the brute force
+  "NTP". The grammar cannot stop prose like that: evidence-closed decoding constrains ids, not the summary.
+- **Grounding checks** (`eval/grounding.py`, `data/attack-ids.json`) catch exactly that: an unknown ATT&CK id,
+  or a service named without its port on the cards. **Proposal:** the device verifier adopts them the same way
+  it adopted the contract. That means a `no_std` mirror reading the same `attack-ids.json`, plus a drift gate.
+  The finding would be "answer names an unknown technique" → REJECTED or UNVERIFIED, Neuro to say which. Not
+  built; it needs Neuro's call on severity.
+
+**HomePods.**
+- **ADR 0070 is now the WebUSB flasher.** The Conductor ADR, planned as 0070, becomes **0071** (next free).
+- **x86 de-Linux plan §4a(a): "Claude as heqk's on-device AI".** It plans an EL0 planner excursion that runs
+  the tool-use loop over HTTPS, with a sealed API key, an audit record of exactly what evidence left the device,
+  and a BYO endpoint. That **is the Conductor's P5 tier** (external API under an owner data-sharing policy).
+  The pieces it lists that already exist in the Conductor: per-call capability (HP-EXEC), typed tool
+  authorization, data-class flow checks, the verifier statuses, the sealed ledger, and now Neuro's contract.
+  **Proposal:** one planner excursion, with the Conductor harness as its governance core and the outbound TLS
+  client from HomePods as its transport, so the loop is not built twice. Decision needed: HomePods +
+  operator.
+- **New CI wiring:** `tools/ci/lockfiles.txt` and dependabot now list the four Conductor workspaces, so G0
+  wiring passes and G4 scans them.

@@ -34,6 +34,10 @@ updates:
       - "/os/neuro/neuro-core"
       - "/os/neuro/neuro-dp"
       - "/os/neuro/neuro-l1"
+      - "/os/conductor"
+      - "/os/conductor/el0-harness"
+      - "/os/conductor/el0-engine"
+      - "/os/conductor/neon-proof"
     schedule: { interval: "weekly", day: "monday" }
     labels: ["dependencies", "rust"]
     commit-message: { prefix: "chore(deps)", include: "scope" }
