@@ -131,6 +131,5 @@ limitation. Either way, the explainer remains descriptive and off the protection
   - T1 v2's SFT files could not be rebuilt; the seal's canary-leak scan used empty placeholders for them.
 
   So blind v7 is unchecked against those 79 rendered real-traffic windows and against T1 v2's training answers.
-  Every later training mix (mixD–G) was checked. The models under test, base and ftFg, were not trained on T1 v2's
-  data path.
+  Every later training mix (mixD–G) was checked.
 - The chain evaluates only if the file still hashes to the value above.
