@@ -847,7 +847,7 @@ pub fn run() -> ! {
         drain_events(st, |_| {});
         if now - last_sample >= 1000 {
             last_sample = now;
-            st.sample_qsecbit(cntpct(), telemetry::score());
+            st.sample_qsecbit(cntpct(), telemetry::score_wide());
         }
         if let Some(ms) = node.take_time() {
             match st.sync_clock(ms, cntpct()) {

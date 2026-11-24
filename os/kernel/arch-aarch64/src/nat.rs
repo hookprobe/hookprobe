@@ -179,8 +179,9 @@ fn index_remove(t: &[Entry; N], i: usize) {
 
 #[derive(Default)]
 pub struct NatStats {
-    pub out_fwd: u32,
-    pub in_fwd: u32,
+    /// u64 (pre-soak finding 4): a u32 wrapped after ~40 h at 30 kpps.
+    pub out_fwd: u64,
+    pub in_fwd: u64,
     pub out_drop: u32,     // not IPv4 / TTL / unsupported proto / for us
     pub in_drop: u32,      // no matching entry / not for the lease
     pub in_too_big: u32,   // inbound frame > WIFI_MAX_FRAME after trim (dropped)

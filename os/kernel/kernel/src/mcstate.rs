@@ -222,7 +222,7 @@ pub struct McState {
     raw: [(u64, u32); RAW_CAP],
     /// Decaying risk accumulator (points × 1000), the last raw score and when it was sampled.
     q_acc: u64,
-    q_last_raw: u32,
+    q_last_raw: u64,
     q_last_ms: u64,
     rhead: usize,
     rlen: usize,
@@ -636,9 +636,10 @@ impl McState {
     /// accumulator (half-life `RISK_HALF_LIFE_MS`), so risk rises under attack and falls back smoothly
     /// after it — not to GREEN a minute later (the old hard 60-s window). Every detection now scores by
     /// severity whatever its wire verdict (`rules::fire`), so observe-only threats move the score too.
-    pub fn sample_qsecbit(&mut self, now_ticks: u64, raw_score: u32) {
+    pub fn sample_qsecbit(&mut self, now_ticks: u64, raw_score: u64) {
         let now = self.epoch_ms(now_ticks);
-        self.raw[(self.rhead + self.rlen) % RAW_CAP] = (now, raw_score);
+        // the raw series stays u32 for display (saturates); the risk delta below uses the full 64-bit score
+        self.raw[(self.rhead + self.rlen) % RAW_CAP] = (now, raw_score.min(u32::MAX as u64) as u32);
         if self.rlen < RAW_CAP {
             self.rlen += 1;
         } else {
@@ -654,7 +655,7 @@ impl McState {
         acc = if halvings >= 64 { 0 } else { acc >> halvings };
         let rem = dt % RISK_HALF_LIFE_MS;
         acc -= acc.saturating_mul(rem) / (2 * RISK_HALF_LIFE_MS); // linear within one half-life (≤ 2 % off)
-        acc = acc.saturating_add(raw_score.saturating_sub(self.q_last_raw) as u64 * 1000);
+        acc = acc.saturating_add(raw_score.saturating_sub(self.q_last_raw).saturating_mul(1000));
         self.q_acc = acc;
         self.q_last_raw = raw_score;
         self.q_last_ms = now;

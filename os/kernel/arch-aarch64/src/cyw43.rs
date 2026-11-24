@@ -5668,7 +5668,10 @@ pub fn ap_poll(rx: &mut [u8], force: bool) -> ApEvent {
                 }
                 return ApEvent::Assoc(sta);
             }
-            if et == WLC_E_DEAUTH_IND || et == WLC_E_DISASSOC_IND {
+            // pre-soak finding 3: the firmware's OWN deauth / disassoc (it aged the station out, or it carried out a
+            // host request) also ends the station — not only the *_IND forms. After the SAE watch has seen it; a
+            // failed deauth (status != 0) leaves the station in place.
+            if et == WLC_E_DEAUTH_IND || et == WLC_E_DISASSOC_IND || ((et == WLC_E_DEAUTH || et == WLC_E_DISASSOC) && st == 0) {
                 return ApEvent::Leave(sta);
             }
         }
