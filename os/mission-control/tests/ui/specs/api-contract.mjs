@@ -43,4 +43,14 @@ export default async function (t) {
   const mock = readFileSync(join(HERE, 'wifi-driver-health.mjs'), 'utf8');
   const mkeys = [...new Set([...mock.matchAll(/\b([a-z_]+):/g)].map((m) => m[1]))].filter((k) => /restarts|faults|last_fault_ts|full_wipes|pmksa_entries|state|bus|security/.test(k));
   ok(mkeys.every((k) => WANT.includes(k)), `wifi_driver mocks use only kernel keys (${mkeys.join(', ')})`);
+
+  // /api/health wifi_heal / wifi_boot (kernel wifiheal.rs): the keys and the boot-fault names the UI maps to text
+  const hl = http.split('\n').find((l) => l.includes('\\"wifi_heal\\":{{')) ?? '';
+  const hkeys = [...hl.matchAll(/\\"([a-z_]+)\\":/g)].map((m) => m[1]);
+  const HWANT = ['wifi_heal', 'state', 'last_class', 'kicks', 'bounces', 'reloads', 'after_wifi_reboot'];
+  ok(HWANT.every((k) => hkeys.includes(k)) && /\\"wifi_boot\\":/.test(http), `kernel /api/health writes wifi_heal (${hkeys.join(', ')}) and wifi_boot`);
+  const heal = readFileSync(join(ROOT, 'os/kernel/kernel/src/wifiheal.rs'), 'utf8');
+  const names = [...heal.matchAll(/BootFault::\w+ => "([a-z-]+)",/g)].map((m) => m[1]);
+  const unmapped = names.filter((x) => !wd.includes(`'${x}':`));
+  ok(names.length >= 5 && unmapped.length === 0, `the UI has text for every kernel Wi-Fi boot fault (${names.join(', ')})${unmapped.length ? `; missing: ${unmapped.join(', ')}` : ''}`);
 }
