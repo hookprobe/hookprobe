@@ -24,6 +24,7 @@
 
 pub mod attack_ids;
 pub mod grounding;
+pub mod inv;
 
 pub const VERDICTS: [&str; 4] = ["malicious", "suspicious", "benign", "insufficient_evidence"];
 pub const SEVERITIES: [&str; 5] = ["info", "low", "medium", "high", "critical"];
