@@ -156,8 +156,22 @@ unchanged, so the contract still holds (the drift gate passes).
   and a BYO endpoint. That **is the Conductor's P5 tier** (external API under an owner data-sharing policy).
   The pieces it lists that already exist in the Conductor: per-call capability (HP-EXEC), typed tool
   authorization, data-class flow checks, the verifier statuses, the sealed ledger, and now Neuro's contract.
-  **Proposal:** one planner excursion, with the Conductor harness as its governance core and the outbound TLS
-  client from HomePods as its transport, so the loop is not built twice. Decision needed: HomePods +
-  operator.
+  **Operator decision (2026-11-24): the Conductor supersedes §4a(a); it is the more comprehensive plan.** A
+  banner in the x86 plan says so. What the Conductor now takes over from §4a(a), as roadmap items:
+  1. **P5 external-API tier**: Anthropic API or any OpenAI-compatible endpoint, BYO, under the owner's
+     data-sharing policy. Transport is the outbound TLS 1.3 client (HomePods, EL0 TLS host); the Conductor
+     harness runs the loop (HTTPS + JSON + SSE streaming become worker frames).
+  2. **The API key** sealed on the device. It never enters the harness, like the delegation key: the kernel
+     attaches it.
+  3. **An audit record of what evidence left the device**: already the ledger entry per delegation, with
+     the data-class mask and request hash.
+  4. **Tools** = the bounded read-only `mgmtabi` queries `hsh` and `GET /api/*` use, as typed Conductor tools,
+     plus **intent proposals** that only the deterministic reconciler applies (ADR 0053 staged, owner-approved;
+     ADR 0011 C9). The model never enforces.
+  5. **Mission Control endpoints** `/api/planner/{propose,approve,status}` (`not_configured` stubs today) are
+     served from the Conductor's job state.
+  6. **Standalone default unchanged**: no planner configured → the device is a full SOC.
+
+  Rows (b) (Claude Code natively on heqk: no) and (c) (Claude Code operating devices remotely: yes) stand.
 - **New CI wiring:** `tools/ci/lockfiles.txt` and dependabot now list the four Conductor workspaces, so G0
   wiring passes and G4 scans them.
