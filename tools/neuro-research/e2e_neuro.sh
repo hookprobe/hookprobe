@@ -27,5 +27,20 @@ python3 -I "$T/guard_ground.py" "$O/cases.jsonl" "$O/explainer-AE.json" "$O/expl
 need "$O/explainer-AEG.json"
 "$PY" -I "$T/e2e_neuro.py" score "$O" "$O/explainer-AEG.json" > "$O/score.log" 2>&1 || { tail -5 "$O/score.log"; exit 5; }
 echo "{\"model_load_s\": $((t1 - t0)), \"server_rss_mb\": $(( ${srss:-0} / 1024 )), \"gguf\": \"$(basename "$G")\", \"gguf_mb\": $(( $(stat -f %z "$G") / 1048576 ))}" > "$O/stage_D_server.json"
+if [ -n "${INV_GGUF:-}" ]; then
+  need "$INV_GGUF"
+  log "stage F (investigation turn per alert: $(basename "$INV_GGUF"), tools, guard A, then guard G)"
+  "$PY" -I "$T/e2e_neuro.py" inv-cases "$O" > "$O/inv.log" 2>&1 || { tail -3 "$O/inv.log"; exit 6; }
+  if [ -s "$O/inv_cases.jsonl" ]; then
+    "$LS" -m "$INV_GGUF" --port $port -c 8192 -np 1 -ngl 99 --reasoning off --no-webui --jinja > "$O/server-inv.log" 2>&1 & sp=$!
+    for _ in $(seq 1 180); do curl -sf http://127.0.0.1:$port/health >/dev/null && break; sleep 1; done
+    python3 -I "$T/inv_eval.py" --cases "$O/inv_cases.jsonl" --url http://127.0.0.1:$port/v1 --guard A --json "$O/investigate.json" >> "$O/inv.log" 2>&1
+    kill $sp; wait $sp 2>/dev/null
+    need "$O/investigate.json"
+    "$PY" -I "$T/e2e_neuro.py" inv-score "$O" "$O/investigate.json" > "$O/stage_F.log" 2>&1 || { tail -3 "$O/stage_F.log"; exit 6; }
+  else
+    log "stage F: no S1 alert, no investigation turn"
+  fi
+fi
 log "E2E DONE"
 cat "$O/stages_ABCE.json" "$O/stage_D.json" "$O/stage_D_server.json"
