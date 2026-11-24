@@ -22,8 +22,9 @@ SERVICES = {
     5432: "postgresql", 5900: "vnc", 6667: "irc", 8080: "http-alt", 8443: "https-alt", 8883: "mqtt-tls",
     51820: "wireguard",
 }
-# a flow card: "<src>-><dst>:<ports> " where <ports> is a comma list (a range "a-b" is left unlabelled)
-FLOW = re.compile(r"^(F\d+ \S+->\S+?:)((?:\d+,)*\d+)( )", re.M)
+# a flow card: "<src>-><dst>:<ports> " where <ports> is a comma list. A range "a-b" and the count form "<N> ports"
+# (e.g. ":25 ports", a port COUNT, not port 25) are left unlabelled.
+FLOW = re.compile(r"^(F\d+ \S+->\S+?:)((?:\d+,)*\d+)( )(?!ports\b)", re.M)
 
 
 def label(card_text):
