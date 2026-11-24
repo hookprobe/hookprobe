@@ -272,3 +272,365 @@ pub fn parse_answer(text: &[u8], entities: &IdList) -> Result<Answer, ContractEr
     let small = |v: usize| u8::try_from(v).map_err(|_| ContractError::Invalid);
     Ok(Answer::Call(Call { tool: small(ti)?, entity: small(entity.ok_or(ContractError::Invalid)?)?, minutes, policy: policy.map(small).transpose()? }))
 }
+
+// ------------------------------------------------------------------------------------------- the grammar
+
+/// What starts the grammar: llama-server's lazy trigger for these tools (a word trigger on the generated text).
+pub const TRIGGER: &str = "<tool_call>\n";
+
+/// The added tokens llama-server renders as text for this request (`preserved_tokens`). Under the grammar, no
+/// other added token has text, so none can be generated; of these four only the first two fit the grammar.
+pub const PRESERVED_TOKENS: [&str; 4] = ["<tool_call>", "</tool_call>", "<think>", "</think>"];
+
+/// One step of the grammar after the trigger. `Sp` is the grammar's `space` (one optional unit).
+#[derive(Clone, Copy)]
+enum Op {
+    Sp,
+    Lit(&'static str),
+    /// `"\"" <one of the tool names> "\""` without the opening quote.
+    Name,
+    /// `string` without the opening quote: `char* "\""`.
+    Str,
+    /// After the entity: what follows depends on the tool.
+    AfterEntity,
+    /// `integer`.
+    Int,
+    /// One of [`POLICIES`] and the closing quote.
+    Policy,
+    /// After a tool object and `space`: `,` and another tool, or `</tool_call>`.
+    Sep,
+    /// `(tool-call? space)+` after a complete call: whitespace, another call, or the end.
+    Loop,
+    Jump(u8),
+}
+
+const OBJECT: u8 = 0;
+const BRANCH_PLAIN: u8 = 25;
+const BRANCH_MINUTES: u8 = 28;
+const BRANCH_POLICY: u8 = 38;
+const CLOSE: u8 = 49;
+const CALL_END: u8 = 53;
+const LOOP: u8 = 54;
+const NEXT_CALL: u8 = 55;
+
+/// llama.cpp's grammar for the five tools (`inv_contract_gen.json`, `server_grammar.grammar`), from the trigger
+/// on: `tool-call ::= "<tool_call>\n" space tool (space "," space tool)* space "</tool_call>"`.
+const PROGRAM: [Op; 57] = [
+    // OBJECT (0): tool-N up to its schema's entity string
+    Op::Sp,
+    Op::Lit("{"),
+    Op::Sp,
+    Op::Lit("\"name\""),
+    Op::Sp,
+    Op::Lit(":"),
+    Op::Sp,
+    Op::Lit("\""),
+    Op::Name,
+    Op::Sp,
+    Op::Lit(","),
+    Op::Sp,
+    Op::Lit("\"arguments\""),
+    Op::Sp,
+    Op::Lit(":"),
+    Op::Sp,
+    Op::Lit("{"),
+    Op::Sp,
+    Op::Lit("\"entity\""),
+    Op::Sp,
+    Op::Lit(":"),
+    Op::Sp,
+    Op::Lit("\""),
+    Op::Str,
+    Op::AfterEntity,
+    // BRANCH_PLAIN (25): `space "}"`
+    Op::Sp,
+    Op::Lit("}"),
+    Op::Jump(CLOSE),
+    // BRANCH_MINUTES (28): `"," space "\"minutes\"" space ":" space integer space "}"`
+    Op::Lit(","),
+    Op::Sp,
+    Op::Lit("\"minutes\""),
+    Op::Sp,
+    Op::Lit(":"),
+    Op::Sp,
+    Op::Int,
+    Op::Sp,
+    Op::Lit("}"),
+    Op::Jump(CLOSE),
+    // BRANCH_POLICY (38): `"," space "\"policy\"" space ":" space <policy> space "}"`
+    Op::Lit(","),
+    Op::Sp,
+    Op::Lit("\"policy\""),
+    Op::Sp,
+    Op::Lit(":"),
+    Op::Sp,
+    Op::Lit("\""),
+    Op::Policy,
+    Op::Sp,
+    Op::Lit("}"),
+    Op::Jump(CLOSE),
+    // CLOSE (49): the tool object's `space "}"`, then `space` and the separator
+    Op::Sp,
+    Op::Lit("}"),
+    Op::Sp,
+    Op::Sep,
+    // CALL_END (53)
+    Op::Lit("</tool_call>"),
+    // LOOP (54)
+    Op::Loop,
+    // NEXT_CALL (55)
+    Op::Lit(TRIGGER),
+    Op::Jump(OBJECT),
+];
+
+/// Where a `space` unit stands: `"" | " " | "\n"{1,2} [ \t]{0,20}`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ws {
+    Start,
+    Done,
+    /// Newlines seen (1 or 2) and padding characters after them.
+    Nl(u8, u8),
+}
+
+impl Ws {
+    fn step(self, b: u8) -> Option<Ws> {
+        match (self, b) {
+            (Ws::Start, b' ') => Some(Ws::Done),
+            (Ws::Start, b'\n') => Some(Ws::Nl(1, 0)),
+            (Ws::Nl(1, 0), b'\n') => Some(Ws::Nl(2, 0)),
+            (Ws::Nl(n, pad), b' ' | b'\t') if pad < 20 => Some(Ws::Nl(n, pad + 1)),
+            _ => None,
+        }
+    }
+}
+
+const DEAD: u8 = u8::MAX;
+const NO_PAD: u8 = u8::MAX;
+
+/// The investigation answer as llama-server constrains it, one byte at a time: free text until the generated
+/// text contains [`TRIGGER`], then the grammar the server derives from the five tools. This mirrors the server,
+/// so it is wider than [`parse_answer`]: the entity is any JSON string, `minutes` any integer of up to 16
+/// digits, and several tools or several calls may follow each other. The engine decodes under this automaton;
+/// the device then reads the result with [`parse_answer`], which refuses what the device does not act on.
+///
+/// Copy and 6 bytes of state. Bytes of 0x80 and above pass inside the entity string, as in the contract's
+/// automaton.
+#[derive(Clone, Copy)]
+pub struct ToolMachine {
+    /// Index into the program, or [`DEAD`]. Meaningful once `triggered`.
+    pc: u8,
+    triggered: bool,
+    /// Progress in the current step: bytes of a literal or of the trigger matched, a name or policy position,
+    /// the escape state of a string, the digits of an integer.
+    pos: u8,
+    /// Candidates still possible for a name or a policy, one bit each; the tool once the name is complete.
+    mask: u8,
+    tool: u8,
+    ws: Ws,
+}
+
+impl Default for ToolMachine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ToolMachine {
+    pub fn new() -> Self {
+        Self { pc: 0, triggered: false, pos: 0, mask: 0, tool: 0, ws: Ws::Start }
+    }
+
+    /// Has the grammar started? Before that, every token is allowed.
+    pub fn triggered(&self) -> bool {
+        self.triggered
+    }
+
+    pub fn dead(&self) -> bool {
+        self.pc == DEAD
+    }
+
+    /// May the answer end here?
+    pub fn accepting(&self) -> bool {
+        !self.triggered || self.pc == LOOP
+    }
+
+    fn enter(&mut self, pc: u8) {
+        self.pc = pc;
+        self.pos = 0;
+        self.ws = Ws::Start;
+        self.mask = match PROGRAM.get(usize::from(pc)) {
+            Some(Op::Name) => (1 << TOOLS.len()) - 1,
+            Some(Op::Policy) => (1 << POLICIES.len()) - 1,
+            _ => 0,
+        };
+        if matches!(PROGRAM.get(usize::from(pc)), Some(Op::Loop)) {
+            self.pos = NO_PAD;
+        }
+    }
+
+    /// One of `names` spelled byte by byte, then a closing quote. `Some(index)` when the quote completes one.
+    fn choice(&mut self, b: u8, names: impl Iterator<Item = &'static str> + Clone) -> Result<Option<u8>, ()> {
+        let at = usize::from(self.pos);
+        if b == b'"' {
+            return names.enumerate().find(|(i, n)| self.mask & (1 << i) != 0 && n.len() == at).map(|(i, _)| Some(i as u8)).ok_or(());
+        }
+        let mut keep = 0u8;
+        for (i, n) in names.enumerate() {
+            if self.mask & (1 << i) != 0 && n.as_bytes().get(at) == Some(&b) {
+                keep |= 1 << i;
+            }
+        }
+        if keep == 0 {
+            return Err(());
+        }
+        self.mask = keep;
+        self.pos += 1;
+        Ok(None)
+    }
+
+    /// Consume one byte. `false` (and the machine is dead) if the server's grammar does not allow it here.
+    pub fn step(&mut self, b: u8) -> bool {
+        if !self.triggered {
+            // Free text; watch for the trigger. No proper prefix of it is also a suffix, so a mismatch restarts.
+            let t = TRIGGER.as_bytes();
+            self.pos = if t.get(usize::from(self.pos)) == Some(&b) {
+                self.pos + 1
+            } else {
+                u8::from(t.first() == Some(&b))
+            };
+            if usize::from(self.pos) == t.len() {
+                self.triggered = true;
+                self.enter(OBJECT);
+            }
+            return true;
+        }
+        // At most a few steps consume nothing (a `space` that ends, an integer that ends, a jump).
+        for _ in 0..8 {
+            let Some(op) = PROGRAM.get(usize::from(self.pc)).copied() else { break };
+            let next = self.pc + 1;
+            match op {
+                Op::Jump(to) => self.enter(to),
+                Op::Sp => match self.ws.step(b) {
+                    Some(ws) => {
+                        self.ws = ws;
+                        return true;
+                    }
+                    None => self.enter(next),
+                },
+                Op::Lit(lit) => {
+                    if lit.as_bytes().get(usize::from(self.pos)) != Some(&b) {
+                        break;
+                    }
+                    self.pos += 1;
+                    if usize::from(self.pos) == lit.len() {
+                        self.enter(next);
+                    }
+                    return true;
+                }
+                Op::Name => match self.choice(b, TOOLS.iter().map(|t| t.name)) {
+                    Ok(Some(tool)) => {
+                        self.tool = tool;
+                        self.enter(next);
+                        return true;
+                    }
+                    Ok(None) => return true,
+                    Err(()) => break,
+                },
+                Op::Policy => match self.choice(b, POLICIES.iter().copied()) {
+                    Ok(Some(_)) => {
+                        self.enter(next);
+                        return true;
+                    }
+                    Ok(None) => return true,
+                    Err(()) => break,
+                },
+                // `char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})`; pos: 0 plain,
+                // 1 after a backslash, 2..=5 hex digits still to come (as 6 − pos).
+                Op::Str => {
+                    match (self.pos, b) {
+                        (0, b'"') => self.enter(next),
+                        (0, b'\\') => self.pos = 1,
+                        (0, 0..=0x1f | 0x7f) => break,
+                        (0, _) => {}
+                        (1, b'"' | b'\\' | b'b' | b'f' | b'n' | b'r' | b't') => self.pos = 0,
+                        (1, b'u') => self.pos = 2,
+                        (2..=5, _) if b.is_ascii_hexdigit() => self.pos = if self.pos == 5 { 0 } else { self.pos + 1 },
+                        _ => break,
+                    }
+                    return true;
+                }
+                Op::AfterEntity => {
+                    let t = TOOLS.get(usize::from(self.tool));
+                    let (minutes, policy) = t.map_or((false, false), |t| (t.minutes, t.policy));
+                    // `entity-kv ("," space minutes-kv)? space "}"`, `entity-kv "," space policy-kv space "}"`,
+                    // or `entity-kv space "}"`: the comma, where there is one, follows the string directly.
+                    self.enter(if policy {
+                        BRANCH_POLICY
+                    } else if minutes && b == b',' {
+                        BRANCH_MINUTES
+                    } else {
+                        BRANCH_PLAIN
+                    });
+                }
+                // `"-"? ([0] | [1-9] [0-9]{0,15})`; pos counts digits, mask: 1 = a sign was read, 2 = it is zero.
+                Op::Int => {
+                    let digits = self.pos;
+                    if b == b'-' && digits == 0 && self.mask & 1 == 0 {
+                        self.mask |= 1;
+                        return true;
+                    }
+                    if b.is_ascii_digit() && self.mask & 2 == 0 && digits < 16 {
+                        if digits == 0 && b == b'0' {
+                            self.mask |= 2;
+                        }
+                        self.pos += 1;
+                        return true;
+                    }
+                    if digits == 0 {
+                        break;
+                    }
+                    self.enter(next);
+                }
+                Op::Sep => {
+                    match b {
+                        // `space "," space tool`: the next object begins with its own `space`.
+                        b',' => self.enter(OBJECT),
+                        b'<' => {
+                            self.enter(CALL_END);
+                            self.pos = 1;
+                        }
+                        _ => break,
+                    }
+                    return true;
+                }
+                // `(tool-call? space)+`: any run of `space` units, or the next call. pos: padding used after the
+                // last newline (a tab is only possible there), or NO_PAD.
+                Op::Loop => {
+                    match (b, self.pos) {
+                        (b'\n', _) => self.pos = 0,
+                        (b' ' | b'\t', 0..=19) => self.pos += 1,
+                        (b' ', _) => self.pos = NO_PAD,
+                        (b'<', _) => {
+                            self.enter(NEXT_CALL);
+                            self.pos = 1;
+                        }
+                        _ => break,
+                    }
+                    return true;
+                }
+            }
+        }
+        self.pc = DEAD;
+        false
+    }
+
+    pub fn feed(&mut self, bytes: &[u8]) -> bool {
+        bytes.iter().all(|&b| self.step(b))
+    }
+
+    /// Would these bytes be allowed next? The machine is not changed.
+    pub fn accepts(&self, bytes: &[u8]) -> bool {
+        let mut m = *self;
+        m.feed(bytes)
+    }
+}
