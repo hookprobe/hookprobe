@@ -123,6 +123,20 @@ product when N0 or the owner knows the product, otherwise its class.
 | P3 | `lookup_exposure` tool and its cases; pre-registration (doc 40); blind investigation set | Neuro |
 | P4 | train, select on a fresh dev set, one blind look | after doc 38 has finished, so the two experiments don't share a training run |
 
+**Status (2026-11-24).**
+- **P0 done:** CTID registered (#1537).
+- **P1 done:** entry-path graph (#1539, `data/entry-paths-review.md`): entry is T1190 or T1203; the gateway's value is
+  the follow-on behaviour.
+- **P2 done:** 16 playbooks (`data/playbooks.md`, built and validated by `playbooks.py`):
+  - 4 entry: T1190, T1133, T1110, T1203;
+  - 11 follow-on: tool download, C2, DGA, web shell, mining, scanning, flooding, exfiltration, tunnelling,
+    lateral movement, proxyware;
+  - 1 not observable (credential dumping), so the explainer says so instead of guessing.
+
+  Every ATT&CK id, D3FEND id and label, tool and DNA feature is checked against intel-data's raw files; no CVE id
+  appears.
+- **Next: P3.** `lookup_exposure`, the investigation cases, and their own pre-registration.
+
 ## 6. Risks
 
 1. **Coverage bias.** KEV over-represents enterprise products (VPNs, firewalls, mail servers). Home-device classes

@@ -1,0 +1,988 @@
+{
+ "schema": "hookprobe.neuro.playbooks/1",
+ "doc": "39 \u00a73.2",
+ "playbooks": [
+  {
+   "id": "T1190",
+   "name": "Exploit Public-Facing Application",
+   "kind": "entry",
+   "classes": [
+    "router",
+    "edge",
+    "nas",
+    "camera",
+    "printer",
+    "server"
+   ],
+   "seen": [
+    "inbound connections from many new remote sources to a service port (log_inbound_sources up, novel_pair_frac up)",
+    "a request burst to an admin or web port followed within minutes by the device's FIRST outbound connection to a new peer",
+    "the device starts behaving differently right after: new destinations, a download, periodic traffic (see the follow-on playbooks)"
+   ],
+   "dna": [
+    "log_inbound_sources",
+    "novel_pair_frac",
+    "web_frac",
+    "wellknown_frac"
+   ],
+   "next": [
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "is the service reachable from outside, since when, and who connected just before the change"
+    },
+    {
+     "tool": "lookup_reputation",
+     "on": "the inbound sources",
+     "why": "known scanners or exploit infrastructure"
+    },
+    {
+     "tool": "lookup_exposure",
+     "on": "the device",
+     "why": "known-exploited weaknesses for this product or class (doc 39 \u00a73.4)"
+    },
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "any new outbound connection, download or periodic peer after the inbound burst"
+    }
+   ],
+   "confirms": [
+    "new outbound behaviour starts right after inbound traffic to the exposed service",
+    "the inbound sources are known exploit or scanning infrastructure AND the device then reaches a new peer"
+   ],
+   "clears": [
+    "only inbound probing, no change in the device's own outbound behaviour (internet background noise)",
+    "the service is not reachable from outside (the inbound traffic was blocked at the gateway)"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-ITF",
+     "label": "Inbound Traffic Filtering",
+     "proposal": "owner_action",
+     "what": "close the port forward or UPnP mapping to the service"
+    },
+    {
+     "d3fend": "D3-SU",
+     "label": "Software Update",
+     "proposal": "owner_action",
+     "what": "update the device's firmware"
+    },
+    {
+     "d3fend": "D3-NI",
+     "label": "Network Isolation",
+     "proposal": "internet_only",
+     "what": "keep it off the LAN until updated, if it already changed behaviour"
+    }
+   ],
+   "blind": [
+    "the exploit payload itself when the service is encrypted",
+    "whether the exploit succeeded inside the device; only its consequences on the network"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1133",
+   "name": "External Remote Services",
+   "kind": "entry",
+   "classes": [
+    "edge",
+    "router",
+    "nas",
+    "server"
+   ],
+   "seen": [
+    "successful sessions to a VPN or remote-access port from unusual countries or networks (log_countries, log_asns up)",
+    "a remote session at an unusual hour followed by LAN-wide connections from the device (lan_peer_frac up)"
+   ],
+   "dna": [
+    "log_countries",
+    "log_asns",
+    "lan_peer_frac",
+    "log_inbound_sources"
+   ],
+   "next": [
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "who held remote sessions, from where, how long"
+    },
+    {
+     "tool": "lookup_reputation",
+     "on": "the remote peers",
+     "why": "VPN exits, hosting providers, known bad ranges"
+    },
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "what it reached on the LAN during and after the session"
+    }
+   ],
+   "confirms": [
+    "a session from a known-bad or never-seen network, followed by LAN discovery or lateral connections"
+   ],
+   "clears": [
+    "sessions from the owner's usual networks and hours, no LAN-wide activity afterwards"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-MFA",
+     "label": "Multi-factor Authentication",
+     "proposal": "owner_action",
+     "what": "require a second factor on the remote-access service"
+    },
+    {
+     "d3fend": "D3-DRA",
+     "label": "Disable Remote Access",
+     "proposal": "owner_action",
+     "what": "turn remote access off if it is not used"
+    },
+    {
+     "d3fend": "D3-ITF",
+     "label": "Inbound Traffic Filtering",
+     "proposal": "owner_action",
+     "what": "allow the service only from known networks"
+    }
+   ],
+   "blind": [
+    "who typed the credentials; a valid login looks the same as the owner's"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1110",
+   "name": "Brute Force",
+   "kind": "entry",
+   "classes": [
+    "router",
+    "nas",
+    "camera",
+    "server",
+    "edge"
+   ],
+   "seen": [
+    "many failed connections or logins to SSH, Telnet, RDP or a web login (fail_ratio, ssh_frac or telnet_frac up)",
+    "from one source (inbound) or from a LAN device to many hosts (outbound: the device itself is infected)"
+   ],
+   "dna": [
+    "fail_ratio",
+    "ssh_frac",
+    "telnet_frac",
+    "log_inbound_sources",
+    "log_remotes"
+   ],
+   "next": [
+    {
+     "tool": "query_flows",
+     "on": "the targeted device",
+     "why": "count of attempts, sources, and whether any attempt succeeded"
+    },
+    {
+     "tool": "lookup_reputation",
+     "on": "the sources",
+     "why": "known brute-force infrastructure"
+    },
+    {
+     "tool": "query_flows",
+     "on": "the source if it is a LAN device",
+     "why": "is it also scanning or connecting out to new peers (infected)"
+    }
+   ],
+   "confirms": [
+    "a successful login after a run of failures",
+    "a LAN device brute-forcing others (lateral, often a botnet)"
+   ],
+   "clears": [
+    "a handful of failures from one known LAN host (a mistyped password), no success from elsewhere"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-CDP",
+     "label": "Change Default Password",
+     "proposal": "owner_action",
+     "what": "replace default credentials on the targeted device"
+    },
+    {
+     "d3fend": "D3-AL",
+     "label": "Account Locking",
+     "proposal": "owner_action",
+     "what": "lock out after repeated failures where the device supports it"
+    },
+    {
+     "d3fend": "D3-ITF",
+     "label": "Inbound Traffic Filtering",
+     "proposal": "owner_action",
+     "what": "do not expose SSH or Telnet to the internet"
+    }
+   ],
+   "blind": [
+    "the passwords tried",
+    "whether a success on an encrypted service led to commands being run"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1203",
+   "name": "Exploitation for Client Execution",
+   "kind": "entry",
+   "classes": [
+    "workstation",
+    "phone"
+   ],
+   "seen": [
+    "a laptop or phone fetches a document or page from a new site, then starts NEW outbound behaviour: downloads, periodic connections, uploads"
+   ],
+   "dna": [
+    "novel_pair_frac",
+    "log_remotes",
+    "web_frac"
+   ],
+   "next": [
+    {
+     "tool": "query_dns",
+     "on": "the device",
+     "why": "which new domains were resolved just before the change"
+    },
+    {
+     "tool": "lookup_reputation",
+     "on": "those domains and addresses",
+     "why": "malware delivery or phishing infrastructure"
+    },
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "periodic or download behaviour after the visit"
+    }
+   ],
+   "confirms": [
+    "a known-bad delivery domain followed by periodic C2-like traffic or a tool download"
+   ],
+   "clears": [
+    "a new site with no change in the device's behaviour afterwards (ordinary browsing)"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-DNSDL",
+     "label": "DNS Denylisting",
+     "proposal": "owner_action",
+     "what": "block the delivery domain at the gateway's resolver"
+    },
+    {
+     "d3fend": "D3-SU",
+     "label": "Software Update",
+     "proposal": "owner_action",
+     "what": "update the browser and document reader"
+    },
+    {
+     "d3fend": "D3-NI",
+     "label": "Network Isolation",
+     "proposal": "internet_only",
+     "what": "keep the device off the LAN while it is checked"
+    }
+   ],
+   "blind": [
+    "what ran on the device; the gateway sees only its network consequences"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1105",
+   "name": "Ingress Tool Transfer",
+   "kind": "follow_on",
+   "classes": [
+    "server",
+    "router",
+    "camera",
+    "nas",
+    "workstation"
+   ],
+   "seen": [
+    "a device that never downloads suddenly fetches a file over HTTP or an odd port from a new peer (log_bytes_in, novel_pair_frac up)",
+    "on IoT: a small download right after inbound traffic to an exposed port (a dropper)"
+   ],
+   "dna": [
+    "log_bytes_in",
+    "novel_pair_frac",
+    "web_frac",
+    "log_out_in_ratio"
+   ],
+   "next": [
+    {
+     "tool": "lookup_reputation",
+     "on": "the download peer",
+     "why": "malware hosting"
+    },
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "what it did right after the download: new peers, scanning, periodic traffic"
+    }
+   ],
+   "confirms": [
+    "a download from known malware hosting followed by scanning or C2-like traffic"
+   ],
+   "clears": [
+    "a vendor or CDN update host the device always uses (check the baseline)"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-OTF",
+     "label": "Outbound Traffic Filtering",
+     "proposal": "owner_action",
+     "what": "block the download peer"
+    },
+    {
+     "d3fend": "D3-NI",
+     "label": "Network Isolation",
+     "proposal": "isolated",
+     "what": "isolate the device until it is reflashed or restored"
+    },
+    {
+     "d3fend": "D3-RS",
+     "label": "Restore Software",
+     "proposal": "owner_action",
+     "what": "reflash or restore the device"
+    }
+   ],
+   "blind": [
+    "the file's content when the transfer is encrypted"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1071",
+   "name": "Application Layer Protocol (command and control)",
+   "kind": "follow_on",
+   "classes": [
+    "all"
+   ],
+   "seen": [
+    "periodic connections to one new peer: low periodic_cv, steady log_period_s, small requests, for hours",
+    "the same pattern from a device with no reason to call home that way"
+   ],
+   "dna": [
+    "periodic_cv",
+    "log_period_s",
+    "novel_pair_frac",
+    "log_remotes"
+   ],
+   "next": [
+    {
+     "tool": "lookup_reputation",
+     "on": "the peer",
+     "why": "known C2 or bot infrastructure"
+    },
+    {
+     "tool": "query_dns",
+     "on": "the device",
+     "why": "how the peer is resolved: fixed name, changing names (DGA), direct IP"
+    },
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "when the pattern started and what preceded it (an entry event?)"
+    }
+   ],
+   "confirms": [
+    "a known C2 peer, or periodic traffic that started right after an entry event and has no vendor explanation"
+   ],
+   "clears": [
+    "the device maker's cloud or a known time, update or telemetry service at its usual period"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-OTF",
+     "label": "Outbound Traffic Filtering",
+     "proposal": "owner_action",
+     "what": "block the peer"
+    },
+    {
+     "d3fend": "D3-DNSDL",
+     "label": "DNS Denylisting",
+     "proposal": "owner_action",
+     "what": "block the domain"
+    },
+    {
+     "d3fend": "D3-NI",
+     "label": "Network Isolation",
+     "proposal": "isolated",
+     "what": "isolate the device while it is checked"
+    }
+   ],
+   "blind": [
+    "the commands inside an encrypted channel"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1568.002",
+   "name": "Domain Generation Algorithms",
+   "kind": "follow_on",
+   "classes": [
+    "all"
+   ],
+   "seen": [
+    "many lookups of random-looking names, most failing (NXDOMAIN), from one device"
+   ],
+   "dna": [
+    "dns_frac",
+    "fail_ratio",
+    "novel_pair_frac"
+   ],
+   "next": [
+    {
+     "tool": "query_dns",
+     "on": "the device",
+     "why": "the failing names, their entropy, and which one finally resolved"
+    },
+    {
+     "tool": "lookup_reputation",
+     "on": "the name that resolved and its address",
+     "why": "known C2"
+    },
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "traffic to the resolved address"
+    }
+   ],
+   "confirms": [
+    "a burst of random-looking failed lookups followed by a connection to the one name that resolved"
+   ],
+   "clears": [
+    "a CDN or tracker using long random-looking labels that all resolve, with ordinary traffic"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-DNSDL",
+     "label": "DNS Denylisting",
+     "proposal": "owner_action",
+     "what": "block the resolved C2 domain"
+    },
+    {
+     "d3fend": "D3-NI",
+     "label": "Network Isolation",
+     "proposal": "isolated",
+     "what": "isolate the device"
+    }
+   ],
+   "blind": [
+    "anything when the device uses encrypted DNS that bypasses the gateway (see T1572)"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1505.003",
+   "name": "Web Shell",
+   "kind": "follow_on",
+   "classes": [
+    "server",
+    "nas",
+    "edge"
+   ],
+   "seen": [
+    "a self-hosted web service receives requests from a new external source at irregular intervals, and the server then reaches out to new peers"
+   ],
+   "dna": [
+    "log_inbound_sources",
+    "web_frac",
+    "novel_pair_frac"
+   ],
+   "next": [
+    {
+     "tool": "query_flows",
+     "on": "the server",
+     "why": "which external sources talk to the web port, how regularly, since when"
+    },
+    {
+     "tool": "lookup_reputation",
+     "on": "those sources",
+     "why": "known attacker infrastructure"
+    },
+    {
+     "tool": "query_flows",
+     "on": "the server",
+     "why": "new outbound connections that the service never made before"
+    }
+   ],
+   "confirms": [
+    "a recurring external source after an entry event, plus new outbound behaviour from the server"
+   ],
+   "clears": [
+    "the owner's own remote use from known networks"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-ITF",
+     "label": "Inbound Traffic Filtering",
+     "proposal": "owner_action",
+     "what": "stop exposing the web service"
+    },
+    {
+     "d3fend": "D3-RS",
+     "label": "Restore Software",
+     "proposal": "owner_action",
+     "what": "restore the service from a known-good copy"
+    },
+    {
+     "d3fend": "D3-NI",
+     "label": "Network Isolation",
+     "proposal": "internet_only",
+     "what": "keep it off the LAN while restored"
+    }
+   ],
+   "blind": [
+    "the shell file and the commands sent through it"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1496",
+   "name": "Resource Hijacking (cryptomining)",
+   "kind": "follow_on",
+   "classes": [
+    "server",
+    "router",
+    "camera",
+    "nas"
+   ],
+   "seen": [
+    "long-lived connections to mining-pool ports or pools, steady small traffic, from a device that never did it (log_mean_dur up)"
+   ],
+   "dna": [
+    "log_mean_dur",
+    "novel_pair_frac",
+    "log_remotes"
+   ],
+   "next": [
+    {
+     "tool": "lookup_reputation",
+     "on": "the peer",
+     "why": "known mining pools"
+    },
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "when it started and what preceded it"
+    }
+   ],
+   "confirms": [
+    "a known pool, or a stratum-like port, starting after an entry event"
+   ],
+   "clears": [
+    "the owner runs mining on this device on purpose"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-OTF",
+     "label": "Outbound Traffic Filtering",
+     "proposal": "owner_action",
+     "what": "block the pool"
+    },
+    {
+     "d3fend": "D3-NI",
+     "label": "Network Isolation",
+     "proposal": "isolated",
+     "what": "isolate and restore the device"
+    }
+   ],
+   "blind": [
+    "CPU load on the device itself"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1046",
+   "name": "Network Service Discovery (scanning)",
+   "kind": "follow_on",
+   "classes": [
+    "all"
+   ],
+   "seen": [
+    "one device touches many hosts or ports with mostly failed connections (log_dst_ports, port_entropy, fail_ratio up; fanout on the card)",
+    "outbound to the internet on Telnet/SSH ports: a bot looking for its next victims"
+   ],
+   "dna": [
+    "log_dst_ports",
+    "port_entropy",
+    "fail_ratio",
+    "telnet_frac",
+    "lan_peer_frac",
+    "log_remotes"
+   ],
+   "next": [
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "targets: LAN only (lateral) or internet-wide (bot)"
+    },
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "what preceded it: entry event, download"
+    },
+    {
+     "tool": "lookup_exposure",
+     "on": "the device",
+     "why": "is this a class botnets recruit (cameras, routers, NAS)"
+    }
+   ],
+   "confirms": [
+    "internet-wide Telnet/SSH scanning from an IoT device (bot recruitment)",
+    "LAN-wide scanning after a new download"
+   ],
+   "clears": [
+    "a few ports on one LAN host (device discovery: printers, casting, DLNA)",
+    "an owner-run network scanner"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-NI",
+     "label": "Network Isolation",
+     "proposal": "isolated",
+     "what": "isolate the scanning device"
+    },
+    {
+     "d3fend": "D3-CDP",
+     "label": "Change Default Password",
+     "proposal": "owner_action",
+     "what": "replace default credentials, then reflash"
+    },
+    {
+     "d3fend": "D3-OTF",
+     "label": "Outbound Traffic Filtering",
+     "proposal": "owner_action",
+     "what": "block outbound Telnet from IoT devices"
+    }
+   ],
+   "blind": [
+    "which vulnerability the scan looks for"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1498",
+   "name": "Network Denial of Service (flooding)",
+   "kind": "follow_on",
+   "classes": [
+    "camera",
+    "router",
+    "server",
+    "nas"
+   ],
+   "seen": [
+    "a sudden very high packet rate to one or few external targets (log_max_per_min, log_bytes_out, log_pkts_per_flow up), often UDP or SYN"
+   ],
+   "dna": [
+    "log_max_per_min",
+    "log_bytes_out",
+    "log_pkts_per_flow",
+    "udp_frac"
+   ],
+   "next": [
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "targets, rate and duration"
+    },
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "C2-like traffic before the flood (orders from the bot master)"
+    }
+   ],
+   "confirms": [
+    "a flood that starts on command after periodic C2 traffic"
+   ],
+   "clears": [
+    "a speed test or a large legitimate upload the owner started"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-NI",
+     "label": "Network Isolation",
+     "proposal": "isolated",
+     "what": "isolate the device"
+    },
+    {
+     "d3fend": "D3-OTF",
+     "label": "Outbound Traffic Filtering",
+     "proposal": "owner_action",
+     "what": "rate-limit the device's outbound traffic"
+    }
+   ],
+   "blind": [
+    "who ordered the attack"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1048",
+   "name": "Exfiltration Over Alternative Protocol",
+   "kind": "follow_on",
+   "classes": [
+    "all"
+   ],
+   "seen": [
+    "a large upload to a new destination, out of the device's habits (log_bytes_out, log_out_in_ratio up; out= on the card)",
+    "at night, or over an unusual protocol or port"
+   ],
+   "dna": [
+    "log_bytes_out",
+    "log_out_in_ratio",
+    "novel_pair_frac"
+   ],
+   "next": [
+    {
+     "tool": "lookup_reputation",
+     "on": "the destination",
+     "why": "file-sharing, paste or attacker hosting"
+    },
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "is this the first time; what preceded it"
+    },
+    {
+     "tool": "query_dns",
+     "on": "the device",
+     "why": "the destination's name"
+    }
+   ],
+   "confirms": [
+    "a first-ever large upload to an unknown or known-bad destination after an entry event"
+   ],
+   "clears": [
+    "a known backup, photo-sync or camera-cloud service the owner uses (owner CONTEXT)"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-OTF",
+     "label": "Outbound Traffic Filtering",
+     "proposal": "owner_action",
+     "what": "block the destination"
+    },
+    {
+     "d3fend": "D3-NI",
+     "label": "Network Isolation",
+     "proposal": "isolated",
+     "what": "isolate the device while it is checked"
+    }
+   ],
+   "blind": [
+    "what data left when the transfer is encrypted"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1572",
+   "name": "Protocol Tunneling (DNS or VPN bypass)",
+   "kind": "follow_on",
+   "classes": [
+    "all"
+   ],
+   "seen": [
+    "the device talks DNS or a VPN protocol to an outside server instead of the gateway's resolver (dns_bypass on the card)",
+    "unusually large or many DNS queries to one domain (tunnel)"
+   ],
+   "dna": [
+    "dns_frac",
+    "log_bytes_out",
+    "novel_pair_frac"
+   ],
+   "next": [
+    {
+     "tool": "query_dns",
+     "on": "the device",
+     "why": "which resolver it uses, query sizes, the domain"
+    },
+    {
+     "tool": "lookup_reputation",
+     "on": "the outside server",
+     "why": "known tunnel or C2 endpoints"
+    }
+   ],
+   "confirms": [
+    "high-volume DNS to one unknown domain, or a VPN to an unknown endpoint from an IoT device"
+   ],
+   "clears": [
+    "the owner's work VPN or a browser's encrypted DNS provider (owner CONTEXT)"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-OTF",
+     "label": "Outbound Traffic Filtering",
+     "proposal": "owner_action",
+     "what": "force DNS through the gateway; block the endpoint"
+    },
+    {
+     "d3fend": "D3-NI",
+     "label": "Network Isolation",
+     "proposal": "internet_only",
+     "what": "limit the device while it is checked"
+    }
+   ],
+   "blind": [
+    "the tunnelled content"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1021",
+   "name": "Remote Services (lateral movement)",
+   "kind": "follow_on",
+   "classes": [
+    "workstation",
+    "server",
+    "nas"
+   ],
+   "seen": [
+    "a device connects to SMB, RDP or SSH on several LAN hosts it never used (smb_frac, lan_peer_frac up)",
+    "often after a brute-force run"
+   ],
+   "dna": [
+    "smb_frac",
+    "ssh_frac",
+    "lan_peer_frac",
+    "fail_ratio"
+   ],
+   "next": [
+    {
+     "tool": "query_flows",
+     "on": "the source device",
+     "why": "which LAN hosts, which services, success or failure"
+    },
+    {
+     "tool": "query_flows",
+     "on": "each reached host",
+     "why": "did they change behaviour afterwards"
+    }
+   ],
+   "confirms": [
+    "new LAN-wide service connections followed by changes on the reached hosts"
+   ],
+   "clears": [
+    "a NAS or backup server doing its scheduled job (owner CONTEXT, baseline)"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-NI",
+     "label": "Network Isolation",
+     "proposal": "isolated",
+     "what": "isolate the source device"
+    },
+    {
+     "d3fend": "D3-BDI",
+     "label": "Broadcast Domain Isolation",
+     "proposal": "owner_action",
+     "what": "put IoT and PCs on separate network segments"
+    }
+   ],
+   "blind": [
+    "the commands run on the reached hosts"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1090",
+   "name": "Proxy (proxyware, residential proxy)",
+   "kind": "follow_on",
+   "classes": [
+    "router",
+    "camera",
+    "media",
+    "workstation"
+   ],
+   "seen": [
+    "a device relays traffic for many outside parties: many remote peers and countries, balanced in and out (log_remotes, log_countries up; log_out_in_ratio near 0)"
+   ],
+   "dna": [
+    "log_remotes",
+    "log_countries",
+    "log_asns",
+    "log_out_in_ratio"
+   ],
+   "next": [
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "how many peers, which countries, since when"
+    },
+    {
+     "tool": "lookup_reputation",
+     "on": "the coordinating peer",
+     "why": "known proxyware services"
+    }
+   ],
+   "confirms": [
+    "a sudden jump in peers and countries with relayed traffic, from a device that never did it"
+   ],
+   "clears": [
+    "the owner installed a bandwidth-sharing app knowingly"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-OTF",
+     "label": "Outbound Traffic Filtering",
+     "proposal": "owner_action",
+     "what": "block the proxy service"
+    },
+    {
+     "d3fend": "D3-NI",
+     "label": "Network Isolation",
+     "proposal": "isolated",
+     "what": "isolate and reset the device"
+    }
+   ],
+   "blind": [
+    "whose traffic is relayed"
+   ],
+   "observable": true
+  },
+  {
+   "id": "T1003",
+   "name": "OS Credential Dumping",
+   "kind": "follow_on",
+   "classes": [
+    "workstation",
+    "server",
+    "edge"
+   ],
+   "observable": false,
+   "seen": [
+    "nothing directly. A gateway may see what follows: logins elsewhere with valid accounts, lateral connections"
+   ],
+   "dna": [],
+   "next": [
+    {
+     "tool": "query_flows",
+     "on": "the device",
+     "why": "new LAN logins or remote sessions after a suspected compromise"
+    }
+   ],
+   "confirms": [
+    "a compromised device followed by successful logins on other hosts"
+   ],
+   "clears": [
+    "no follow-on activity"
+   ],
+   "close": [
+    {
+     "d3fend": "D3-CRO",
+     "label": "Credential Rotation",
+     "proposal": "owner_action",
+     "what": "rotate the passwords used on the affected device"
+    },
+    {
+     "d3fend": "D3-MFA",
+     "label": "Multi-factor Authentication",
+     "proposal": "owner_action",
+     "what": "add a second factor where possible"
+    }
+   ],
+   "blind": [
+    "the dumping itself happens inside the device"
+   ]
+  }
+ ]
+}
