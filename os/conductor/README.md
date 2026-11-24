@@ -108,6 +108,34 @@ Not built: the hybrid signature check (heqk's own `boot-abi` verifier is the pla
 side that streams segments from storage into a reserved, read-only region (R3, R4), the `hnx-compile`
 converter from real model files, and the A/B update channel for models (an open question in doc 06).
 
+## neuro-lm: the language-model pieces
+
+Integer-only, `no_std`, no allocation, no `unsafe`, no float (enforced by test). Kernels in
+`neuro-kernels::lm`, composed in `neuro-lm` into a decoder-only transformer: RMSNorm, grouped-query
+attention with RoPE over an int8 KV cache, integer softmax, table-driven SiLU, SwiGLU feed-forward, 4-bit
+weights with per-row integer rescale, greedy decoding; plus a byte-level BPE tokenizer. Fixed-point scheme:
+residual Q8 (`i32`), activations Q5 (`i8`), gains Q12, rotations and probabilities Q15. KV cache and all
+scratch come from the caller. Float tables (exp, SiLU, RoPE) are generated on the build host by
+`neuro-build` and embedded as integers.
+
+| Gate | Result |
+|---|---|
+| Kernels vs f64: RMSNorm and RoPE ≤ 1 LSB; softmax worst probability error 1.7×10⁻⁴; attention ≤ 2 LSB; SiLU table exact | pass |
+| Tokenizer: identical to an independently written reference on 503 texts (random bytes and corpus slices); every text round-trips; table validation refuses later-token merges, unsorted or wrong-rank indexes | pass |
+| **Whole decoder vs an independent f64 model with the same dequantised weights** (8 random 2-layer models, 256 steps): logit cosine mean 0.998, min 0.975; greedy token equal in 214 of 222 steps where f64 has a clear winner (96%). Thresholds (min cosine 0.97, agreement 95%) were set before the first run | pass |
+| KV cache: incremental decoding bit-identical to recomputation from scratch, with a garbage-filled fresh cache, at prefix lengths 1–48 | pass |
+| Bounds: full context, unknown token, wrong cache or scratch size → errors; shape errors caught by `check()` before any run | pass |
+| **Bare metal, emulated Cortex-A76:** the same decoder (40 KB of 4-bit weights) run with the scalar path and with NEON + DotProd for 48 positions: every logit equal | pass |
+
+What these numbers are: agreement with a float model of the SAME random weights, which isolates the error
+the integer arithmetic adds. They say nothing about language quality: no trained model has been run. That
+needs `hnx-compile` (converting a real small model, e.g. an Apache-licensed Qwen3.5-0.8B or RWKV-7) and then
+the same comparison against the reference implementation, then the blind evaluation (Neuro doc 13).
+
+Not built: a recurrent cell (RWKV-7; doc 13 leaves the choice to measurement), sampling beyond greedy,
+grammar-constrained decoding, the engine-plan integration (the decoder is composed in Rust, not yet run from
+an HNX plan with persistent state slots), and any speed number (needs a real A76 after KR-1).
+
 ## Crates
 
 | Crate | What | Target |

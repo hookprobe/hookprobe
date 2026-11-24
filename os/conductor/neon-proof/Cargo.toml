@@ -17,6 +17,11 @@ path = "src/main.rs"
 [dependencies]
 neuro-kernels = { path = "../neuro-kernels" }
 neuro-engine = { path = "../neuro-engine" }
+neuro-lm = { path = "../neuro-lm" }
+
+[build-dependencies]
+# Float table generation runs on the BUILD HOST only; the bare-metal binary embeds integer tables.
+neuro-build = { path = "../neuro-build" }
 
 [profile.release]
 panic = "abort"

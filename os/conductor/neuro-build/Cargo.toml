@@ -1,0 +1,14 @@
+# neuro-build: BUILD-HOST ONLY table generators (floating point allowed here). Their integer outputs are
+# what device crates embed. Never a dependency of a device binary (only of tests and build scripts).
+[package]
+name = "neuro-build"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+neuro-kernels = { path = "../neuro-kernels" }

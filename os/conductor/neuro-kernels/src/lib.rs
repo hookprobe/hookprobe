@@ -19,6 +19,14 @@
 #![deny(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![allow(clippy::chunks_exact_to_as_chunks, clippy::manual_is_multiple_of)]
 
+pub mod lm;
+
+/// View int8 activations as the bytes the GEMV kernels read (same size and alignment; sound).
+pub fn i8_bytes(x: &[i8]) -> &[u8] {
+    // SAFETY: i8 and u8 have identical size and alignment and every bit pattern is valid for both.
+    unsafe { core::slice::from_raw_parts(x.as_ptr().cast::<u8>(), x.len()) }
+}
+
 /// Columns per chunk and bytes per row per chunk.
 pub const CHUNK_COLS: usize = 32;
 pub const CHUNK_ROW_BYTES: usize = 16;

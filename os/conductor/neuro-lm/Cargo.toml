@@ -1,0 +1,18 @@
+# neuro-lm: a decoder-only language model assembled from neuro-kernels, integer only, and a byte-level
+# BPE tokenizer. no_std, no alloc, no unsafe, no float. The KV cache and all scratch memory are supplied
+# by the caller (on heqk: the admitted arena and state regions).
+[package]
+name = "neuro-lm"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+neuro-kernels = { path = "../neuro-kernels" }
+
+[dev-dependencies]
+neuro-build = { path = "../neuro-build" }

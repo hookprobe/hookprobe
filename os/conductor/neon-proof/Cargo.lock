@@ -66,7 +66,16 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 name = "neon-proof"
 version = "0.0.26"
 dependencies = [
+ "neuro-build",
  "neuro-engine",
+ "neuro-kernels",
+ "neuro-lm",
+]
+
+[[package]]
+name = "neuro-build"
+version = "0.0.26"
+dependencies = [
  "neuro-kernels",
 ]
 
@@ -81,6 +90,13 @@ dependencies = [
 [[package]]
 name = "neuro-kernels"
 version = "0.0.26"
+
+[[package]]
+name = "neuro-lm"
+version = "0.0.26"
+dependencies = [
+ "neuro-kernels",
+]
 
 [[package]]
 name = "sha2"

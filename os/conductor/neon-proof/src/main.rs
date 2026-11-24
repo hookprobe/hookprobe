@@ -165,5 +165,122 @@ extern "C" fn main() -> ! {
         runs += 1;
     }
     let _ = writeln!(u, "PASS engine: {}x{} Q4 layer ({} byte package, {} MACs per run), {} runs, scalar == {}", ROWS, COLS, n, model.macs(), runs, simd.name());
+    lm_proof(&mut u, simd, &mut rng);
     exit(0)
+}
+
+mod tables {
+    include!(concat!(env!("OUT_DIR"), "/tables.rs"));
+}
+
+/// A whole 2-layer decoder (GQA, RoPE, SwiGLU, 4-bit weights), generated in place with integer randomness,
+/// run with the scalar path and with NEON from the same prompt: every logit of every step must be equal.
+fn lm_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
+    use neuro_lm::{Dims, Layer, Model, Work, Q4};
+    const VOCAB: usize = 100;
+    const DM: usize = 64;
+    const L: usize = 2;
+    const NH: usize = 4;
+    const NKV: usize = 2;
+    const HD: usize = 16;
+    const FFN: usize = 128;
+    const CTX: usize = 48;
+    // Bytes per matrix (rows × cols / 2) for q, k, v, o, gate, up, down; then the head.
+    const SIZES: [usize; 7] = [NH * HD * DM / 2, NKV * HD * DM / 2, NKV * HD * DM / 2, DM * NH * HD / 2, FFN * DM / 2, FFN * DM / 2, DM * FFN / 2];
+    const PER_LAYER: usize = SIZES[0] + SIZES[1] + SIZES[2] + SIZES[3] + SIZES[4] + SIZES[5] + SIZES[6];
+    const TOTAL: usize = L * PER_LAYER + VOCAB * DM / 2;
+    static mut W: [u8; TOTAL] = [0; TOTAL];
+    static mut EMB: [i8; VOCAB * DM] = [0; VOCAB * DM];
+    static mut GAIN: [i16; (2 * L + 1) * DM] = [0; (2 * L + 1) * DM];
+    static mut M_ACT: [i32; FFN] = [0; FFN];
+    static mut M_RES: [i32; DM] = [0; DM];
+    static mut M_RES2: [i32; DM] = [0; DM];
+    static mut M_HEAD: [i32; VOCAB] = [0; VOCAB];
+    static mut KV_A: [i8; L * NKV * CTX * HD * 2] = [0; L * NKV * CTX * HD * 2];
+    static mut KV_B: [i8; L * NKV * CTX * HD * 2] = [0; L * NKV * CTX * HD * 2];
+    static mut WA: Work<64, 128, 48, 100> = Work::new();
+    static mut WB: Work<64, 128, 48, 100> = Work::new();
+    let (w, emb, gain) = unsafe { (&mut *core::ptr::addr_of_mut!(W), &mut *core::ptr::addr_of_mut!(EMB), &mut *core::ptr::addr_of_mut!(GAIN)) };
+    let (ma, mr, mr2, mh) = unsafe { (&mut *core::ptr::addr_of_mut!(M_ACT), &mut *core::ptr::addr_of_mut!(M_RES), &mut *core::ptr::addr_of_mut!(M_RES2), &mut *core::ptr::addr_of_mut!(M_HEAD)) };
+    for b in w.iter_mut() {
+        // two random nibbles in −8..7 each (every byte value is a valid pair)
+        *b = rng.next() as u8;
+    }
+    for e in emb.iter_mut() {
+        *e = (rng.next() % 49) as i8 - 24;
+    }
+    for g in gain.iter_mut() {
+        *g = 4096 + (rng.next() % 801) as i16 - 400;
+    }
+    ma.fill(tables::M_ACT_64);
+    mr.fill(tables::M_RES_64);
+    mr2.fill(tables::M_RES_128);
+    mh.fill(tables::M_HEAD_64);
+    let (w, emb, gain, ma, mr, mr2, mh): (&'static [u8], &'static [i8], &'static [i16], &'static [i32], &'static [i32], &'static [i32], &'static [i32]) = (w, emb, gain, ma, mr, mr2, mh);
+    let mut off = 0usize;
+    let mut take = |n: usize| {
+        let s = &w[off..off + n];
+        off += n;
+        s
+    };
+    let mut layers: [Option<Layer<'static>>; L] = [None; L];
+    for (li, slot) in layers.iter_mut().enumerate() {
+        let q4 = |w: &'static [u8], rows: usize, cols: usize, m: &'static [i32]| Q4 { rows, cols, w, mult: &m[..rows], shift: 24 };
+        *slot = Some(Layer {
+            attn_norm: &gain[2 * li * DM..(2 * li + 1) * DM],
+            wq: q4(take(SIZES[0]), NH * HD, DM, ma),
+            wk: q4(take(SIZES[1]), NKV * HD, DM, ma),
+            wv: q4(take(SIZES[2]), NKV * HD, DM, ma),
+            wo: q4(take(SIZES[3]), DM, NH * HD, mr),
+            ffn_norm: &gain[(2 * li + 1) * DM..(2 * li + 2) * DM],
+            w_gate: q4(take(SIZES[4]), FFN, DM, ma),
+            w_up: q4(take(SIZES[5]), FFN, DM, ma),
+            w_down: q4(take(SIZES[6]), DM, FFN, mr2),
+        });
+    }
+    let layers: [Layer<'static>; L] = match layers {
+        [Some(a), Some(b)] => [a, b],
+        _ => exit(1),
+    };
+    let head = Q4 { rows: VOCAB, cols: DM, w: take(VOCAB * DM / 2), mult: mh, shift: 24 };
+    let model = Model {
+        dims: Dims { vocab: VOCAB, d_model: DM, n_layers: L, n_heads: NH, n_kv_heads: NKV, head_dim: HD, ffn: FFN, max_ctx: CTX },
+        embed: emb,
+        layers: &layers,
+        final_norm: &gain[2 * L * DM..],
+        head,
+        rope: &tables::ROPE,
+        exp: &tables::EXP,
+        silu: &tables::SILU,
+        score_mult: tables::SCORE_MULT,
+        score_shift: tables::SCORE_SHIFT,
+    };
+    if model.check().is_err() {
+        let _ = writeln!(u, "FAIL: model shapes");
+        exit(1);
+    }
+    let (kva, kvb, wa, wb) = unsafe { (&mut *core::ptr::addr_of_mut!(KV_A), &mut *core::ptr::addr_of_mut!(KV_B), &mut *core::ptr::addr_of_mut!(WA), &mut *core::ptr::addr_of_mut!(WB)) };
+    let prompt = [7usize, 42, 3, 99, 15, 0, 64];
+    let (mut tok_a, mut tok_b) = (0usize, 0usize);
+    let mut generated = [0u8; CTX];
+    let mut steps = 0usize;
+    for pos in 0..CTX {
+        let (ta, tb) = if pos < prompt.len() { (prompt[pos], prompt[pos]) } else { (tok_a, tok_b) };
+        let ra = model.step(Simd::SCALAR, ta, pos, kva, wa);
+        let rb = model.step(simd, tb, pos, kvb, wb);
+        match (ra, rb) {
+            (Ok(a), Ok(b)) if a == b && wa.logits == wb.logits => {
+                tok_a = a;
+                tok_b = b;
+                generated[pos] = a as u8;
+                steps += 1;
+            }
+            _ => {
+                let _ = writeln!(u, "FAIL: scalar and {} decoders differ at position {pos}", simd.name());
+                exit(1);
+            }
+        }
+    }
+    let _ = writeln!(u, "PASS decoder: 2 layers, 4 heads / 2 KV heads, RoPE, SwiGLU, 4-bit weights ({} weight bytes); {} positions, every logit equal, scalar == {}", TOTAL, steps, simd.name());
+    let _ = writeln!(u, "  generated tokens after the prompt: {:?}", &generated[prompt.len()..prompt.len() + 12]);
 }
