@@ -22,6 +22,7 @@ Usage: e2e_neuro.py build <out dir> <pcap>... [--sample 20] [--seed 7]
 import collections, json, os, random, re, resource, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, "bench")); sys.path.insert(0, os.path.join(HERE, "eval"))
+import service_labels  # noqa: E402  (doc 45, only with NEURO_SVC_LABELS=1)
 
 LOOKUP = os.path.expanduser("~/.cache/hookprobe-intel-data/builds/lookup-1c5144faa881")
 
@@ -99,6 +100,9 @@ def build(out, pcaps, sample, seed):
         lines, used = sc.fill(cards, 512, tok, residual)
         if len(lines) == len(cards):          # nothing dropped: still end with the REST line, as the device does
             lines = lines + [residual([])]
+            used = tok.count("\n".join(lines))
+        if os.environ.get("NEURO_SVC_LABELS") == "1":   # doc 45: svc= labels (added after the budget fill: a few tokens over)
+            lines = [service_labels.label(l) for l in lines]
             used = tok.count("\n".join(lines))
         toks.append(used)
         cases.append({"id": ("alert-" if dec[w] else "quiet-") + str(len(cases)), "window": w, "lang": "en", "task": "triage",

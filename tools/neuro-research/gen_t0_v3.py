@@ -39,6 +39,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gen_t0 as g  # noqa: E402  (Win, distractor, ip_lan, ip_wan)
+import service_labels  # noqa: E402  (doc 45)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEVICES = ["NAS", "smart TV", "IP camera", "doorbell camera", "thermostat", "smart plug", "game console", "printer",
@@ -488,6 +489,20 @@ FAMS = [(f_mirai, 6), (f_cryptominer, 6), (f_bruteforce_lateral, 7), (f_c2_beaco
         (f_ransomware_pre, 4), (f_proxyware, 4), (f_fp, 30), (f_misleading, 8), (f_insufficient, 8), (f_injection, 0), (f_contrast, 0), (f_thin, 0)]
 
 
+L1 = "det=behaviour_change[-,sev2,alert, l1]"   # the device's generic L1 alert, exactly as the E2E pipeline renders it
+DET = re.compile(r"det=\w+\[[^\]]*\]")
+
+
+def l1_alert(ctx, verdict):
+    """Doc 45: the detector names no category or technique; the card's shape must carry the reading. No RNG is used,
+    so every other card and the gold are exactly what the family wrote."""
+    if DET.search(ctx):
+        return DET.sub(L1, ctx)
+    if "benign" in verdict[:1]:
+        return re.sub(r"^(F\d+ \S+->\S+ n=\d+[^\n]*?)[ ]*$", lambda m: m.group(1) + " " + L1, ctx, count=1, flags=re.M)
+    return ctx
+
+
 def norm(s):
     return " ".join(s.split()).lower()
 
@@ -544,6 +559,9 @@ def main():
                     help="f_injection canary style (doc 24 B); 'sentence' reproduces the earlier output exactly")
     ap.add_argument("--forbid-sets", nargs="*", default=[], help="extra case files whose contexts must not collide (dev v2, blind v2)")
     ap.add_argument("--pairs", action="store_true", help="doc 38: --n PAIRS of (thin, sufficient) twins from the same window start")
+    ap.add_argument("--service-labels", action="store_true", help="doc 45: svc=<name> after a flow card's port (service_labels.py)")
+    ap.add_argument("--l1-alert", action="store_true", help="doc 45: every det= becomes the device's generic L1 alert; a benign "
+                    "window with no detection gets that alert on its first flow card (gold unchanged)")
     a = ap.parse_args()
     banned = set()
     for p in ["eval/cases.jsonl", "eval/blind/blind_cases.jsonl"] + a.forbid_sets:
@@ -568,6 +586,10 @@ def main():
         for _ in range(r.choice([0, 1])):
             g.distractor(w)
         ctx = w.render()
+        if a.l1_alert:
+            ctx = l1_alert(ctx, verdict)
+        if a.service_labels:
+            ctx = service_labels.label(ctx)
         h = hashlib.sha256(norm(ctx).encode()).hexdigest()
         if h in banned:
             coll += 1
