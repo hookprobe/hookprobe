@@ -450,6 +450,12 @@ cd os/conductor && cargo run --release -p conductor-mock --bin measure
 cd os/conductor/el0-harness && cargo build --release
 ```
 
+Fidelity against llama.cpp on the same GGUF (on the Neuro Mac, where the models are): see `FIDELITY.md`.
+
+```bash
+cd os/conductor && cargo run --release -p tok-build --bin fidelity -- --dir DIR --model FILE.gguf --set CASES.jsonl --url http://127.0.0.1:8080 --free-run
+```
+
 ## Not in C0 (next)
 
 - **C1** (HomePods): lift `signer.rs` and `chain.rs` into EL1 with purpose-separated keys (delegation,

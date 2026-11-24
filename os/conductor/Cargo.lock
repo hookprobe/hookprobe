@@ -802,6 +802,7 @@ dependencies = [
  "neuro-lm",
  "regex",
  "serde_json",
+ "sha2",
  "tokenizers",
  "unicode-normalization",
 ]

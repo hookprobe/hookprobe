@@ -239,6 +239,12 @@ Neuro's own functions and has a drift gate on the Python sources.
 **Not done:** the ftFg fidelity run on dev v8 builds its prompts without guard A (the tool predates this). It
 compares the two runtimes on identical prompts, so the result stands, but the prompts are not the guarded ones
 Neuro's gates used. A `--guard-a` option for the fidelity tool is the follow-up.
+
+**Fidelity result, ftFg on dev v8 (2026-11-24):** 270 cases, 40,428 teacher-forced steps. Template and token ids
+equal in all cases; raw top-1 never disagrees beyond a near-tie; free runs are equal (156) or diverge first at a
+near-tie (114). Three constrained choices differed beyond a near-tie, all from one cause: the contract automaton
+allowed whitespace after a value, which llama.cpp 054a1ba's grammar does not. Fixed in `neuro_contract::Machine`;
+the three cases agree after the fix. The full set has not been run again with the fix. Details: `FIDELITY.md`.
 ## Update: the investigation request on the device side (2026-11-24, from the Neuro host)
 
 Neuro published the investigation request as data: `tools/neuro-research/inv_contract.json` (hookprobe/hookprobe#1591),

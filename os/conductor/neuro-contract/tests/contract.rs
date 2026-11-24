@@ -84,7 +84,7 @@ fn automaton_accepts_exactly_the_contract() {
     let good = [
         r#"{"verdict":"suspicious","severity":"medium","summary":"H1 scanned R3 (F1).","evidence":["F1","F10"],"entities":["H1"],"next_step":"investigate","confidence":60}"#,
         r#"{"verdict": "benign", "severity": "info", "summary": "", "evidence": [], "entities": [], "next_step": "observe", "confidence": 0}"#,
-        "{\n  \"verdict\": \"malicious\",\n  \"severity\": \"critical\",\n  \"summary\": \"a \\\"quoted\\\" \\u00e9 é ✓\",\n  \"evidence\": [ \"F2\" ],\n  \"entities\": [\"R3\", \"H1\"],\n  \"next_step\": \"isolate_review\",\n  \"confidence\": 100\n} ",
+        "{\n  \"verdict\": \"malicious\",\n  \"severity\": \"critical\",\n  \"summary\": \"a \\\"quoted\\\" \\u00e9 é ✓\",\n  \"evidence\": [ \"F2\" ],\n  \"entities\": [\"R3\", \"H1\"],\n  \"next_step\": \"isolate_review\",\n  \"confidence\": 100\n}",
         r#"{"verdict":"insufficient_evidence","severity":"low","summary":"x","evidence":["F1","F1"],"entities":[],"next_step":"harden","confidence":9}"#,
     ];
     for g in good {
@@ -133,6 +133,23 @@ fn automaton_accepts_exactly_the_contract() {
     for no in ["  ", "\n\n\n", " \n", &format!("\n{}", " ".repeat(21)), "\t"] {
         assert!(!accepts(&w(no), &f, &e), "ws {no:?}");
     }
+    // Where the grammar has `space`: after `{`, `[` and `,`, around `:`, before `]` and `}`. Not between a value
+    // and its `,`, and not after the final `}` (llama.cpp 054a1ba; found by the fidelity run on dev v8).
+    let j = |a: &str, b: &str, c: &str, d: &str| {
+        format!(r#"{{"verdict":"benign"{a},"severity":"info","summary":"s"{a},"evidence":[{b}],{c}"entities":["H1"{d}],"next_step":"observe","confidence":1{c}}}"#)
+    };
+    assert!(accepts(&j("", "", "", ""), &f, &e));
+    for ws in [" ", "\n", "\n\n\t"] {
+        assert!(!accepts(&j(ws, "", "", ""), &f, &e), "space before a comma {ws:?}");
+        assert!(accepts(&j("", ws, "", ""), &f, &e), "space in an empty list {ws:?}");
+        assert!(accepts(&j("", "", ws, ""), &f, &e), "space after a comma and before the closing brace {ws:?}");
+        assert!(accepts(&j("", "", "", ws), &f, &e), "space before the closing bracket {ws:?}");
+        assert!(!accepts(&format!("{}{ws}", j("", "", "", "")), &f, &e), "space after the answer {ws:?}");
+    }
+    // An empty list has two `space`s in a row; an item's `,` takes none before it.
+    assert!(accepts(&j("", "  ", "", ""), &f, &e) && accepts(&j("", " \n", "", ""), &f, &e) && accepts(&j("", "\n\n\n\n", "", ""), &f, &e));
+    assert!(!accepts(&j("", "   ", "", ""), &f, &e) && !accepts(&j("", "", "", "  "), &f, &e));
+    assert!(!accepts(&j("", "", "", " ,\"H1\""), &f, &e) && accepts(&j("", "", "", ", \"H1\""), &f, &e));
     // Prefix property: every prefix of a good answer is accepted, and only the complete one is accepting.
     for g in good {
         let mut m = Machine::new(Allowed { facts: &f, entities: &e, closed: true });
