@@ -106,6 +106,26 @@ pub fn run(dtb_pa: u64) {
     kv("feat.aes", d.aes as u64);
     kv("feat.sha2", d.sha2 as u64);
 
+    // 1b. Conductor KERNEL_REQUESTS R0 (KR-1 FP/SIMD, 2026-11-24): the FP/SIMD trap controls and alignment check AS THE
+    //     FIRMWARE LEFT THEM (HBoot writes none of these). Read-only. CPTR_EL2.TFP (bit 10) set = every FP/SIMD
+    //     instruction at EL0/EL1 traps to EL2; CPACR_EL1.FPEN (bits 21:20) = 0b11 no trap, 0b01 EL0 traps, else EL0+EL1
+    //     trap; SCTLR_EL1.A (bit 1) = alignment check (must be clear for the unaligned 16-byte loads of Q8_0 blocks).
+    let cptr_el2 = sysreg!("cptr_el2");
+    let cpacr_el1 = sysreg!("cpacr_el1");
+    let sctlr_el1 = sysreg!("sctlr_el1");
+    let hcr_el2 = sysreg!("hcr_el2");
+    kv("r0.cptr_el2", cptr_el2);
+    kv("r0.cptr_el2.tfp", (cptr_el2 >> 10) & 1);
+    kv("r0.cpacr_el1", cpacr_el1);
+    kv("r0.cpacr_el1.fpen", (cpacr_el1 >> 20) & 3);
+    kv("r0.sctlr_el1", sctlr_el1);
+    kv("r0.sctlr_el1.a", (sctlr_el1 >> 1) & 1);
+    kv("r0.hcr_el2.e2h", (hcr_el2 >> 34) & 1); // with E2H=1 the CPTR_EL2 layout differs (FPEN at 21:20)
+    kv("r0.fp", (r.pfr0 >> 16) & 0xf);
+    kv("r0.advsimd", (r.pfr0 >> 20) & 0xf);
+    kv("r0.sve", (r.pfr0 >> 32) & 0xf);
+    kv("r0.dotprod", (r.isar0 >> 44) & 0xf);
+
     // 2. Firmware identity + RAM as the firmware reports it (VC mailbox, GET tags only).
     use crate::mailbox::get_u32x2;
     match get_u32x2(0x0000_0001) {
