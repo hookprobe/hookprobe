@@ -239,3 +239,24 @@ Neuro's own functions and has a drift gate on the Python sources.
 **Not done:** the ftFg fidelity run on dev v8 builds its prompts without guard A (the tool predates this). It
 compares the two runtimes on identical prompts, so the result stands, but the prompts are not the guarded ones
 Neuro's gates used. A `--guard-a` option for the fidelity tool is the follow-up.
+## Update: the investigation request on the device side (2026-11-24, from the Neuro host)
+
+Neuro published the investigation request as data: `tools/neuro-research/inv_contract.json` (hookprobe/hookprobe#1591),
+generated from `inv_eval.py`. Doc 44 passed, so the investigation adapter is **ftM** (`9576cfac…dcc9`), not ftL.
+
+- **Built:** `neuro_contract::inv`. It writes the prompt exactly as llama-server renders the request, and reads
+  the answer. `tests/inv.rs` is the drift gate on the JSON file: system prompts, user framing, the five tools and
+  their order, the settings, and the three test vectors' rendered prompts.
+- **Checked on the Neuro host with ftM's GGUF:** the device tokenizer gives llama-server's token ids on all three
+  prompts (673, 767 and 697 tokens).
+- **The answer:** free text means no check. A call must be one of the five tools, with exactly its typed
+  arguments and an entity alias of the shown context. This is the device's own strict reading, not a mirror of
+  the grammar llama.cpp derives from `tools`.
+
+**Not built, in order:**
+1. Constrained decoding of the tool call in the engine. It needs the lazy grammar llama.cpp b12477 builds from
+   `tools` (triggered by `<tool_call>` and a newline). **Asked of Neuro:** generated token ids for the three
+   vectors, so the engine can be checked step by step as for triage.
+2. The harness: Neuro's five tools as Conductor typed tools with per-call authorisation. The C0 tools
+   (`evidence.get`, `flows.count`) are Conductor's own and stay.
+3. The ftM fidelity run on the spent investigation sets, once 1 exists.
