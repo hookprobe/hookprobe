@@ -16,6 +16,10 @@ trigger "<tool_call>\\n"; plain text before it is unconstrained. That is engine 
 
 Usage: inv_contract_export.py static  <out.json>
        inv_contract_export.py vectors <out.json> <llama-server url> <gguf sha256>   (adds test vectors, needs a server)
+       inv_contract_export.py gen <inv_contract.json> <out.json> <llama-server url> <gguf sha256> <server flags>
+           (generated side of the vectors in inv_contract.json: token ids, raw top-2 log-probs per step, raw text, and
+            the grammar the server derived from `tools`; needs a server started with --verbose; a separate file, so
+            inv_contract.json itself never changes)
 """
 import hashlib, json, os, sys, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -100,8 +104,43 @@ def vectors(url, gguf_sha):
             "vectors": vs}
 
 
+def gen(contract, url, gguf_sha, flags):
+    j = json.load(open(contract, encoding="utf-8"))
+    out, grammar = [], None
+    for v in j["test_vectors"]["vectors"]:
+        b = json.loads(v["request_body"])
+        extra = {"logprobs": True, "top_logprobs": 2, "n_probs": 2, "post_sampling_probs": False}
+        runs = []
+        for _ in range(2):                                  # determinism check: the same request twice
+            r = post(url, "/v1/chat/completions", dict(b, **extra))
+            runs.append(r)
+        ch, vb = runs[0]["choices"][0], runs[0]["__verbose"]
+        steps = [{"id": t["id"], "logprob": t["logprob"], "top2": [[x["id"], x["logprob"]] for x in t["top_logprobs"]]}
+                 for t in ch["logprobs"]["content"]]
+        ids2 = [t["id"] for t in runs[1]["choices"][0]["logprobs"]["content"]]
+        gs = vb["generation_settings"]
+        g = {k: gs[k] for k in ("grammar", "grammar_lazy", "grammar_triggers", "preserved_tokens", "chat_format")}
+        grammar = grammar or g
+        if g != grammar:
+            raise SystemExit("grammar differs between vectors: %s" % v["id"])
+        out.append({"id": v["id"], "request_body_sha256": v["request_body_sha256"], "extra_request_fields": extra,
+                    "prompt_tokens": runs[0]["usage"]["prompt_tokens"], "generated_token_ids": [s_["id"] for s_ in steps],
+                    "raw_text": vb["content"], "steps": steps, "message": ch["message"] | {"tool_calls": [
+                        {"type": c["type"], "function": c["function"]} for c in ch["message"].get("tool_calls") or []]},
+                    "finish_reason": ch.get("finish_reason"), "repeat_identical": ids2 == [s_["id"] for s_ in steps]})
+    return {"model_gguf_sha256": gguf_sha, "server": flags, "contract_sha256": hashlib.sha256(open(contract, "rb").read()).hexdigest(),
+            "note": "top2 = the raw (pre-sampling, pre-grammar) top-2 log-probabilities per step (n_probs 2, post_sampling_probs "
+                    "false); generated ids are what the server sampled at temperature 0 with its lazy grammar active.",
+            "server_grammar": grammar, "vectors": out}
+
+
 if __name__ == "__main__":
     mode, out = sys.argv[1], sys.argv[2]
+    if mode == "gen":
+        res = gen(sys.argv[2], sys.argv[4], sys.argv[5], sys.argv[6])
+        with open(sys.argv[3], "w", encoding="utf-8") as f:
+            json.dump(res, f, ensure_ascii=False, indent=1); f.write("\n")
+        print("wrote %s (gen)" % sys.argv[3]); sys.exit(0)
     j = static()
     if mode == "vectors":
         j["test_vectors"] = vectors(sys.argv[3], sys.argv[4])
