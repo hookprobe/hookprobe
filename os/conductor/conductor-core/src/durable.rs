@@ -35,6 +35,9 @@ pub trait BlockDev {
 pub const MAGIC_G19: &[u8; 8] = b"HQG19C1\0";
 pub const MAGIC_DELEGATION: &[u8; 8] = b"HQCDLG1\0";
 pub const MAGIC_EPOCH: &[u8; 8] = b"HQCEPO1\0";
+/// The worker side (C2): its replay high-water mark per paired device, and the newest epoch it has seen.
+pub const MAGIC_WORKER_HWM: &[u8; 8] = b"HQWHWM1\0";
+pub const MAGIC_WORKER_EPOCH: &[u8; 8] = b"HQWEPO1\0";
 
 pub fn encode(magic: &[u8; 8], value: u64) -> [u8; 512] {
     let mut s = [0u8; 512];
@@ -95,6 +98,39 @@ pub fn advance<D: BlockDev + ?Sized>(d: &mut D, magic: &[u8; 8], lo: u64) -> Opt
     (r == s).then_some(next)
 }
 
+
+/// Persist `value` if it is above the stored one (a high-water mark that jumps, such as a worker's replay
+/// mark). It overwrites the sector that does NOT hold the current maximum and reads it back, so a torn write
+/// leaves the previous maximum intact. Returns the durable maximum (`value`, or the larger stored one); `None`
+/// = not durable, the caller must not act on `value`.
+///
+/// [`advance`] is the special case `value = current + 1`, where the slot rule `value % 2` picks the same
+/// sector; it keeps the kernel's exact form for the drift gate.
+pub fn raise<D: BlockDev + ?Sized>(d: &mut D, magic: &[u8; 8], lo: u64, value: u64) -> Option<u64> {
+    let mut v = [None, None];
+    for (i, slot) in v.iter_mut().enumerate() {
+        let mut s = [0u8; 512];
+        d.read_block(lo.checked_add(i as u64)?, &mut s).ok()?;
+        *slot = decode(magic, &s);
+    }
+    let [a, b] = v;
+    let cur = a.unwrap_or(0).max(b.unwrap_or(0));
+    if value <= cur {
+        return Some(cur);
+    }
+    // Overwrite the sector that does not hold `cur` (an invalid one first).
+    let slot: u64 = match (a, b) {
+        (None, _) => 0,
+        (_, None) => 1,
+        (Some(x), Some(y)) => u64::from(x >= y),
+    };
+    let lba = lo.checked_add(slot)?;
+    let s = encode(magic, value);
+    d.write_block(lba, &s).ok()?;
+    let mut r = [0u8; 512];
+    d.read_block(lba, &mut r).ok()?;
+    (r == s).then_some(value)
+}
 
 /// The signer's sealed state on one device: the delegation counter at `counter_lo`, the epoch at `epoch_lo`
 /// (two sectors each, in the regions KR-3 asks HomePods to register).

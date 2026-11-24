@@ -105,7 +105,15 @@ name = "conductor-mock"
 version = "0.0.26"
 dependencies = [
  "conductor-core",
+ "conductor-worker",
  "neuro-contract",
+]
+
+[[package]]
+name = "conductor-worker"
+version = "0.0.26"
+dependencies = [
+ "conductor-core",
 ]
 
 [[package]]

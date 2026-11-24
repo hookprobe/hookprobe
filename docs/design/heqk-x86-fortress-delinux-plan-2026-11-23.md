@@ -84,7 +84,7 @@ Rejected alternatives:
 ## 4a. "Can we run Claude from heqk?" (operator question, 2026-11-23)
 
 > **Row (a) superseded (operator decision, 2026-11-24): the heqk Conductor is the plan for Claude (or any model)
-> as heqk's on-device AI.** The Conductor (`os/conductor`, ADR 0071 to be written) already designs and builds
+> as heqk's on-device AI.** The Conductor (`os/conductor`, ADR 0071) already designs and builds
 > what row (a) lists, and more:
 > - per-call capabilities (HP-EXEC);
 > - typed tool authorization;

@@ -389,6 +389,20 @@ Fuzzing now also covers events, quote requests and quotes (1,000,000 decoder inp
 20,000 end-to-end mutation runs with SLO admission: an altered frame or quote never produced a Verified
 outcome.
 
+## C2, host part: the P1 worker on the owner's LAN (no kernel change, mock only)
+
+Two halves, each a sans-IO `no_std` library that builds for `aarch64-unknown-none`. Workers are heqk nodes only.
+
+| Piece | What it stops | Evidence | Result |
+|---|---|---|---|
+| **Reference worker** (`conductor-worker`): the worker side of HP-EXEC v1. It accepts a call only through the shared `WorkerGate`, makes its replay mark and epoch durable (ADR 0069 record, new `durable::raise`) **before** computing, runs `infer` / `embed` / `classify` through an `Executor` (on a node: the native engine), enforces the output budget itself, and signs results and quotes with a `ResultKey` its kernel holds | a capability executed twice after a power cut; the kill switch forgotten by a rebooted worker; an engine overrunning the budget or its buffer | `c2_worker.rs`: the real worker behind the device harness and verifier gives Verified/Valid; 36 crash points (every write, 9 torn lengths): no capability ever runs twice (a crash can burn one, never repeat it); the epoch survives the worker's reboot and the old capability is refused as `Revoked`; over-budget and lying engines produce an ERROR frame; quotes are signed by the worker key; an unreadable store serves nothing | pass |
+| **Compute-segment lease filter** (`lease.rs`): heqk as the segment's only gateway. Passes ARP for the gateway, the control channel, DNS via heqk, and, while a lease is active, only that lease's owner-approved destinations. Every other frame is dropped as evidence, and the first one suspends the worker until the owner resumes it | a compromised, root-owned worker reaching anything it was not leased | `c2_lease.rs`: **31 attack paths** are stopped, each recorded as evidence and suspending the worker. They include direct internet, other LAN hosts, the wrong port or protocol, DNS and DoT bypass, L2 bypass, MAC, IP and ARP spoofing, ICMP tunnels, GRE, IPv6, VLAN and Q-in-Q hops, fragments, IP options, broadcast and mDNS, oversize, truncated and length-lying frames. All 6 honest flows pass. Expiry (2 s linger for TCP tails, no suspension), EndLease, and the kill switch (no linger; an old epoch cannot start a lease) are covered, and inbound traffic passes only as replies from lease destinations. 300,000 mutated frames: every frame that passed is an allowed shape (independent fixed-offset oracle). 14.2 ns per frame on the build host (x86-64, not CM5), worst case | pass |
+
+The metal half of the C2 gate (ADR 0071) needs KR-3 item 5 (the lease filter in the data plane):
+- the same red-team frames on the CM5's segment port;
+- the 33-row separation matrix unchanged;
+- the main-loop impact measured.
+
 ## Measurements
 
 EL0 binary (`el0-harness`, release, opt-level "s", ed25519-compact at "z"):
@@ -443,7 +457,8 @@ cd os/conductor/el0-harness && cargo build --release
   store (the record layer is built and power-loss tested: `durable.rs`, KR-3); broadcast epoch announcements; wire `el0-harness` behind a feature; assign its
   address range; time Ed25519 verify at opt-level "z" on CM5.
 - **Remote workers**: only as heqk-native nodes (heqk on the worker machine), after ADR 0068 and the
-  kernel requests. No Linux-hosted worker.
+  kernel requests. No Linux-hosted worker. The worker side is built (`conductor-worker`, C2 host part). The
+  node still needs its own EL0 wiring, its block device and its key held by its kernel.
 - Third-party applications (containers / microVMs on a companion host) are outside C0 and need their own
   ADR.
 

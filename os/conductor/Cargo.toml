@@ -3,7 +3,7 @@
 # D12 (2026-11-24). el0-harness is a detached crate (its own [workspace]), like os/neuro/el0-neuro.
 [workspace]
 resolver = "2"
-members = ["conductor-core", "conductor-mock", "runtime-proof", "neuro-engine", "neuro-kernels", "neuro-hnx", "neuro-lm", "neuro-build", "tok-build", "neuro-gguf", "neuro-contract"]
+members = ["conductor-core", "conductor-worker", "conductor-mock", "runtime-proof", "neuro-engine", "neuro-kernels", "neuro-hnx", "neuro-lm", "neuro-build", "tok-build", "neuro-gguf", "neuro-contract"]
 
 [profile.release]
 panic = "abort"
