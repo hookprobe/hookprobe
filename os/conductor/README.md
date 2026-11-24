@@ -15,6 +15,22 @@ scripted, misbehaving mock worker.
 No change to `os/kernel` · no x86 dependency · no cloud deployment · no change to packet enforcement · no new
 production crypto protocol · no public disclosure · no remote application execution · mock worker only.
 
+## No Linux, no Python (enforced)
+
+Everything here is Rust. `conductor-mock/tests/no_linux_no_python.rs` fails if a non-Rust source appears
+under `os/conductor`, if a device crate stops being `no_std` or names std, alloc, libc or a POSIX API, or
+if the device binary gains a dependency. Checked on the built device binary (`el0-harness`): 10 Rust
+crates compiled for the target, 0 imported symbols, no dynamic section, one syscall (heqk's
+`SYS_EXIT_USER`), 0 FP/SIMD instructions.
+
+| Crate | Runs on | Linux at run time? |
+|---|---|---|
+| `conductor-core`, `el0-harness`, `runtime-proof` (lib) | heqk (EL0) | **no** |
+| `conductor-mock` (tests, fuzz, `measure`, `stack_bound`) | the build host only (ADR 0047 D3) | not shipped |
+| `conductor-worker` | someone else's GPU machine | **yes: a bridge, outside the runtime.** It exists because heqk cannot yet run a language model or drive a GPU. It is not part of HookProbe OS and can be dropped without touching the device side |
+
+The two kernel requests that remove the need for the bridge are in [`KERNEL_REQUESTS.md`](KERNEL_REQUESTS.md).
+
 ## Crates
 
 | Crate | What | Target |
