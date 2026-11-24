@@ -1,0 +1,23 @@
+# HEQK Runtime Proof 001: six workloads in one Rust runtime, no Linux userland, no Python, no inference
+# server, no database. Composes the REAL crates: neuro-dp (frames -> fingerprints), neuro-core (temporal
+# engine), neuro-l1 (the S1 integer specialist), a deterministic L0 rule, and the Conductor harness
+# (investigation state machine). no_std, no alloc. Host-run here; running inside heqk needs the crates wired
+# into os/kernel/kernel/build.rs (a HomePods decision).
+[package]
+name = "runtime-proof"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+conductor-core = { path = "../conductor-core" }
+neuro-core = { path = "../../neuro/neuro-core" }
+neuro-dp   = { path = "../../neuro/neuro-dp" }
+neuro-l1   = { path = "../../neuro/neuro-l1" }
+
+[dev-dependencies]
+conductor-mock = { path = "../conductor-mock" }
