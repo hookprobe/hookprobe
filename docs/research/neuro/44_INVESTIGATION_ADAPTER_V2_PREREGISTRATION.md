@@ -87,3 +87,8 @@ ftM. The script reads every row and fails 1 and 2 as it should.
    the same alert format cold, is the check that the rules are what an analyst would do.
 2. **A small alert subset** (25 cases). Condition 1 is a bar plus a point comparison, not a significance test.
 3. **Still synthetic training cards.** Template risk as in docs 38 and 43.
+
+## 8. Result
+
+**PASS**: [`data/mixM-results.md`](data/mixM-results.md). ftM replaces ftL as the investigation adapter. On the E2E
+fixture, both alerts got the pre-registered first check.
