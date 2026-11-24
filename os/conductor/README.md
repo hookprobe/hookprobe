@@ -380,6 +380,7 @@ Lease invariant: every `StartLease` is matched by exactly one `EndLease` in ever
 | **Hash-chained ledger** (`chain.rs`): HMAC chain + sealed anchor + power-loss recovery | edited, removed, reordered, truncated or rewritten history; torn writes | `c1_prep.rs`: every byte edit caught; removed / swapped entries; tail cut caught only via the anchor; history rewritten with the real key caught by the anchor; roll-forward of one unanchored entry; torn tail discarded; tampering before the anchor reported, never repaired; a real job's ledger verifies | pass |
 | **Owner pairing** (`pairing.rs`): commit-then-reveal, six-digit comparison, owner-signed record with revision and expiry | a LAN attacker substituting its worker key; a compromised harness pairing a worker; replaying an old pairing to undo a revocation | MITM key/late-nonce fail the commitment; codes spread uniformly; forged and wrong-purpose owner signatures refused; stale revision refused; P2 refused; lapsed pairing stops signing | pass |
 | **Signed epoch announcement** (kill switch, part 2) | a captured but unused capability surviving the kill switch | announcement revokes an outstanding epoch-1 capability at the worker; forged / other-device announcements refused; epoch never lowered | pass |
+| **Sealed state** (`durable.rs`): delegation counter and revocation epoch on a block device, ADR 0069 record scheme (two alternating sectors, newest valid wins, write + read-back before use) | a counter reused after power loss (replay); a kill switch undone by a reboot (the epoch was in RAM in C0) | `c1.rs`: drift gate against the kernel's `g19ctr.rs`; 324 crash points (every write, 9 torn lengths): no counter handed out twice, no confirmed epoch lost; signer on a crashing disk: counters strictly increase over 10 boots; epoch survives reboot and the worker refuses the old capability as `Revoked`; unreadable store signs nothing. Kernel side: `KERNEL_REQUESTS.md` KR-3 | pass |
 | **SLO admission quotes** (Select-N style; heqk is the upper-level scheduler) | sending data to a worker that cannot meet the time targets; forged or replayed quotes | data-free fixed-size quote request (no evidence or intent bytes); slow worker (NVMe-streaming profile) skipped for the next tier without ever receiving a capability or prompt; nobody meets the SLO → refused with only quote requests sent; wrong nonce or wrong key → REJECTED; a broken promise is recorded (SloMiss code 2) | pass |
 
 Fuzzing now also covers events, quote requests and quotes (1,000,000 decoder inputs) and runs half of the
@@ -392,11 +393,11 @@ EL0 binary (`el0-harness`, release, opt-level "s", ed25519-compact at "z"):
 
 | | Bytes |
 |---|---|
-| `.text` | 74,772 |
-| `.rodata` | 2,936 |
+| `.text` | 82,716 |
+| `.rodata` | 4,328 |
 | `.data` | 0 |
-| `.bss` (whole job state, in place) | 47,792 |
-| Worst-case stack from `_start` (static bound: no indirect calls, no register-based sp adjustment) | 13,280 |
+| `.bss` (whole job state, in place) | 52,392 |
+| Worst-case stack from `_start` (static bound: no indirect calls, no register-based sp adjustment) | 10,912 |
 | FP/SIMD instructions | 0 (runs on today's softfloat heqk; no R2 needed) |
 
 Findings fixed during measurement:
@@ -437,7 +438,7 @@ cd os/conductor/el0-harness && cargo build --release
 
 - **C1** (HomePods): lift `signer.rs` and `chain.rs` into EL1 with purpose-separated keys (delegation,
   cache salt, ledger) derived from the sealed root; persist the counter and the ledger anchor in the sealed
-  store (ADR 0069 pattern); broadcast epoch announcements; wire `el0-harness` behind a feature; assign its
+  store (the record layer is built and power-loss tested: `durable.rs`, KR-3); broadcast epoch announcements; wire `el0-harness` behind a feature; assign its
   address range; time Ed25519 verify at opt-level "z" on CM5.
 - **Remote workers**: only as heqk-native nodes (heqk on the worker machine), after ADR 0068 and the
   kernel requests. No Linux-hosted worker.

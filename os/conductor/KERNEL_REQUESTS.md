@@ -13,6 +13,7 @@ autonomous execution already are (or are built and waiting to be wired). Two thi
 |---|---|---|
 | Neural computation | every EL0 server is scalar integer: FP/SIMD traps, so no vector kernel can run | **KR-1** |
 | Applications | the EL0 servers are compiled into the image; nothing can be added, replaced or removed at run time | **KR-2** |
+| Delegated AI (Conductor C1, ADR 0071) | the delegation signer, its sealed counter and epoch, leases and the ledger exist only as a tested library; the kernel has none of them | **KR-3** |
 
 Neither request brings in Linux, POSIX, a filesystem, a dynamic linker or an interpreter. Both keep
 tensor maths and application logic out of EL1.
@@ -178,14 +179,95 @@ update; (d) remove, after ADR 0061 D3.
 
 ---
 
+## KR-3 — Conductor C1 in the kernel: the delegation signer, its sealed state, leases and the ledger
+
+### Evidence
+
+**What C1 needs is built and tested as a library** (`os/conductor/conductor-core`, ADR 0071 D2, D9):
+- the signer (`signer.rs`). It re-checks every rule and never trusts the harness;
+- owner-signed pairing records;
+- the signed epoch announcement;
+- the hash-chained ledger with anchor and power-loss recovery (`chain.rs`);
+- the sealed state, the delegation counter and the revocation epoch (`durable.rs`). It uses **the record scheme
+  of ADR 0069's `g19ctr.rs`**: two alternating sectors, `magic | value LE64 | sha256`, newest valid wins,
+  write and read back before use.
+
+**`conductor-mock/tests/c1.rs` checks:**
+- **drift:** the record equals `g19ctr.rs`, byte for byte (the test reads the kernel source);
+- **power loss:** at every write, torn at 9 lengths, 324 crash points: no counter is ever handed out twice,
+  and no confirmed epoch is lost;
+- **the signer on a crashing disk:** counters strictly increase across 10 crashing boots;
+- **the kill switch:** it survives a reboot, and the worker then refuses an old capability as `Revoked`;
+- **an unreadable store** signs nothing, announces nothing and revokes nothing.
+
+**Today the kernel has none of this.** In C0 the signer runs in the host mock.
+
+### Request (the smallest interface, reusing what exists)
+
+1. **Two DataVolume regions** in the `datavol.rs` registry, in the unused space after `G19Ctr`:
+
+   | Region | Offset | Size | Writer |
+   |---|---|---|---|
+   | `CondCtr` | 2058 | 2 | delegation counter (record magic `HQCDLG1\0`) |
+   | `CondEpoch` | 2060 | 2 | revocation epoch (record magic `HQCEPO1\0`) |
+
+   The same Gate-2 discipline as `G19Ctr` applies: each writer arms only its own two sectors.
+2. **One counter mechanism.** Give `g19ctr::{load, advance}` a magic parameter, or link
+   `conductor_core::durable` (`no_std`, no allocation, same layout). Either way the kernel keeps one way to
+   persist a monotonic value, and the drift test keeps the two copies equal until HomePods picks one.
+3. **The delegation key.** Derive it as `HKDF(SRK, "HQ-conductor-delegation-v1")`, the same pattern as the
+   owner journal's `"HQ-owner-journal-v1"`. Derive the cache-salt key the same way
+   (`"HQ-conductor-salt-v1"`).
+   - The keys stay in EL1, and no EL0 server ever maps them.
+   - They are separate from the Noise static key, the image trust root and the owner keys (ADR 0071 D2).
+4. **One EL1 service, `conductor_sign`.** Its input is the harness's `SignRequest` (the existing
+   `conductor_core::abi` encoding). Its output is the 397-byte signed capability, or a refusal code. The
+   kernel runs `Signer::sign` with:
+   - the pairings and owner policy from the **owner policy journal** (ADR 0055). A pairing is an owner-signed
+     record; a new record kind, not a new store;
+   - the sealed state from (1).
+
+   The harness's only new syscall is this one.
+5. **Leases in the data plane.** On `StartLease { tier, until, egress_policy_id }`, the worker's compute segment
+   may reach only that policy's destinations until `until`. At expiry, on `EndLease`, or when the kill switch
+   bumps the epoch, the kernel closes every path. A frame from the worker outside its lease is dropped,
+   recorded as evidence, and suspends the worker.
+6. **The ledger in the evidence log.** Conductor records (`ledger::Record`) become a record type in the existing
+   sealed evidence log (`fslog`, ADR 0066 export), not a separate store. The chain and anchor of `chain.rs`
+   become a check on top of the log's own sealing.
+
+### Gates
+
+| Gate | Where | Pass |
+|---|---|---|
+| `[P-cond-ctr]` | QEMU | the record layer on an in-memory disk, like `[P-g19ctr]`: fresh = 0, strictly increasing, alternating sectors, a torn newest falls back, a refused write hands out nothing; the same for the epoch |
+| `[P-cond-sign]` | QEMU | the EL0 harness gets a signature only through `conductor_sign`; the delegation key is not mapped to any EL0 server (`AT S1E0R`); a request for an unpaired worker, a disallowed class or a wrong egress policy is refused |
+| `[P-cond-lease]` | QEMU | a worker frame to a destination outside its lease is dropped and recorded; the lease ends at expiry and at the kill switch |
+| `[P-cond-ledger]` | QEMU | delegation records land in the evidence log; edited, removed or reordered records are detected |
+| metal | CM5 | power-cycle on the relay rig, as the ADR 0069 evidence did: counter and epoch durable across reboot and power cut; no counter reused; a recorded capability replayed after reboot refused by the worker; data-plane timings and the 33-row separation matrix unchanged |
+
+### Risk and cost
+
+- **Small and local:** two regions, one EL1 service, one record kind each in the journal and the evidence log.
+  The data-plane lease is the part with real risk: it touches enforcement, so it needs the separation-matrix
+  gate.
+- **Review:** `security-auditor` reviews the key derivation and the service before the shipping flavour takes
+  it.
+
+### What it unlocks
+
+C1's gate (ADR 0071): no unauthorized execution or replay, and ledger integrity across power cycles. Then C2,
+a P1 heqk worker on the owner's LAN.
+
 ## Order and what needs no kernel change meanwhile
 
 1. R0 readouts (hours of work; unblock KR-1's design).
 2. KR-1.
 3. KR-2 (a) and (b).
 4. ADR 0061 D1–D4, then KR-2 (c)–(d) and Neuro R3–R6 (model region, loader, admission).
+5. KR-3 is independent of KR-1 and KR-2, and can go in parallel: it unblocks Conductor C1.
 
 Until then, already possible on today's kernel with no change beyond adding an EL0 crate to
-`kernel/build.rs` behind a feature: the Conductor harness (`el0-harness`: `.text` 74,772 B, `.data` 0,
-`.bss` 47,792 B, stack bound 13,280 B, zero FP/SIMD instructions, no imports, one syscall) and Runtime
+`kernel/build.rs` behind a feature: the Conductor harness (`el0-harness`: `.text` 82,716 B, `.data` 0,
+`.bss` 52,392 B, stack bound 10,912 B, zero FP/SIMD instructions, no imports, one syscall) and Runtime
 Proof 001's pipeline with the integer specialist.
