@@ -1,0 +1,4344 @@
+{
+"schema": "hookprobe.neuro.attack-ids/1",
+"source": "mitre-attack-stix enterprise-attack.json",
+"source_sha256": "539a843a7b53ed9749740b2123dddae3726b1a4831841c32aca740b011b910b5",
+"version": "20.1",
+"notice": "ATT&CK\u00ae \u00a9 The MITRE Corporation. Reproduced with permission; ATT&CK is a registered trademark of The MITRE Corporation.",
+"ids": {
+"T1001": {
+"name": "Data Obfuscation",
+"revoked": false,
+"deprecated": false
+},
+"T1001.001": {
+"name": "Junk Data",
+"revoked": false,
+"deprecated": false
+},
+"T1001.002": {
+"name": "Steganography",
+"revoked": false,
+"deprecated": false
+},
+"T1001.003": {
+"name": "Protocol or Service Impersonation",
+"revoked": false,
+"deprecated": false
+},
+"T1002": {
+"name": "Data Compressed",
+"revoked": true,
+"deprecated": false
+},
+"T1003": {
+"name": "OS Credential Dumping",
+"revoked": false,
+"deprecated": false
+},
+"T1003.001": {
+"name": "LSASS Memory",
+"revoked": false,
+"deprecated": false
+},
+"T1003.002": {
+"name": "Security Account Manager",
+"revoked": false,
+"deprecated": false
+},
+"T1003.003": {
+"name": "NTDS",
+"revoked": false,
+"deprecated": false
+},
+"T1003.004": {
+"name": "LSA Secrets",
+"revoked": false,
+"deprecated": false
+},
+"T1003.005": {
+"name": "Cached Domain Credentials",
+"revoked": false,
+"deprecated": false
+},
+"T1003.006": {
+"name": "DCSync",
+"revoked": false,
+"deprecated": false
+},
+"T1003.007": {
+"name": "Proc Filesystem",
+"revoked": false,
+"deprecated": false
+},
+"T1003.008": {
+"name": "/etc/passwd and /etc/shadow",
+"revoked": false,
+"deprecated": false
+},
+"T1004": {
+"name": "Winlogon Helper DLL",
+"revoked": true,
+"deprecated": false
+},
+"T1005": {
+"name": "Data from Local System",
+"revoked": false,
+"deprecated": false
+},
+"T1006": {
+"name": "Direct Volume Access",
+"revoked": false,
+"deprecated": false
+},
+"T1007": {
+"name": "System Service Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1008": {
+"name": "Fallback Channels",
+"revoked": false,
+"deprecated": false
+},
+"T1009": {
+"name": "Binary Padding",
+"revoked": true,
+"deprecated": false
+},
+"T1010": {
+"name": "Application Window Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1011": {
+"name": "Exfiltration Over Other Network Medium",
+"revoked": false,
+"deprecated": false
+},
+"T1011.001": {
+"name": "Exfiltration Over Bluetooth",
+"revoked": false,
+"deprecated": false
+},
+"T1012": {
+"name": "Query Registry",
+"revoked": false,
+"deprecated": false
+},
+"T1013": {
+"name": "Port Monitors",
+"revoked": true,
+"deprecated": false
+},
+"T1014": {
+"name": "Rootkit",
+"revoked": false,
+"deprecated": false
+},
+"T1015": {
+"name": "Accessibility Features",
+"revoked": true,
+"deprecated": false
+},
+"T1016": {
+"name": "System Network Configuration Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1016.001": {
+"name": "Internet Connection Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1016.002": {
+"name": "Wi-Fi Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1017": {
+"name": "Application Deployment Software",
+"revoked": true,
+"deprecated": false
+},
+"T1018": {
+"name": "Remote System Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1019": {
+"name": "System Firmware",
+"revoked": true,
+"deprecated": false
+},
+"T1020": {
+"name": "Automated Exfiltration",
+"revoked": false,
+"deprecated": false
+},
+"T1020.001": {
+"name": "Traffic Duplication",
+"revoked": false,
+"deprecated": false
+},
+"T1021": {
+"name": "Remote Services",
+"revoked": false,
+"deprecated": false
+},
+"T1021.001": {
+"name": "Remote Desktop Protocol",
+"revoked": false,
+"deprecated": false
+},
+"T1021.002": {
+"name": "SMB/Windows Admin Shares",
+"revoked": false,
+"deprecated": false
+},
+"T1021.003": {
+"name": "Distributed Component Object Model",
+"revoked": false,
+"deprecated": false
+},
+"T1021.004": {
+"name": "SSH",
+"revoked": false,
+"deprecated": false
+},
+"T1021.005": {
+"name": "VNC",
+"revoked": false,
+"deprecated": false
+},
+"T1021.006": {
+"name": "Windows Remote Management",
+"revoked": false,
+"deprecated": false
+},
+"T1021.007": {
+"name": "Cloud Services",
+"revoked": false,
+"deprecated": false
+},
+"T1021.008": {
+"name": "Direct Cloud VM Connections",
+"revoked": false,
+"deprecated": false
+},
+"T1022": {
+"name": "Data Encrypted",
+"revoked": true,
+"deprecated": false
+},
+"T1023": {
+"name": "Shortcut Modification",
+"revoked": true,
+"deprecated": false
+},
+"T1024": {
+"name": "Custom Cryptographic Protocol",
+"revoked": true,
+"deprecated": false
+},
+"T1025": {
+"name": "Data from Removable Media",
+"revoked": false,
+"deprecated": false
+},
+"T1026": {
+"name": "Multiband Communication",
+"revoked": false,
+"deprecated": true
+},
+"T1027": {
+"name": "Obfuscated Files or Information",
+"revoked": false,
+"deprecated": false
+},
+"T1027.001": {
+"name": "Binary Padding",
+"revoked": false,
+"deprecated": false
+},
+"T1027.002": {
+"name": "Software Packing",
+"revoked": false,
+"deprecated": false
+},
+"T1027.003": {
+"name": "Steganography",
+"revoked": false,
+"deprecated": false
+},
+"T1027.004": {
+"name": "Compile After Delivery",
+"revoked": false,
+"deprecated": false
+},
+"T1027.005": {
+"name": "Indicator Removal from Tools",
+"revoked": false,
+"deprecated": false
+},
+"T1027.006": {
+"name": "HTML Smuggling",
+"revoked": false,
+"deprecated": false
+},
+"T1027.007": {
+"name": "Dynamic API Resolution",
+"revoked": false,
+"deprecated": false
+},
+"T1027.008": {
+"name": "Stripped Payloads",
+"revoked": false,
+"deprecated": false
+},
+"T1027.009": {
+"name": "Embedded Payloads",
+"revoked": false,
+"deprecated": false
+},
+"T1027.010": {
+"name": "Command Obfuscation",
+"revoked": false,
+"deprecated": false
+},
+"T1027.011": {
+"name": "Fileless Storage",
+"revoked": false,
+"deprecated": false
+},
+"T1027.012": {
+"name": "LNK Icon Smuggling",
+"revoked": false,
+"deprecated": false
+},
+"T1027.013": {
+"name": "Encrypted/Encoded File",
+"revoked": false,
+"deprecated": false
+},
+"T1027.014": {
+"name": "Polymorphic Code",
+"revoked": false,
+"deprecated": false
+},
+"T1027.015": {
+"name": "Compression",
+"revoked": false,
+"deprecated": false
+},
+"T1027.016": {
+"name": "Junk Code Insertion",
+"revoked": false,
+"deprecated": false
+},
+"T1027.017": {
+"name": "SVG Smuggling",
+"revoked": false,
+"deprecated": false
+},
+"T1027.018": {
+"name": "Invisible Unicode",
+"revoked": false,
+"deprecated": false
+},
+"T1028": {
+"name": "Windows Remote Management",
+"revoked": true,
+"deprecated": false
+},
+"T1029": {
+"name": "Scheduled Transfer",
+"revoked": false,
+"deprecated": false
+},
+"T1030": {
+"name": "Data Transfer Size Limits",
+"revoked": false,
+"deprecated": false
+},
+"T1031": {
+"name": "Modify Existing Service",
+"revoked": true,
+"deprecated": false
+},
+"T1032": {
+"name": "Standard Cryptographic Protocol",
+"revoked": true,
+"deprecated": false
+},
+"T1033": {
+"name": "System Owner/User Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1034": {
+"name": "Path Interception",
+"revoked": false,
+"deprecated": true
+},
+"T1035": {
+"name": "Service Execution",
+"revoked": true,
+"deprecated": false
+},
+"T1036": {
+"name": "Masquerading",
+"revoked": false,
+"deprecated": false
+},
+"T1036.001": {
+"name": "Invalid Code Signature",
+"revoked": false,
+"deprecated": false
+},
+"T1036.002": {
+"name": "Right-to-Left Override",
+"revoked": false,
+"deprecated": false
+},
+"T1036.003": {
+"name": "Rename Legitimate Utilities",
+"revoked": false,
+"deprecated": false
+},
+"T1036.004": {
+"name": "Masquerade Task or Service",
+"revoked": false,
+"deprecated": false
+},
+"T1036.005": {
+"name": "Match Legitimate Resource Name or Location",
+"revoked": false,
+"deprecated": false
+},
+"T1036.006": {
+"name": "Space after Filename",
+"revoked": false,
+"deprecated": false
+},
+"T1036.007": {
+"name": "Double File Extension",
+"revoked": false,
+"deprecated": false
+},
+"T1036.008": {
+"name": "Masquerade File Type",
+"revoked": false,
+"deprecated": false
+},
+"T1036.009": {
+"name": "Break Process Trees",
+"revoked": false,
+"deprecated": false
+},
+"T1036.010": {
+"name": "Masquerade Account Name",
+"revoked": false,
+"deprecated": false
+},
+"T1036.011": {
+"name": "Overwrite Process Arguments",
+"revoked": false,
+"deprecated": false
+},
+"T1036.012": {
+"name": "Browser Fingerprint",
+"revoked": false,
+"deprecated": false
+},
+"T1037": {
+"name": "Boot or Logon Initialization Scripts",
+"revoked": false,
+"deprecated": false
+},
+"T1037.001": {
+"name": "Logon Script (Windows)",
+"revoked": false,
+"deprecated": false
+},
+"T1037.002": {
+"name": "Login Hook",
+"revoked": false,
+"deprecated": false
+},
+"T1037.003": {
+"name": "Network Logon Script",
+"revoked": false,
+"deprecated": false
+},
+"T1037.004": {
+"name": "RC Scripts",
+"revoked": false,
+"deprecated": false
+},
+"T1037.005": {
+"name": "Startup Items",
+"revoked": false,
+"deprecated": false
+},
+"T1038": {
+"name": "DLL Search Order Hijacking",
+"revoked": true,
+"deprecated": false
+},
+"T1039": {
+"name": "Data from Network Shared Drive",
+"revoked": false,
+"deprecated": false
+},
+"T1040": {
+"name": "Network Sniffing",
+"revoked": false,
+"deprecated": false
+},
+"T1041": {
+"name": "Exfiltration Over C2 Channel",
+"revoked": false,
+"deprecated": false
+},
+"T1042": {
+"name": "Change Default File Association",
+"revoked": true,
+"deprecated": false
+},
+"T1043": {
+"name": "Commonly Used Port",
+"revoked": false,
+"deprecated": true
+},
+"T1044": {
+"name": "File System Permissions Weakness",
+"revoked": true,
+"deprecated": false
+},
+"T1045": {
+"name": "Software Packing",
+"revoked": true,
+"deprecated": false
+},
+"T1046": {
+"name": "Network Service Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1047": {
+"name": "Windows Management Instrumentation",
+"revoked": false,
+"deprecated": false
+},
+"T1048": {
+"name": "Exfiltration Over Alternative Protocol",
+"revoked": false,
+"deprecated": false
+},
+"T1048.001": {
+"name": "Exfiltration Over Symmetric Encrypted Non-C2 Protocol",
+"revoked": false,
+"deprecated": false
+},
+"T1048.002": {
+"name": "Exfiltration Over Asymmetric Encrypted Non-C2 Protocol",
+"revoked": false,
+"deprecated": false
+},
+"T1048.003": {
+"name": "Exfiltration Over Unencrypted Non-C2 Protocol",
+"revoked": false,
+"deprecated": false
+},
+"T1049": {
+"name": "System Network Connections Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1050": {
+"name": "New Service",
+"revoked": true,
+"deprecated": false
+},
+"T1051": {
+"name": "Shared Webroot",
+"revoked": false,
+"deprecated": true
+},
+"T1052": {
+"name": "Exfiltration Over Physical Medium",
+"revoked": false,
+"deprecated": false
+},
+"T1052.001": {
+"name": "Exfiltration over USB",
+"revoked": false,
+"deprecated": false
+},
+"T1053": {
+"name": "Scheduled Task/Job",
+"revoked": false,
+"deprecated": false
+},
+"T1053.001": {
+"name": "At (Linux)",
+"revoked": true,
+"deprecated": false
+},
+"T1053.002": {
+"name": "At",
+"revoked": false,
+"deprecated": false
+},
+"T1053.003": {
+"name": "Cron",
+"revoked": false,
+"deprecated": false
+},
+"T1053.004": {
+"name": "Launchd",
+"revoked": false,
+"deprecated": true
+},
+"T1053.005": {
+"name": "Scheduled Task",
+"revoked": false,
+"deprecated": false
+},
+"T1053.006": {
+"name": "Systemd Timers",
+"revoked": false,
+"deprecated": false
+},
+"T1053.007": {
+"name": "Container Orchestration Job",
+"revoked": false,
+"deprecated": false
+},
+"T1054": {
+"name": "Indicator Blocking",
+"revoked": true,
+"deprecated": false
+},
+"T1055": {
+"name": "Process Injection",
+"revoked": false,
+"deprecated": false
+},
+"T1055.001": {
+"name": "Dynamic-link Library Injection",
+"revoked": false,
+"deprecated": false
+},
+"T1055.002": {
+"name": "Portable Executable Injection",
+"revoked": false,
+"deprecated": false
+},
+"T1055.003": {
+"name": "Thread Execution Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1055.004": {
+"name": "Asynchronous Procedure Call",
+"revoked": false,
+"deprecated": false
+},
+"T1055.005": {
+"name": "Thread Local Storage",
+"revoked": false,
+"deprecated": false
+},
+"T1055.008": {
+"name": "Ptrace System Calls",
+"revoked": false,
+"deprecated": false
+},
+"T1055.009": {
+"name": "Proc Memory",
+"revoked": false,
+"deprecated": false
+},
+"T1055.011": {
+"name": "Extra Window Memory Injection",
+"revoked": false,
+"deprecated": false
+},
+"T1055.012": {
+"name": "Process Hollowing",
+"revoked": false,
+"deprecated": false
+},
+"T1055.013": {
+"name": "Process Doppelg\u00e4nging",
+"revoked": false,
+"deprecated": false
+},
+"T1055.014": {
+"name": "VDSO Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1055.015": {
+"name": "ListPlanting",
+"revoked": false,
+"deprecated": false
+},
+"T1056": {
+"name": "Input Capture",
+"revoked": false,
+"deprecated": false
+},
+"T1056.001": {
+"name": "Keylogging",
+"revoked": false,
+"deprecated": false
+},
+"T1056.002": {
+"name": "GUI Input Capture",
+"revoked": false,
+"deprecated": false
+},
+"T1056.003": {
+"name": "Web Portal Capture",
+"revoked": false,
+"deprecated": false
+},
+"T1056.004": {
+"name": "Credential API Hooking",
+"revoked": false,
+"deprecated": false
+},
+"T1057": {
+"name": "Process Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1058": {
+"name": "Service Registry Permissions Weakness",
+"revoked": true,
+"deprecated": false
+},
+"T1059": {
+"name": "Command and Scripting Interpreter",
+"revoked": false,
+"deprecated": false
+},
+"T1059.001": {
+"name": "PowerShell",
+"revoked": false,
+"deprecated": false
+},
+"T1059.002": {
+"name": "AppleScript",
+"revoked": false,
+"deprecated": false
+},
+"T1059.003": {
+"name": "Windows Command Shell",
+"revoked": false,
+"deprecated": false
+},
+"T1059.004": {
+"name": "Unix Shell",
+"revoked": false,
+"deprecated": false
+},
+"T1059.005": {
+"name": "Visual Basic",
+"revoked": false,
+"deprecated": false
+},
+"T1059.006": {
+"name": "Python",
+"revoked": false,
+"deprecated": false
+},
+"T1059.007": {
+"name": "JavaScript",
+"revoked": false,
+"deprecated": false
+},
+"T1059.008": {
+"name": "Network Device CLI",
+"revoked": false,
+"deprecated": false
+},
+"T1059.009": {
+"name": "Cloud API",
+"revoked": false,
+"deprecated": false
+},
+"T1059.010": {
+"name": "AutoHotKey & AutoIT",
+"revoked": false,
+"deprecated": false
+},
+"T1059.011": {
+"name": "Lua",
+"revoked": false,
+"deprecated": false
+},
+"T1059.012": {
+"name": "Hypervisor CLI",
+"revoked": false,
+"deprecated": false
+},
+"T1059.013": {
+"name": "Container CLI/API",
+"revoked": false,
+"deprecated": false
+},
+"T1060": {
+"name": "Registry Run Keys / Startup Folder",
+"revoked": true,
+"deprecated": false
+},
+"T1061": {
+"name": "Graphical User Interface",
+"revoked": false,
+"deprecated": true
+},
+"T1062": {
+"name": "Hypervisor",
+"revoked": false,
+"deprecated": true
+},
+"T1063": {
+"name": "Security Software Discovery",
+"revoked": true,
+"deprecated": false
+},
+"T1064": {
+"name": "Scripting",
+"revoked": false,
+"deprecated": true
+},
+"T1065": {
+"name": "Uncommonly Used Port",
+"revoked": true,
+"deprecated": false
+},
+"T1066": {
+"name": "Indicator Removal from Tools",
+"revoked": true,
+"deprecated": false
+},
+"T1067": {
+"name": "Bootkit",
+"revoked": true,
+"deprecated": false
+},
+"T1068": {
+"name": "Exploitation for Privilege Escalation",
+"revoked": false,
+"deprecated": false
+},
+"T1069": {
+"name": "Permission Groups Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1069.001": {
+"name": "Local Groups",
+"revoked": false,
+"deprecated": false
+},
+"T1069.002": {
+"name": "Domain Groups",
+"revoked": false,
+"deprecated": false
+},
+"T1069.003": {
+"name": "Cloud Groups",
+"revoked": false,
+"deprecated": false
+},
+"T1070": {
+"name": "Indicator Removal",
+"revoked": false,
+"deprecated": false
+},
+"T1070.001": {
+"name": "Clear Windows Event Logs",
+"revoked": true,
+"deprecated": false
+},
+"T1070.002": {
+"name": "Clear Linux or Mac System Logs",
+"revoked": true,
+"deprecated": false
+},
+"T1070.003": {
+"name": "Clear Command History",
+"revoked": false,
+"deprecated": false
+},
+"T1070.004": {
+"name": "File Deletion",
+"revoked": false,
+"deprecated": false
+},
+"T1070.005": {
+"name": "Network Share Connection Removal",
+"revoked": false,
+"deprecated": false
+},
+"T1070.006": {
+"name": "Timestomp",
+"revoked": false,
+"deprecated": false
+},
+"T1070.007": {
+"name": "Clear Network Connection History and Configurations",
+"revoked": false,
+"deprecated": false
+},
+"T1070.008": {
+"name": "Clear Mailbox Data",
+"revoked": false,
+"deprecated": false
+},
+"T1070.009": {
+"name": "Clear Persistence",
+"revoked": false,
+"deprecated": false
+},
+"T1070.010": {
+"name": "Relocate Malware",
+"revoked": false,
+"deprecated": false
+},
+"T1071": {
+"name": "Application Layer Protocol",
+"revoked": false,
+"deprecated": false
+},
+"T1071.001": {
+"name": "Web Protocols",
+"revoked": false,
+"deprecated": false
+},
+"T1071.002": {
+"name": "File Transfer Protocols",
+"revoked": false,
+"deprecated": false
+},
+"T1071.003": {
+"name": "Mail Protocols",
+"revoked": false,
+"deprecated": false
+},
+"T1071.004": {
+"name": "DNS",
+"revoked": false,
+"deprecated": false
+},
+"T1071.005": {
+"name": "Publish/Subscribe Protocols",
+"revoked": false,
+"deprecated": false
+},
+"T1072": {
+"name": "Software Deployment Tools",
+"revoked": false,
+"deprecated": false
+},
+"T1073": {
+"name": "DLL Side-Loading",
+"revoked": true,
+"deprecated": false
+},
+"T1074": {
+"name": "Data Staged",
+"revoked": false,
+"deprecated": false
+},
+"T1074.001": {
+"name": "Local Data Staging",
+"revoked": false,
+"deprecated": false
+},
+"T1074.002": {
+"name": "Remote Data Staging",
+"revoked": false,
+"deprecated": false
+},
+"T1075": {
+"name": "Pass the Hash",
+"revoked": true,
+"deprecated": false
+},
+"T1076": {
+"name": "Remote Desktop Protocol",
+"revoked": true,
+"deprecated": false
+},
+"T1077": {
+"name": "Windows Admin Shares",
+"revoked": true,
+"deprecated": false
+},
+"T1078": {
+"name": "Valid Accounts",
+"revoked": false,
+"deprecated": false
+},
+"T1078.001": {
+"name": "Default Accounts",
+"revoked": false,
+"deprecated": false
+},
+"T1078.002": {
+"name": "Domain Accounts",
+"revoked": false,
+"deprecated": false
+},
+"T1078.003": {
+"name": "Local Accounts",
+"revoked": false,
+"deprecated": false
+},
+"T1078.004": {
+"name": "Cloud Accounts",
+"revoked": false,
+"deprecated": false
+},
+"T1079": {
+"name": "Multilayer Encryption",
+"revoked": true,
+"deprecated": false
+},
+"T1080": {
+"name": "Taint Shared Content",
+"revoked": false,
+"deprecated": false
+},
+"T1081": {
+"name": "Credentials in Files",
+"revoked": true,
+"deprecated": false
+},
+"T1082": {
+"name": "System Information Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1083": {
+"name": "File and Directory Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1084": {
+"name": "Windows Management Instrumentation Event Subscription",
+"revoked": true,
+"deprecated": false
+},
+"T1085": {
+"name": "Rundll32",
+"revoked": true,
+"deprecated": false
+},
+"T1086": {
+"name": "PowerShell",
+"revoked": true,
+"deprecated": false
+},
+"T1087": {
+"name": "Account Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1087.001": {
+"name": "Local Account",
+"revoked": false,
+"deprecated": false
+},
+"T1087.002": {
+"name": "Domain Account",
+"revoked": false,
+"deprecated": false
+},
+"T1087.003": {
+"name": "Email Account",
+"revoked": false,
+"deprecated": false
+},
+"T1087.004": {
+"name": "Cloud Account",
+"revoked": false,
+"deprecated": false
+},
+"T1088": {
+"name": "Bypass User Account Control",
+"revoked": true,
+"deprecated": false
+},
+"T1089": {
+"name": "Disabling Security Tools",
+"revoked": true,
+"deprecated": false
+},
+"T1090": {
+"name": "Proxy",
+"revoked": false,
+"deprecated": false
+},
+"T1090.001": {
+"name": "Internal Proxy",
+"revoked": false,
+"deprecated": false
+},
+"T1090.002": {
+"name": "External Proxy",
+"revoked": false,
+"deprecated": false
+},
+"T1090.003": {
+"name": "Multi-hop Proxy",
+"revoked": false,
+"deprecated": false
+},
+"T1090.004": {
+"name": "Domain Fronting",
+"revoked": false,
+"deprecated": false
+},
+"T1091": {
+"name": "Replication Through Removable Media",
+"revoked": false,
+"deprecated": false
+},
+"T1092": {
+"name": "Communication Through Removable Media",
+"revoked": false,
+"deprecated": false
+},
+"T1093": {
+"name": "Process Hollowing",
+"revoked": true,
+"deprecated": false
+},
+"T1094": {
+"name": "Custom Command and Control Protocol",
+"revoked": true,
+"deprecated": false
+},
+"T1095": {
+"name": "Non-Application Layer Protocol",
+"revoked": false,
+"deprecated": false
+},
+"T1096": {
+"name": "NTFS File Attributes",
+"revoked": true,
+"deprecated": false
+},
+"T1097": {
+"name": "Pass the Ticket",
+"revoked": true,
+"deprecated": false
+},
+"T1098": {
+"name": "Account Manipulation",
+"revoked": false,
+"deprecated": false
+},
+"T1098.001": {
+"name": "Additional Cloud Credentials",
+"revoked": false,
+"deprecated": false
+},
+"T1098.002": {
+"name": "Additional Email Delegate Permissions",
+"revoked": false,
+"deprecated": false
+},
+"T1098.003": {
+"name": "Additional Cloud Roles",
+"revoked": false,
+"deprecated": false
+},
+"T1098.004": {
+"name": "SSH Authorized Keys",
+"revoked": false,
+"deprecated": false
+},
+"T1098.005": {
+"name": "Device Registration",
+"revoked": false,
+"deprecated": false
+},
+"T1098.006": {
+"name": "Additional Container Cluster Roles",
+"revoked": false,
+"deprecated": false
+},
+"T1098.007": {
+"name": "Additional Local or Domain Groups",
+"revoked": false,
+"deprecated": false
+},
+"T1099": {
+"name": "Timestomp",
+"revoked": true,
+"deprecated": false
+},
+"T1100": {
+"name": "Web Shell",
+"revoked": true,
+"deprecated": false
+},
+"T1101": {
+"name": "Security Support Provider",
+"revoked": true,
+"deprecated": false
+},
+"T1102": {
+"name": "Web Service",
+"revoked": false,
+"deprecated": false
+},
+"T1102.001": {
+"name": "Dead Drop Resolver",
+"revoked": false,
+"deprecated": false
+},
+"T1102.002": {
+"name": "Bidirectional Communication",
+"revoked": false,
+"deprecated": false
+},
+"T1102.003": {
+"name": "One-Way Communication",
+"revoked": false,
+"deprecated": false
+},
+"T1103": {
+"name": "AppInit DLLs",
+"revoked": true,
+"deprecated": false
+},
+"T1104": {
+"name": "Multi-Stage Channels",
+"revoked": false,
+"deprecated": false
+},
+"T1105": {
+"name": "Ingress Tool Transfer",
+"revoked": false,
+"deprecated": false
+},
+"T1106": {
+"name": "Native API",
+"revoked": false,
+"deprecated": false
+},
+"T1107": {
+"name": "File Deletion",
+"revoked": true,
+"deprecated": false
+},
+"T1108": {
+"name": "Redundant Access",
+"revoked": false,
+"deprecated": true
+},
+"T1109": {
+"name": "Component Firmware",
+"revoked": true,
+"deprecated": false
+},
+"T1110": {
+"name": "Brute Force",
+"revoked": false,
+"deprecated": false
+},
+"T1110.001": {
+"name": "Password Guessing",
+"revoked": false,
+"deprecated": false
+},
+"T1110.002": {
+"name": "Password Cracking",
+"revoked": false,
+"deprecated": false
+},
+"T1110.003": {
+"name": "Password Spraying",
+"revoked": false,
+"deprecated": false
+},
+"T1110.004": {
+"name": "Credential Stuffing",
+"revoked": false,
+"deprecated": false
+},
+"T1111": {
+"name": "Multi-Factor Authentication Interception",
+"revoked": false,
+"deprecated": false
+},
+"T1112": {
+"name": "Modify Registry",
+"revoked": false,
+"deprecated": false
+},
+"T1113": {
+"name": "Screen Capture",
+"revoked": false,
+"deprecated": false
+},
+"T1114": {
+"name": "Email Collection",
+"revoked": false,
+"deprecated": false
+},
+"T1114.001": {
+"name": "Local Email Collection",
+"revoked": false,
+"deprecated": false
+},
+"T1114.002": {
+"name": "Remote Email Collection",
+"revoked": false,
+"deprecated": false
+},
+"T1114.003": {
+"name": "Email Forwarding Rule",
+"revoked": false,
+"deprecated": false
+},
+"T1115": {
+"name": "Clipboard Data",
+"revoked": false,
+"deprecated": false
+},
+"T1116": {
+"name": "Code Signing",
+"revoked": true,
+"deprecated": false
+},
+"T1117": {
+"name": "Regsvr32",
+"revoked": true,
+"deprecated": false
+},
+"T1118": {
+"name": "InstallUtil",
+"revoked": true,
+"deprecated": false
+},
+"T1119": {
+"name": "Automated Collection",
+"revoked": false,
+"deprecated": false
+},
+"T1120": {
+"name": "Peripheral Device Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1121": {
+"name": "Regsvcs/Regasm",
+"revoked": true,
+"deprecated": false
+},
+"T1122": {
+"name": "Component Object Model Hijacking",
+"revoked": true,
+"deprecated": false
+},
+"T1123": {
+"name": "Audio Capture",
+"revoked": false,
+"deprecated": false
+},
+"T1124": {
+"name": "System Time Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1125": {
+"name": "Video Capture",
+"revoked": false,
+"deprecated": false
+},
+"T1126": {
+"name": "Network Share Connection Removal",
+"revoked": true,
+"deprecated": false
+},
+"T1127": {
+"name": "Trusted Developer Utilities Proxy Execution",
+"revoked": false,
+"deprecated": false
+},
+"T1127.001": {
+"name": "MSBuild",
+"revoked": false,
+"deprecated": false
+},
+"T1127.002": {
+"name": "ClickOnce",
+"revoked": false,
+"deprecated": false
+},
+"T1127.003": {
+"name": "JamPlus",
+"revoked": false,
+"deprecated": false
+},
+"T1128": {
+"name": "Netsh Helper DLL",
+"revoked": true,
+"deprecated": false
+},
+"T1129": {
+"name": "Shared Modules",
+"revoked": false,
+"deprecated": false
+},
+"T1130": {
+"name": "Install Root Certificate",
+"revoked": true,
+"deprecated": false
+},
+"T1131": {
+"name": "Authentication Package",
+"revoked": true,
+"deprecated": false
+},
+"T1132": {
+"name": "Data Encoding",
+"revoked": false,
+"deprecated": false
+},
+"T1132.001": {
+"name": "Standard Encoding",
+"revoked": false,
+"deprecated": false
+},
+"T1132.002": {
+"name": "Non-Standard Encoding",
+"revoked": false,
+"deprecated": false
+},
+"T1133": {
+"name": "External Remote Services",
+"revoked": false,
+"deprecated": false
+},
+"T1134": {
+"name": "Access Token Manipulation",
+"revoked": false,
+"deprecated": false
+},
+"T1134.001": {
+"name": "Token Impersonation/Theft",
+"revoked": false,
+"deprecated": false
+},
+"T1134.002": {
+"name": "Create Process with Token",
+"revoked": false,
+"deprecated": false
+},
+"T1134.003": {
+"name": "Make and Impersonate Token",
+"revoked": false,
+"deprecated": false
+},
+"T1134.004": {
+"name": "Parent PID Spoofing",
+"revoked": false,
+"deprecated": false
+},
+"T1134.005": {
+"name": "SID-History Injection",
+"revoked": false,
+"deprecated": false
+},
+"T1135": {
+"name": "Network Share Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1136": {
+"name": "Create Account",
+"revoked": false,
+"deprecated": false
+},
+"T1136.001": {
+"name": "Local Account",
+"revoked": false,
+"deprecated": false
+},
+"T1136.002": {
+"name": "Domain Account",
+"revoked": false,
+"deprecated": false
+},
+"T1136.003": {
+"name": "Cloud Account",
+"revoked": false,
+"deprecated": false
+},
+"T1137": {
+"name": "Office Application Startup",
+"revoked": false,
+"deprecated": false
+},
+"T1137.001": {
+"name": "Office Template Macros",
+"revoked": false,
+"deprecated": false
+},
+"T1137.002": {
+"name": "Office Test",
+"revoked": false,
+"deprecated": false
+},
+"T1137.003": {
+"name": "Outlook Forms",
+"revoked": false,
+"deprecated": false
+},
+"T1137.004": {
+"name": "Outlook Home Page",
+"revoked": false,
+"deprecated": false
+},
+"T1137.005": {
+"name": "Outlook Rules",
+"revoked": false,
+"deprecated": false
+},
+"T1137.006": {
+"name": "Add-ins",
+"revoked": false,
+"deprecated": false
+},
+"T1138": {
+"name": "Application Shimming",
+"revoked": true,
+"deprecated": false
+},
+"T1139": {
+"name": "Bash History",
+"revoked": true,
+"deprecated": false
+},
+"T1140": {
+"name": "Deobfuscate/Decode Files or Information",
+"revoked": false,
+"deprecated": false
+},
+"T1141": {
+"name": "Input Prompt",
+"revoked": true,
+"deprecated": false
+},
+"T1142": {
+"name": "Keychain",
+"revoked": true,
+"deprecated": false
+},
+"T1143": {
+"name": "Hidden Window",
+"revoked": true,
+"deprecated": false
+},
+"T1144": {
+"name": "Gatekeeper Bypass",
+"revoked": true,
+"deprecated": false
+},
+"T1145": {
+"name": "Private Keys",
+"revoked": true,
+"deprecated": false
+},
+"T1146": {
+"name": "Clear Command History",
+"revoked": true,
+"deprecated": false
+},
+"T1147": {
+"name": "Hidden Users",
+"revoked": true,
+"deprecated": false
+},
+"T1148": {
+"name": "HISTCONTROL",
+"revoked": true,
+"deprecated": false
+},
+"T1149": {
+"name": "LC_MAIN Hijacking",
+"revoked": false,
+"deprecated": true
+},
+"T1150": {
+"name": "Plist Modification",
+"revoked": true,
+"deprecated": false
+},
+"T1151": {
+"name": "Space after Filename",
+"revoked": true,
+"deprecated": false
+},
+"T1152": {
+"name": "Launchctl",
+"revoked": true,
+"deprecated": false
+},
+"T1153": {
+"name": "Source",
+"revoked": false,
+"deprecated": true
+},
+"T1154": {
+"name": "Trap",
+"revoked": true,
+"deprecated": false
+},
+"T1155": {
+"name": "AppleScript",
+"revoked": true,
+"deprecated": false
+},
+"T1156": {
+"name": "Malicious Shell Modification",
+"revoked": true,
+"deprecated": false
+},
+"T1157": {
+"name": "Dylib Hijacking",
+"revoked": true,
+"deprecated": false
+},
+"T1158": {
+"name": "Hidden Files and Directories",
+"revoked": true,
+"deprecated": false
+},
+"T1159": {
+"name": "Launch Agent",
+"revoked": true,
+"deprecated": false
+},
+"T1160": {
+"name": "Launch Daemon",
+"revoked": true,
+"deprecated": false
+},
+"T1161": {
+"name": "LC_LOAD_DYLIB Addition",
+"revoked": true,
+"deprecated": false
+},
+"T1162": {
+"name": "Login Item",
+"revoked": true,
+"deprecated": false
+},
+"T1163": {
+"name": "Rc.common",
+"revoked": true,
+"deprecated": false
+},
+"T1164": {
+"name": "Re-opened Applications",
+"revoked": true,
+"deprecated": false
+},
+"T1165": {
+"name": "Startup Items",
+"revoked": true,
+"deprecated": false
+},
+"T1166": {
+"name": "Setuid and Setgid",
+"revoked": true,
+"deprecated": false
+},
+"T1167": {
+"name": "Securityd Memory",
+"revoked": true,
+"deprecated": false
+},
+"T1168": {
+"name": "Local Job Scheduling",
+"revoked": true,
+"deprecated": false
+},
+"T1169": {
+"name": "Sudo",
+"revoked": true,
+"deprecated": false
+},
+"T1170": {
+"name": "Mshta",
+"revoked": true,
+"deprecated": false
+},
+"T1171": {
+"name": "LLMNR/NBT-NS Poisoning and Relay",
+"revoked": true,
+"deprecated": false
+},
+"T1172": {
+"name": "Domain Fronting",
+"revoked": true,
+"deprecated": false
+},
+"T1173": {
+"name": "Dynamic Data Exchange",
+"revoked": true,
+"deprecated": false
+},
+"T1174": {
+"name": "Password Filter DLL",
+"revoked": true,
+"deprecated": false
+},
+"T1175": {
+"name": "Component Object Model and Distributed COM",
+"revoked": false,
+"deprecated": true
+},
+"T1176": {
+"name": "Software Extensions",
+"revoked": false,
+"deprecated": false
+},
+"T1176.001": {
+"name": "Browser Extensions",
+"revoked": false,
+"deprecated": false
+},
+"T1176.002": {
+"name": "IDE Extensions",
+"revoked": false,
+"deprecated": false
+},
+"T1177": {
+"name": "LSASS Driver",
+"revoked": true,
+"deprecated": false
+},
+"T1178": {
+"name": "SID-History Injection",
+"revoked": true,
+"deprecated": false
+},
+"T1179": {
+"name": "Hooking",
+"revoked": true,
+"deprecated": false
+},
+"T1180": {
+"name": "Screensaver",
+"revoked": true,
+"deprecated": false
+},
+"T1181": {
+"name": "Extra Window Memory Injection",
+"revoked": true,
+"deprecated": false
+},
+"T1182": {
+"name": "AppCert DLLs",
+"revoked": true,
+"deprecated": false
+},
+"T1183": {
+"name": "Image File Execution Options Injection",
+"revoked": true,
+"deprecated": false
+},
+"T1184": {
+"name": "SSH Hijacking",
+"revoked": true,
+"deprecated": false
+},
+"T1185": {
+"name": "Browser Session Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1186": {
+"name": "Process Doppelg\u00e4nging",
+"revoked": true,
+"deprecated": false
+},
+"T1187": {
+"name": "Forced Authentication",
+"revoked": false,
+"deprecated": false
+},
+"T1188": {
+"name": "Multi-hop Proxy",
+"revoked": true,
+"deprecated": false
+},
+"T1189": {
+"name": "Drive-by Compromise",
+"revoked": false,
+"deprecated": false
+},
+"T1190": {
+"name": "Exploit Public-Facing Application",
+"revoked": false,
+"deprecated": false
+},
+"T1191": {
+"name": "CMSTP",
+"revoked": true,
+"deprecated": false
+},
+"T1192": {
+"name": "Spearphishing Link",
+"revoked": true,
+"deprecated": false
+},
+"T1193": {
+"name": "Spearphishing Attachment",
+"revoked": true,
+"deprecated": false
+},
+"T1194": {
+"name": "Spearphishing via Service",
+"revoked": true,
+"deprecated": false
+},
+"T1195": {
+"name": "Supply Chain Compromise",
+"revoked": false,
+"deprecated": false
+},
+"T1195.001": {
+"name": "Compromise Software Dependencies and Development Tools",
+"revoked": false,
+"deprecated": false
+},
+"T1195.002": {
+"name": "Compromise Software Supply Chain",
+"revoked": false,
+"deprecated": false
+},
+"T1195.003": {
+"name": "Compromise Hardware Supply Chain",
+"revoked": false,
+"deprecated": false
+},
+"T1196": {
+"name": "Control Panel Items",
+"revoked": true,
+"deprecated": false
+},
+"T1197": {
+"name": "BITS Jobs",
+"revoked": false,
+"deprecated": false
+},
+"T1198": {
+"name": "SIP and Trust Provider Hijacking",
+"revoked": true,
+"deprecated": false
+},
+"T1199": {
+"name": "Trusted Relationship",
+"revoked": false,
+"deprecated": false
+},
+"T1200": {
+"name": "Hardware Additions",
+"revoked": false,
+"deprecated": false
+},
+"T1201": {
+"name": "Password Policy Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1202": {
+"name": "Indirect Command Execution",
+"revoked": false,
+"deprecated": false
+},
+"T1203": {
+"name": "Exploitation for Client Execution",
+"revoked": false,
+"deprecated": false
+},
+"T1204": {
+"name": "User Execution",
+"revoked": false,
+"deprecated": false
+},
+"T1204.001": {
+"name": "Malicious Link",
+"revoked": false,
+"deprecated": false
+},
+"T1204.002": {
+"name": "Malicious File",
+"revoked": false,
+"deprecated": false
+},
+"T1204.003": {
+"name": "Malicious Image",
+"revoked": false,
+"deprecated": false
+},
+"T1204.004": {
+"name": "Malicious Copy and Paste",
+"revoked": false,
+"deprecated": false
+},
+"T1204.005": {
+"name": "Malicious Library",
+"revoked": false,
+"deprecated": false
+},
+"T1205": {
+"name": "Traffic Signaling",
+"revoked": false,
+"deprecated": false
+},
+"T1205.001": {
+"name": "Port Knocking",
+"revoked": false,
+"deprecated": false
+},
+"T1205.002": {
+"name": "Socket Filters",
+"revoked": false,
+"deprecated": false
+},
+"T1206": {
+"name": "Sudo Caching",
+"revoked": true,
+"deprecated": false
+},
+"T1207": {
+"name": "Rogue Domain Controller",
+"revoked": false,
+"deprecated": false
+},
+"T1208": {
+"name": "Kerberoasting",
+"revoked": true,
+"deprecated": false
+},
+"T1209": {
+"name": "Time Providers",
+"revoked": true,
+"deprecated": false
+},
+"T1210": {
+"name": "Exploitation of Remote Services",
+"revoked": false,
+"deprecated": false
+},
+"T1211": {
+"name": "Exploitation for Stealth",
+"revoked": false,
+"deprecated": false
+},
+"T1212": {
+"name": "Exploitation for Credential Access",
+"revoked": false,
+"deprecated": false
+},
+"T1213": {
+"name": "Data from Information Repositories",
+"revoked": false,
+"deprecated": false
+},
+"T1213.001": {
+"name": "Confluence",
+"revoked": false,
+"deprecated": false
+},
+"T1213.002": {
+"name": "Sharepoint",
+"revoked": false,
+"deprecated": false
+},
+"T1213.003": {
+"name": "Code Repositories",
+"revoked": false,
+"deprecated": false
+},
+"T1213.004": {
+"name": "Customer Relationship Management Software",
+"revoked": false,
+"deprecated": false
+},
+"T1213.005": {
+"name": "Messaging Applications",
+"revoked": false,
+"deprecated": false
+},
+"T1213.006": {
+"name": "Databases",
+"revoked": false,
+"deprecated": false
+},
+"T1214": {
+"name": "Credentials in Registry",
+"revoked": true,
+"deprecated": false
+},
+"T1215": {
+"name": "Kernel Modules and Extensions",
+"revoked": true,
+"deprecated": false
+},
+"T1216": {
+"name": "System Script Proxy Execution",
+"revoked": false,
+"deprecated": false
+},
+"T1216.001": {
+"name": "PubPrn",
+"revoked": false,
+"deprecated": false
+},
+"T1216.002": {
+"name": "SyncAppvPublishingServer",
+"revoked": false,
+"deprecated": false
+},
+"T1217": {
+"name": "Browser Information Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1218": {
+"name": "System Binary Proxy Execution",
+"revoked": false,
+"deprecated": false
+},
+"T1218.001": {
+"name": "Compiled HTML File",
+"revoked": false,
+"deprecated": false
+},
+"T1218.002": {
+"name": "Control Panel",
+"revoked": false,
+"deprecated": false
+},
+"T1218.003": {
+"name": "CMSTP",
+"revoked": false,
+"deprecated": false
+},
+"T1218.004": {
+"name": "InstallUtil",
+"revoked": false,
+"deprecated": false
+},
+"T1218.005": {
+"name": "Mshta",
+"revoked": false,
+"deprecated": false
+},
+"T1218.007": {
+"name": "Msiexec",
+"revoked": false,
+"deprecated": false
+},
+"T1218.008": {
+"name": "Odbcconf",
+"revoked": false,
+"deprecated": false
+},
+"T1218.009": {
+"name": "Regsvcs/Regasm",
+"revoked": false,
+"deprecated": false
+},
+"T1218.010": {
+"name": "Regsvr32",
+"revoked": false,
+"deprecated": false
+},
+"T1218.011": {
+"name": "Rundll32",
+"revoked": false,
+"deprecated": false
+},
+"T1218.012": {
+"name": "Verclsid",
+"revoked": false,
+"deprecated": false
+},
+"T1218.013": {
+"name": "Mavinject",
+"revoked": false,
+"deprecated": false
+},
+"T1218.014": {
+"name": "MMC",
+"revoked": false,
+"deprecated": false
+},
+"T1218.015": {
+"name": "Electron Applications",
+"revoked": false,
+"deprecated": false
+},
+"T1219": {
+"name": "Remote Access Tools",
+"revoked": false,
+"deprecated": false
+},
+"T1219.001": {
+"name": "IDE Tunneling",
+"revoked": false,
+"deprecated": false
+},
+"T1219.002": {
+"name": "Remote Desktop Software",
+"revoked": false,
+"deprecated": false
+},
+"T1219.003": {
+"name": "Remote Access Hardware",
+"revoked": false,
+"deprecated": false
+},
+"T1220": {
+"name": "XSL Script Processing",
+"revoked": false,
+"deprecated": false
+},
+"T1221": {
+"name": "Template Injection",
+"revoked": false,
+"deprecated": false
+},
+"T1222": {
+"name": "File and Directory Permissions Modification",
+"revoked": false,
+"deprecated": false
+},
+"T1222.001": {
+"name": "Windows Permissions",
+"revoked": false,
+"deprecated": false
+},
+"T1222.002": {
+"name": "Linux and Mac Permissions",
+"revoked": false,
+"deprecated": false
+},
+"T1223": {
+"name": "Compiled HTML File",
+"revoked": true,
+"deprecated": false
+},
+"T1480": {
+"name": "Execution Guardrails",
+"revoked": false,
+"deprecated": false
+},
+"T1480.001": {
+"name": "Environmental Keying",
+"revoked": false,
+"deprecated": false
+},
+"T1480.002": {
+"name": "Mutual Exclusion",
+"revoked": false,
+"deprecated": false
+},
+"T1482": {
+"name": "Domain Trust Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1483": {
+"name": "Domain Generation Algorithms",
+"revoked": true,
+"deprecated": false
+},
+"T1484": {
+"name": "Domain or Tenant Policy Modification",
+"revoked": false,
+"deprecated": false
+},
+"T1484.001": {
+"name": "Group Policy Modification",
+"revoked": false,
+"deprecated": false
+},
+"T1484.002": {
+"name": "Trust Modification",
+"revoked": false,
+"deprecated": false
+},
+"T1485": {
+"name": "Data Destruction",
+"revoked": false,
+"deprecated": false
+},
+"T1485.001": {
+"name": "Lifecycle-Triggered Deletion",
+"revoked": false,
+"deprecated": false
+},
+"T1486": {
+"name": "Data Encrypted for Impact",
+"revoked": false,
+"deprecated": false
+},
+"T1487": {
+"name": "Disk Structure Wipe",
+"revoked": true,
+"deprecated": false
+},
+"T1488": {
+"name": "Disk Content Wipe",
+"revoked": true,
+"deprecated": false
+},
+"T1489": {
+"name": "Service Stop",
+"revoked": false,
+"deprecated": false
+},
+"T1490": {
+"name": "Inhibit System Recovery",
+"revoked": false,
+"deprecated": false
+},
+"T1491": {
+"name": "Defacement",
+"revoked": false,
+"deprecated": false
+},
+"T1491.001": {
+"name": "Internal Defacement",
+"revoked": false,
+"deprecated": false
+},
+"T1491.002": {
+"name": "External Defacement",
+"revoked": false,
+"deprecated": false
+},
+"T1492": {
+"name": "Stored Data Manipulation",
+"revoked": true,
+"deprecated": false
+},
+"T1493": {
+"name": "Transmitted Data Manipulation",
+"revoked": true,
+"deprecated": false
+},
+"T1494": {
+"name": "Runtime Data Manipulation",
+"revoked": true,
+"deprecated": false
+},
+"T1495": {
+"name": "Firmware Corruption",
+"revoked": false,
+"deprecated": false
+},
+"T1496": {
+"name": "Resource Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1496.001": {
+"name": "Compute Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1496.002": {
+"name": "Bandwidth Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1496.003": {
+"name": "SMS Pumping",
+"revoked": false,
+"deprecated": false
+},
+"T1496.004": {
+"name": "Cloud Service Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1497": {
+"name": "Virtualization/Sandbox Evasion",
+"revoked": false,
+"deprecated": false
+},
+"T1497.001": {
+"name": "System Checks",
+"revoked": false,
+"deprecated": false
+},
+"T1497.002": {
+"name": "User Activity Based Checks",
+"revoked": false,
+"deprecated": false
+},
+"T1497.003": {
+"name": "Time Based Checks",
+"revoked": false,
+"deprecated": false
+},
+"T1498": {
+"name": "Network Denial of Service",
+"revoked": false,
+"deprecated": false
+},
+"T1498.001": {
+"name": "Direct Network Flood",
+"revoked": false,
+"deprecated": false
+},
+"T1498.002": {
+"name": "Reflection Amplification",
+"revoked": false,
+"deprecated": false
+},
+"T1499": {
+"name": "Endpoint Denial of Service",
+"revoked": false,
+"deprecated": false
+},
+"T1499.001": {
+"name": "OS Exhaustion Flood",
+"revoked": false,
+"deprecated": false
+},
+"T1499.002": {
+"name": "Service Exhaustion Flood",
+"revoked": false,
+"deprecated": false
+},
+"T1499.003": {
+"name": "Application Exhaustion Flood",
+"revoked": false,
+"deprecated": false
+},
+"T1499.004": {
+"name": "Application or System Exploitation",
+"revoked": false,
+"deprecated": false
+},
+"T1500": {
+"name": "Compile After Delivery",
+"revoked": true,
+"deprecated": false
+},
+"T1501": {
+"name": "Systemd Service",
+"revoked": true,
+"deprecated": false
+},
+"T1502": {
+"name": "Parent PID Spoofing",
+"revoked": true,
+"deprecated": false
+},
+"T1503": {
+"name": "Credentials from Web Browsers",
+"revoked": true,
+"deprecated": false
+},
+"T1504": {
+"name": "PowerShell Profile",
+"revoked": true,
+"deprecated": false
+},
+"T1505": {
+"name": "Server Software Component",
+"revoked": false,
+"deprecated": false
+},
+"T1505.001": {
+"name": "SQL Stored Procedures",
+"revoked": false,
+"deprecated": false
+},
+"T1505.002": {
+"name": "Transport Agent",
+"revoked": false,
+"deprecated": false
+},
+"T1505.003": {
+"name": "Web Shell",
+"revoked": false,
+"deprecated": false
+},
+"T1505.004": {
+"name": "IIS Components",
+"revoked": false,
+"deprecated": false
+},
+"T1505.005": {
+"name": "Terminal Services DLL",
+"revoked": false,
+"deprecated": false
+},
+"T1505.006": {
+"name": "vSphere Installation Bundles",
+"revoked": false,
+"deprecated": false
+},
+"T1506": {
+"name": "Web Session Cookie",
+"revoked": true,
+"deprecated": false
+},
+"T1514": {
+"name": "Elevated Execution with Prompt",
+"revoked": true,
+"deprecated": false
+},
+"T1518": {
+"name": "Software Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1518.001": {
+"name": "Security Software Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1518.002": {
+"name": "Backup Software Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1519": {
+"name": "Emond",
+"revoked": true,
+"deprecated": false
+},
+"T1522": {
+"name": "Cloud Instance Metadata API",
+"revoked": true,
+"deprecated": false
+},
+"T1525": {
+"name": "Implant Internal Image",
+"revoked": false,
+"deprecated": false
+},
+"T1526": {
+"name": "Cloud Service Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1527": {
+"name": "Application Access Token",
+"revoked": true,
+"deprecated": false
+},
+"T1528": {
+"name": "Steal Application Access Token",
+"revoked": false,
+"deprecated": false
+},
+"T1529": {
+"name": "System Shutdown/Reboot",
+"revoked": false,
+"deprecated": false
+},
+"T1530": {
+"name": "Data from Cloud Storage",
+"revoked": false,
+"deprecated": false
+},
+"T1531": {
+"name": "Account Access Removal",
+"revoked": false,
+"deprecated": false
+},
+"T1534": {
+"name": "Internal Spearphishing",
+"revoked": false,
+"deprecated": false
+},
+"T1535": {
+"name": "Unused/Unsupported Cloud Regions",
+"revoked": false,
+"deprecated": false
+},
+"T1536": {
+"name": "Revert Cloud Instance",
+"revoked": true,
+"deprecated": false
+},
+"T1537": {
+"name": "Transfer Data to Cloud Account",
+"revoked": false,
+"deprecated": false
+},
+"T1538": {
+"name": "Cloud Service Dashboard",
+"revoked": false,
+"deprecated": false
+},
+"T1539": {
+"name": "Steal Web Session Cookie",
+"revoked": false,
+"deprecated": false
+},
+"T1542": {
+"name": "Pre-OS Boot",
+"revoked": false,
+"deprecated": false
+},
+"T1542.001": {
+"name": "System Firmware",
+"revoked": false,
+"deprecated": false
+},
+"T1542.002": {
+"name": "Component Firmware",
+"revoked": false,
+"deprecated": false
+},
+"T1542.003": {
+"name": "Bootkit",
+"revoked": false,
+"deprecated": false
+},
+"T1542.004": {
+"name": "ROMMONkit",
+"revoked": false,
+"deprecated": false
+},
+"T1542.005": {
+"name": "TFTP Boot",
+"revoked": false,
+"deprecated": false
+},
+"T1543": {
+"name": "Create or Modify System Process",
+"revoked": false,
+"deprecated": false
+},
+"T1543.001": {
+"name": "Launch Agent",
+"revoked": false,
+"deprecated": false
+},
+"T1543.002": {
+"name": "Systemd Service",
+"revoked": false,
+"deprecated": false
+},
+"T1543.003": {
+"name": "Windows Service",
+"revoked": false,
+"deprecated": false
+},
+"T1543.004": {
+"name": "Launch Daemon",
+"revoked": false,
+"deprecated": false
+},
+"T1543.005": {
+"name": "Container Service",
+"revoked": false,
+"deprecated": false
+},
+"T1546": {
+"name": "Event Triggered Execution",
+"revoked": false,
+"deprecated": false
+},
+"T1546.001": {
+"name": "Change Default File Association",
+"revoked": false,
+"deprecated": false
+},
+"T1546.002": {
+"name": "Screensaver",
+"revoked": false,
+"deprecated": false
+},
+"T1546.003": {
+"name": "Windows Management Instrumentation Event Subscription",
+"revoked": false,
+"deprecated": false
+},
+"T1546.004": {
+"name": "Unix Shell Configuration Modification",
+"revoked": false,
+"deprecated": false
+},
+"T1546.005": {
+"name": "Trap",
+"revoked": false,
+"deprecated": false
+},
+"T1546.006": {
+"name": "LC_LOAD_DYLIB Addition",
+"revoked": false,
+"deprecated": false
+},
+"T1546.007": {
+"name": "Netsh Helper DLL",
+"revoked": false,
+"deprecated": false
+},
+"T1546.008": {
+"name": "Accessibility Features",
+"revoked": false,
+"deprecated": false
+},
+"T1546.009": {
+"name": "AppCert DLLs",
+"revoked": false,
+"deprecated": false
+},
+"T1546.010": {
+"name": "AppInit DLLs",
+"revoked": false,
+"deprecated": false
+},
+"T1546.011": {
+"name": "Application Shimming",
+"revoked": false,
+"deprecated": false
+},
+"T1546.012": {
+"name": "Image File Execution Options Injection",
+"revoked": false,
+"deprecated": false
+},
+"T1546.013": {
+"name": "PowerShell Profile",
+"revoked": false,
+"deprecated": false
+},
+"T1546.014": {
+"name": "Emond",
+"revoked": false,
+"deprecated": false
+},
+"T1546.015": {
+"name": "Component Object Model Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1546.016": {
+"name": "Installer Packages",
+"revoked": false,
+"deprecated": false
+},
+"T1546.017": {
+"name": "Udev Rules",
+"revoked": false,
+"deprecated": false
+},
+"T1546.018": {
+"name": "Python Startup Hooks",
+"revoked": false,
+"deprecated": false
+},
+"T1547": {
+"name": "Boot or Logon Autostart Execution",
+"revoked": false,
+"deprecated": false
+},
+"T1547.001": {
+"name": "Registry Run Keys / Startup Folder",
+"revoked": false,
+"deprecated": false
+},
+"T1547.002": {
+"name": "Authentication Package",
+"revoked": false,
+"deprecated": false
+},
+"T1547.003": {
+"name": "Time Providers",
+"revoked": false,
+"deprecated": false
+},
+"T1547.004": {
+"name": "Winlogon Helper DLL",
+"revoked": false,
+"deprecated": false
+},
+"T1547.005": {
+"name": "Security Support Provider",
+"revoked": false,
+"deprecated": false
+},
+"T1547.006": {
+"name": "Kernel Modules and Extensions",
+"revoked": false,
+"deprecated": false
+},
+"T1547.007": {
+"name": "Re-opened Applications",
+"revoked": false,
+"deprecated": false
+},
+"T1547.008": {
+"name": "LSASS Driver",
+"revoked": false,
+"deprecated": false
+},
+"T1547.009": {
+"name": "Shortcut Modification",
+"revoked": false,
+"deprecated": false
+},
+"T1547.010": {
+"name": "Port Monitors",
+"revoked": false,
+"deprecated": false
+},
+"T1547.011": {
+"name": "Plist Modification",
+"revoked": true,
+"deprecated": false
+},
+"T1547.012": {
+"name": "Print Processors",
+"revoked": false,
+"deprecated": false
+},
+"T1547.013": {
+"name": "XDG Autostart Entries",
+"revoked": false,
+"deprecated": false
+},
+"T1547.014": {
+"name": "Active Setup",
+"revoked": false,
+"deprecated": false
+},
+"T1547.015": {
+"name": "Login Items",
+"revoked": false,
+"deprecated": false
+},
+"T1548": {
+"name": "Abuse Elevation Control Mechanism",
+"revoked": false,
+"deprecated": false
+},
+"T1548.001": {
+"name": "Setuid and Setgid",
+"revoked": false,
+"deprecated": false
+},
+"T1548.002": {
+"name": "Bypass User Account Control",
+"revoked": false,
+"deprecated": false
+},
+"T1548.003": {
+"name": "Sudo and Sudo Caching",
+"revoked": false,
+"deprecated": false
+},
+"T1548.004": {
+"name": "Elevated Execution with Prompt",
+"revoked": false,
+"deprecated": false
+},
+"T1548.005": {
+"name": "Temporary Elevated Cloud Access",
+"revoked": false,
+"deprecated": false
+},
+"T1548.006": {
+"name": "TCC Manipulation",
+"revoked": false,
+"deprecated": false
+},
+"T1550": {
+"name": "Use Alternate Authentication Material",
+"revoked": false,
+"deprecated": false
+},
+"T1550.001": {
+"name": "Application Access Token",
+"revoked": false,
+"deprecated": false
+},
+"T1550.002": {
+"name": "Pass the Hash",
+"revoked": false,
+"deprecated": false
+},
+"T1550.003": {
+"name": "Pass the Ticket",
+"revoked": false,
+"deprecated": false
+},
+"T1550.004": {
+"name": "Web Session Cookie",
+"revoked": false,
+"deprecated": false
+},
+"T1552": {
+"name": "Unsecured Credentials",
+"revoked": false,
+"deprecated": false
+},
+"T1552.001": {
+"name": "Credentials In Files",
+"revoked": false,
+"deprecated": false
+},
+"T1552.002": {
+"name": "Credentials in Registry",
+"revoked": false,
+"deprecated": false
+},
+"T1552.003": {
+"name": "Shell History",
+"revoked": false,
+"deprecated": false
+},
+"T1552.004": {
+"name": "Private Keys",
+"revoked": false,
+"deprecated": false
+},
+"T1552.005": {
+"name": "Cloud Instance Metadata API",
+"revoked": false,
+"deprecated": false
+},
+"T1552.006": {
+"name": "Group Policy Preferences",
+"revoked": false,
+"deprecated": false
+},
+"T1552.007": {
+"name": "Container API",
+"revoked": false,
+"deprecated": false
+},
+"T1552.008": {
+"name": "Chat Messages",
+"revoked": false,
+"deprecated": false
+},
+"T1553": {
+"name": "Subvert Trust Controls",
+"revoked": false,
+"deprecated": false
+},
+"T1553.001": {
+"name": "Gatekeeper Bypass",
+"revoked": false,
+"deprecated": false
+},
+"T1553.002": {
+"name": "Code Signing",
+"revoked": false,
+"deprecated": false
+},
+"T1553.003": {
+"name": "SIP and Trust Provider Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1553.004": {
+"name": "Install Root Certificate",
+"revoked": false,
+"deprecated": false
+},
+"T1553.005": {
+"name": "Mark-of-the-Web Bypass",
+"revoked": false,
+"deprecated": false
+},
+"T1553.006": {
+"name": "Code Signing Policy Modification",
+"revoked": false,
+"deprecated": false
+},
+"T1554": {
+"name": "Compromise Host Software Binary",
+"revoked": false,
+"deprecated": false
+},
+"T1555": {
+"name": "Credentials from Password Stores",
+"revoked": false,
+"deprecated": false
+},
+"T1555.001": {
+"name": "Keychain",
+"revoked": false,
+"deprecated": false
+},
+"T1555.002": {
+"name": "Securityd Memory",
+"revoked": false,
+"deprecated": false
+},
+"T1555.003": {
+"name": "Credentials from Web Browsers",
+"revoked": false,
+"deprecated": false
+},
+"T1555.004": {
+"name": "Windows Credential Manager",
+"revoked": false,
+"deprecated": false
+},
+"T1555.005": {
+"name": "Password Managers",
+"revoked": false,
+"deprecated": false
+},
+"T1555.006": {
+"name": "Cloud Secrets Management Stores",
+"revoked": false,
+"deprecated": false
+},
+"T1556": {
+"name": "Modify Authentication Process",
+"revoked": false,
+"deprecated": false
+},
+"T1556.001": {
+"name": "Domain Controller Authentication",
+"revoked": false,
+"deprecated": false
+},
+"T1556.002": {
+"name": "Password Filter DLL",
+"revoked": false,
+"deprecated": false
+},
+"T1556.003": {
+"name": "Pluggable Authentication Modules",
+"revoked": false,
+"deprecated": false
+},
+"T1556.004": {
+"name": "Network Device Authentication",
+"revoked": false,
+"deprecated": false
+},
+"T1556.005": {
+"name": "Reversible Encryption",
+"revoked": false,
+"deprecated": false
+},
+"T1556.006": {
+"name": "Multi-Factor Authentication",
+"revoked": false,
+"deprecated": false
+},
+"T1556.007": {
+"name": "Hybrid Identity",
+"revoked": false,
+"deprecated": false
+},
+"T1556.008": {
+"name": "Network Provider DLL",
+"revoked": false,
+"deprecated": false
+},
+"T1556.009": {
+"name": "Conditional Access Policies",
+"revoked": false,
+"deprecated": false
+},
+"T1557": {
+"name": "Adversary-in-the-Middle",
+"revoked": false,
+"deprecated": false
+},
+"T1557.001": {
+"name": "Name Resolution Poisoning and SMB Relay",
+"revoked": false,
+"deprecated": false
+},
+"T1557.002": {
+"name": "ARP Cache Poisoning",
+"revoked": false,
+"deprecated": false
+},
+"T1557.003": {
+"name": "DHCP Spoofing",
+"revoked": false,
+"deprecated": false
+},
+"T1557.004": {
+"name": "Evil Twin",
+"revoked": false,
+"deprecated": false
+},
+"T1558": {
+"name": "Steal or Forge Kerberos Tickets",
+"revoked": false,
+"deprecated": false
+},
+"T1558.001": {
+"name": "Golden Ticket",
+"revoked": false,
+"deprecated": false
+},
+"T1558.002": {
+"name": "Silver Ticket",
+"revoked": false,
+"deprecated": false
+},
+"T1558.003": {
+"name": "Kerberoasting",
+"revoked": false,
+"deprecated": false
+},
+"T1558.004": {
+"name": "AS-REP Roasting",
+"revoked": false,
+"deprecated": false
+},
+"T1558.005": {
+"name": "Ccache Files",
+"revoked": false,
+"deprecated": false
+},
+"T1559": {
+"name": "Inter-Process Communication",
+"revoked": false,
+"deprecated": false
+},
+"T1559.001": {
+"name": "Component Object Model",
+"revoked": false,
+"deprecated": false
+},
+"T1559.002": {
+"name": "Dynamic Data Exchange",
+"revoked": false,
+"deprecated": false
+},
+"T1559.003": {
+"name": "XPC Services",
+"revoked": false,
+"deprecated": false
+},
+"T1560": {
+"name": "Archive Collected Data",
+"revoked": false,
+"deprecated": false
+},
+"T1560.001": {
+"name": "Archive via Utility",
+"revoked": false,
+"deprecated": false
+},
+"T1560.002": {
+"name": "Archive via Library",
+"revoked": false,
+"deprecated": false
+},
+"T1560.003": {
+"name": "Archive via Custom Method",
+"revoked": false,
+"deprecated": false
+},
+"T1561": {
+"name": "Disk Wipe",
+"revoked": false,
+"deprecated": false
+},
+"T1561.001": {
+"name": "Disk Content Wipe",
+"revoked": false,
+"deprecated": false
+},
+"T1561.002": {
+"name": "Disk Structure Wipe",
+"revoked": false,
+"deprecated": false
+},
+"T1562": {
+"name": "Impair Defenses",
+"revoked": true,
+"deprecated": false
+},
+"T1562.001": {
+"name": "Disable or Modify Tools",
+"revoked": true,
+"deprecated": false
+},
+"T1562.002": {
+"name": "Disable Windows Event Logging",
+"revoked": true,
+"deprecated": false
+},
+"T1562.003": {
+"name": "Impair Command History Logging",
+"revoked": true,
+"deprecated": false
+},
+"T1562.004": {
+"name": "Disable or Modify System Firewall",
+"revoked": true,
+"deprecated": false
+},
+"T1562.006": {
+"name": "Indicator Blocking",
+"revoked": true,
+"deprecated": false
+},
+"T1562.007": {
+"name": "Disable or Modify Cloud Firewall",
+"revoked": true,
+"deprecated": false
+},
+"T1562.008": {
+"name": "Disable or Modify Cloud Logs",
+"revoked": true,
+"deprecated": false
+},
+"T1562.009": {
+"name": "Safe Mode Boot",
+"revoked": true,
+"deprecated": false
+},
+"T1562.010": {
+"name": "Downgrade Attack",
+"revoked": true,
+"deprecated": false
+},
+"T1562.011": {
+"name": "Spoof Security Alerting",
+"revoked": true,
+"deprecated": false
+},
+"T1562.012": {
+"name": "Disable or Modify Linux Audit System",
+"revoked": true,
+"deprecated": false
+},
+"T1562.013": {
+"name": "Disable or Modify Network Device Firewall",
+"revoked": true,
+"deprecated": false
+},
+"T1563": {
+"name": "Remote Service Session Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1563.001": {
+"name": "SSH Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1563.002": {
+"name": "RDP Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1564": {
+"name": "Hide Artifacts",
+"revoked": false,
+"deprecated": false
+},
+"T1564.001": {
+"name": "Hidden Files and Directories",
+"revoked": false,
+"deprecated": false
+},
+"T1564.002": {
+"name": "Hidden Users",
+"revoked": false,
+"deprecated": false
+},
+"T1564.003": {
+"name": "Hidden Window",
+"revoked": false,
+"deprecated": false
+},
+"T1564.004": {
+"name": "NTFS File Attributes",
+"revoked": false,
+"deprecated": false
+},
+"T1564.005": {
+"name": "Hidden File System",
+"revoked": false,
+"deprecated": false
+},
+"T1564.006": {
+"name": "Run Virtual Instance",
+"revoked": false,
+"deprecated": false
+},
+"T1564.007": {
+"name": "VBA Stomping",
+"revoked": false,
+"deprecated": false
+},
+"T1564.008": {
+"name": "Email Hiding Rules",
+"revoked": false,
+"deprecated": false
+},
+"T1564.009": {
+"name": "Resource Forking",
+"revoked": false,
+"deprecated": false
+},
+"T1564.010": {
+"name": "Process Argument Spoofing",
+"revoked": false,
+"deprecated": false
+},
+"T1564.011": {
+"name": "Ignore Process Interrupts",
+"revoked": false,
+"deprecated": false
+},
+"T1564.012": {
+"name": "File/Path Exclusions",
+"revoked": false,
+"deprecated": false
+},
+"T1564.013": {
+"name": "Bind Mounts",
+"revoked": false,
+"deprecated": false
+},
+"T1564.014": {
+"name": "Extended Attributes",
+"revoked": false,
+"deprecated": false
+},
+"T1565": {
+"name": "Data Manipulation",
+"revoked": false,
+"deprecated": false
+},
+"T1565.001": {
+"name": "Stored Data Manipulation",
+"revoked": false,
+"deprecated": false
+},
+"T1565.002": {
+"name": "Transmitted Data Manipulation",
+"revoked": false,
+"deprecated": false
+},
+"T1565.003": {
+"name": "Runtime Data Manipulation",
+"revoked": false,
+"deprecated": false
+},
+"T1566": {
+"name": "Phishing",
+"revoked": false,
+"deprecated": false
+},
+"T1566.001": {
+"name": "Spearphishing Attachment",
+"revoked": false,
+"deprecated": false
+},
+"T1566.002": {
+"name": "Spearphishing Link",
+"revoked": false,
+"deprecated": false
+},
+"T1566.003": {
+"name": "Spearphishing via Service",
+"revoked": false,
+"deprecated": false
+},
+"T1566.004": {
+"name": "Spearphishing Voice",
+"revoked": false,
+"deprecated": false
+},
+"T1567": {
+"name": "Exfiltration Over Web Service",
+"revoked": false,
+"deprecated": false
+},
+"T1567.001": {
+"name": "Exfiltration to Code Repository",
+"revoked": false,
+"deprecated": false
+},
+"T1567.002": {
+"name": "Exfiltration to Cloud Storage",
+"revoked": false,
+"deprecated": false
+},
+"T1567.003": {
+"name": "Exfiltration to Text Storage Sites",
+"revoked": false,
+"deprecated": false
+},
+"T1567.004": {
+"name": "Exfiltration Over Webhook",
+"revoked": false,
+"deprecated": false
+},
+"T1568": {
+"name": "Dynamic Resolution",
+"revoked": false,
+"deprecated": false
+},
+"T1568.001": {
+"name": "Fast Flux DNS",
+"revoked": false,
+"deprecated": false
+},
+"T1568.002": {
+"name": "Domain Generation Algorithms",
+"revoked": false,
+"deprecated": false
+},
+"T1568.003": {
+"name": "DNS Calculation",
+"revoked": false,
+"deprecated": false
+},
+"T1569": {
+"name": "System Services",
+"revoked": false,
+"deprecated": false
+},
+"T1569.001": {
+"name": "Launchctl",
+"revoked": false,
+"deprecated": false
+},
+"T1569.002": {
+"name": "Service Execution",
+"revoked": false,
+"deprecated": false
+},
+"T1569.003": {
+"name": "Systemctl",
+"revoked": false,
+"deprecated": false
+},
+"T1570": {
+"name": "Lateral Tool Transfer",
+"revoked": false,
+"deprecated": false
+},
+"T1571": {
+"name": "Non-Standard Port",
+"revoked": false,
+"deprecated": false
+},
+"T1572": {
+"name": "Protocol Tunneling",
+"revoked": false,
+"deprecated": false
+},
+"T1573": {
+"name": "Encrypted Channel",
+"revoked": false,
+"deprecated": false
+},
+"T1573.001": {
+"name": "Symmetric Cryptography",
+"revoked": false,
+"deprecated": false
+},
+"T1573.002": {
+"name": "Asymmetric Cryptography",
+"revoked": false,
+"deprecated": false
+},
+"T1574": {
+"name": "Hijack Execution Flow",
+"revoked": false,
+"deprecated": false
+},
+"T1574.001": {
+"name": "DLL",
+"revoked": false,
+"deprecated": false
+},
+"T1574.002": {
+"name": "DLL Side-Loading",
+"revoked": true,
+"deprecated": false
+},
+"T1574.004": {
+"name": "Dylib Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1574.005": {
+"name": "Executable Installer File Permissions Weakness",
+"revoked": false,
+"deprecated": false
+},
+"T1574.006": {
+"name": "Dynamic Linker Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1574.007": {
+"name": "Path Interception by PATH Environment Variable",
+"revoked": false,
+"deprecated": false
+},
+"T1574.008": {
+"name": "Path Interception by Search Order Hijacking",
+"revoked": false,
+"deprecated": false
+},
+"T1574.009": {
+"name": "Path Interception by Unquoted Path",
+"revoked": false,
+"deprecated": false
+},
+"T1574.010": {
+"name": "Services File Permissions Weakness",
+"revoked": false,
+"deprecated": false
+},
+"T1574.011": {
+"name": "Services Registry Permissions Weakness",
+"revoked": false,
+"deprecated": false
+},
+"T1574.012": {
+"name": "COR_PROFILER",
+"revoked": false,
+"deprecated": false
+},
+"T1574.013": {
+"name": "KernelCallbackTable",
+"revoked": false,
+"deprecated": false
+},
+"T1574.014": {
+"name": "AppDomainManager",
+"revoked": false,
+"deprecated": false
+},
+"T1578": {
+"name": "Modify Cloud Compute Infrastructure",
+"revoked": false,
+"deprecated": false
+},
+"T1578.001": {
+"name": "Create Snapshot",
+"revoked": false,
+"deprecated": false
+},
+"T1578.002": {
+"name": "Create Cloud Instance",
+"revoked": false,
+"deprecated": false
+},
+"T1578.003": {
+"name": "Delete Cloud Instance",
+"revoked": false,
+"deprecated": false
+},
+"T1578.004": {
+"name": "Revert Cloud Instance",
+"revoked": false,
+"deprecated": false
+},
+"T1578.005": {
+"name": "Modify Cloud Compute Configurations",
+"revoked": false,
+"deprecated": false
+},
+"T1580": {
+"name": "Cloud Infrastructure Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1583": {
+"name": "Acquire Infrastructure",
+"revoked": false,
+"deprecated": false
+},
+"T1583.001": {
+"name": "Domains",
+"revoked": false,
+"deprecated": false
+},
+"T1583.002": {
+"name": "DNS Server",
+"revoked": false,
+"deprecated": false
+},
+"T1583.003": {
+"name": "Virtual Private Server",
+"revoked": false,
+"deprecated": false
+},
+"T1583.004": {
+"name": "Server",
+"revoked": false,
+"deprecated": false
+},
+"T1583.005": {
+"name": "Botnet",
+"revoked": false,
+"deprecated": false
+},
+"T1583.006": {
+"name": "Web Services",
+"revoked": false,
+"deprecated": false
+},
+"T1583.007": {
+"name": "Serverless",
+"revoked": false,
+"deprecated": false
+},
+"T1583.008": {
+"name": "Malvertising",
+"revoked": false,
+"deprecated": false
+},
+"T1584": {
+"name": "Compromise Infrastructure",
+"revoked": false,
+"deprecated": false
+},
+"T1584.001": {
+"name": "Domains",
+"revoked": false,
+"deprecated": false
+},
+"T1584.002": {
+"name": "DNS Server",
+"revoked": false,
+"deprecated": false
+},
+"T1584.003": {
+"name": "Virtual Private Server",
+"revoked": false,
+"deprecated": false
+},
+"T1584.004": {
+"name": "Server",
+"revoked": false,
+"deprecated": false
+},
+"T1584.005": {
+"name": "Botnet",
+"revoked": false,
+"deprecated": false
+},
+"T1584.006": {
+"name": "Web Services",
+"revoked": false,
+"deprecated": false
+},
+"T1584.007": {
+"name": "Serverless",
+"revoked": false,
+"deprecated": false
+},
+"T1584.008": {
+"name": "Network Devices",
+"revoked": false,
+"deprecated": false
+},
+"T1585": {
+"name": "Establish Accounts",
+"revoked": false,
+"deprecated": false
+},
+"T1585.001": {
+"name": "Social Media Accounts",
+"revoked": false,
+"deprecated": false
+},
+"T1585.002": {
+"name": "Email Accounts",
+"revoked": false,
+"deprecated": false
+},
+"T1585.003": {
+"name": "Cloud Accounts",
+"revoked": false,
+"deprecated": false
+},
+"T1586": {
+"name": "Compromise Accounts",
+"revoked": false,
+"deprecated": false
+},
+"T1586.001": {
+"name": "Social Media Accounts",
+"revoked": false,
+"deprecated": false
+},
+"T1586.002": {
+"name": "Email Accounts",
+"revoked": false,
+"deprecated": false
+},
+"T1586.003": {
+"name": "Cloud Accounts",
+"revoked": false,
+"deprecated": false
+},
+"T1587": {
+"name": "Develop Capabilities",
+"revoked": false,
+"deprecated": false
+},
+"T1587.001": {
+"name": "Malware",
+"revoked": false,
+"deprecated": false
+},
+"T1587.002": {
+"name": "Code Signing Certificates",
+"revoked": false,
+"deprecated": false
+},
+"T1587.003": {
+"name": "Digital Certificates",
+"revoked": false,
+"deprecated": false
+},
+"T1587.004": {
+"name": "Exploits",
+"revoked": false,
+"deprecated": false
+},
+"T1588": {
+"name": "Obtain Capabilities",
+"revoked": false,
+"deprecated": false
+},
+"T1588.001": {
+"name": "Malware",
+"revoked": false,
+"deprecated": false
+},
+"T1588.002": {
+"name": "Tool",
+"revoked": false,
+"deprecated": false
+},
+"T1588.003": {
+"name": "Code Signing Certificates",
+"revoked": false,
+"deprecated": false
+},
+"T1588.004": {
+"name": "Digital Certificates",
+"revoked": false,
+"deprecated": false
+},
+"T1588.005": {
+"name": "Exploits",
+"revoked": false,
+"deprecated": false
+},
+"T1588.006": {
+"name": "Vulnerabilities",
+"revoked": false,
+"deprecated": false
+},
+"T1588.007": {
+"name": "Artificial Intelligence",
+"revoked": false,
+"deprecated": false
+},
+"T1589": {
+"name": "Gather Victim Identity Information",
+"revoked": false,
+"deprecated": false
+},
+"T1589.001": {
+"name": "Credentials",
+"revoked": false,
+"deprecated": false
+},
+"T1589.002": {
+"name": "Email Addresses",
+"revoked": false,
+"deprecated": false
+},
+"T1589.003": {
+"name": "Employee Names",
+"revoked": false,
+"deprecated": false
+},
+"T1590": {
+"name": "Gather Victim Network Information",
+"revoked": false,
+"deprecated": false
+},
+"T1590.001": {
+"name": "Domain Properties",
+"revoked": false,
+"deprecated": false
+},
+"T1590.002": {
+"name": "DNS",
+"revoked": false,
+"deprecated": false
+},
+"T1590.003": {
+"name": "Network Trust Dependencies",
+"revoked": false,
+"deprecated": false
+},
+"T1590.004": {
+"name": "Network Topology",
+"revoked": false,
+"deprecated": false
+},
+"T1590.005": {
+"name": "IP Addresses",
+"revoked": false,
+"deprecated": false
+},
+"T1590.006": {
+"name": "Network Security Appliances",
+"revoked": false,
+"deprecated": false
+},
+"T1591": {
+"name": "Gather Victim Org Information",
+"revoked": false,
+"deprecated": false
+},
+"T1591.001": {
+"name": "Determine Physical Locations",
+"revoked": false,
+"deprecated": false
+},
+"T1591.002": {
+"name": "Business Relationships",
+"revoked": false,
+"deprecated": false
+},
+"T1591.003": {
+"name": "Identify Business Tempo",
+"revoked": false,
+"deprecated": false
+},
+"T1591.004": {
+"name": "Identify Roles",
+"revoked": false,
+"deprecated": false
+},
+"T1592": {
+"name": "Gather Victim Host Information",
+"revoked": false,
+"deprecated": false
+},
+"T1592.001": {
+"name": "Hardware",
+"revoked": false,
+"deprecated": false
+},
+"T1592.002": {
+"name": "Software",
+"revoked": false,
+"deprecated": false
+},
+"T1592.003": {
+"name": "Firmware",
+"revoked": false,
+"deprecated": false
+},
+"T1592.004": {
+"name": "Client Configurations",
+"revoked": false,
+"deprecated": false
+},
+"T1593": {
+"name": "Search Open Websites/Domains",
+"revoked": false,
+"deprecated": false
+},
+"T1593.001": {
+"name": "Social Media",
+"revoked": false,
+"deprecated": false
+},
+"T1593.002": {
+"name": "Search Engines",
+"revoked": false,
+"deprecated": false
+},
+"T1593.003": {
+"name": "Code Repositories",
+"revoked": false,
+"deprecated": false
+},
+"T1594": {
+"name": "Search Victim-Owned Websites",
+"revoked": false,
+"deprecated": false
+},
+"T1595": {
+"name": "Active Scanning",
+"revoked": false,
+"deprecated": false
+},
+"T1595.001": {
+"name": "Scanning IP Blocks",
+"revoked": false,
+"deprecated": false
+},
+"T1595.002": {
+"name": "Vulnerability Scanning",
+"revoked": false,
+"deprecated": false
+},
+"T1595.003": {
+"name": "Wordlist Scanning",
+"revoked": false,
+"deprecated": false
+},
+"T1596": {
+"name": "Search Open Technical Databases",
+"revoked": false,
+"deprecated": false
+},
+"T1596.001": {
+"name": "DNS/Passive DNS",
+"revoked": false,
+"deprecated": false
+},
+"T1596.002": {
+"name": "WHOIS",
+"revoked": false,
+"deprecated": false
+},
+"T1596.003": {
+"name": "Digital Certificates",
+"revoked": false,
+"deprecated": false
+},
+"T1596.004": {
+"name": "CDNs",
+"revoked": false,
+"deprecated": false
+},
+"T1596.005": {
+"name": "Scan Databases",
+"revoked": false,
+"deprecated": false
+},
+"T1597": {
+"name": "Search Closed Sources",
+"revoked": false,
+"deprecated": false
+},
+"T1597.001": {
+"name": "Threat Intel Vendors",
+"revoked": false,
+"deprecated": false
+},
+"T1597.002": {
+"name": "Purchase Technical Data",
+"revoked": false,
+"deprecated": false
+},
+"T1598": {
+"name": "Phishing for Information",
+"revoked": false,
+"deprecated": false
+},
+"T1598.001": {
+"name": "Spearphishing Service",
+"revoked": false,
+"deprecated": false
+},
+"T1598.002": {
+"name": "Spearphishing Attachment",
+"revoked": false,
+"deprecated": false
+},
+"T1598.003": {
+"name": "Spearphishing Link",
+"revoked": false,
+"deprecated": false
+},
+"T1598.004": {
+"name": "Spearphishing Voice",
+"revoked": false,
+"deprecated": false
+},
+"T1599": {
+"name": "Network Boundary Bridging",
+"revoked": false,
+"deprecated": false
+},
+"T1599.001": {
+"name": "Network Address Translation Traversal",
+"revoked": false,
+"deprecated": false
+},
+"T1600": {
+"name": "Weaken Encryption",
+"revoked": false,
+"deprecated": false
+},
+"T1600.001": {
+"name": "Reduce Key Space",
+"revoked": false,
+"deprecated": false
+},
+"T1600.002": {
+"name": "Disable Crypto Hardware",
+"revoked": false,
+"deprecated": false
+},
+"T1601": {
+"name": "Modify System Image",
+"revoked": false,
+"deprecated": false
+},
+"T1601.001": {
+"name": "Patch System Image",
+"revoked": false,
+"deprecated": false
+},
+"T1601.002": {
+"name": "Downgrade System Image",
+"revoked": false,
+"deprecated": false
+},
+"T1602": {
+"name": "Data from Configuration Repository",
+"revoked": false,
+"deprecated": false
+},
+"T1602.001": {
+"name": "SNMP (MIB Dump)",
+"revoked": false,
+"deprecated": false
+},
+"T1602.002": {
+"name": "Network Device Configuration Dump",
+"revoked": false,
+"deprecated": false
+},
+"T1606": {
+"name": "Forge Web Credentials",
+"revoked": false,
+"deprecated": false
+},
+"T1606.001": {
+"name": "Web Cookies",
+"revoked": false,
+"deprecated": false
+},
+"T1606.002": {
+"name": "SAML Tokens",
+"revoked": false,
+"deprecated": false
+},
+"T1608": {
+"name": "Stage Capabilities",
+"revoked": false,
+"deprecated": false
+},
+"T1608.001": {
+"name": "Upload Malware",
+"revoked": false,
+"deprecated": false
+},
+"T1608.002": {
+"name": "Upload Tool",
+"revoked": false,
+"deprecated": false
+},
+"T1608.003": {
+"name": "Install Digital Certificate",
+"revoked": false,
+"deprecated": false
+},
+"T1608.004": {
+"name": "Drive-by Target",
+"revoked": false,
+"deprecated": false
+},
+"T1608.005": {
+"name": "Link Target",
+"revoked": false,
+"deprecated": false
+},
+"T1608.006": {
+"name": "SEO Poisoning",
+"revoked": false,
+"deprecated": false
+},
+"T1608.007": {
+"name": "AI Result Poisoning",
+"revoked": false,
+"deprecated": false
+},
+"T1609": {
+"name": "Container Administration Command",
+"revoked": false,
+"deprecated": false
+},
+"T1610": {
+"name": "Deploy Container",
+"revoked": false,
+"deprecated": false
+},
+"T1611": {
+"name": "Escape to Host",
+"revoked": false,
+"deprecated": false
+},
+"T1612": {
+"name": "Build Image on Host",
+"revoked": false,
+"deprecated": false
+},
+"T1613": {
+"name": "Container and Resource Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1614": {
+"name": "System Location Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1614.001": {
+"name": "System Language Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1615": {
+"name": "Group Policy Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1619": {
+"name": "Cloud Storage Object Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1620": {
+"name": "Reflective Code Loading",
+"revoked": false,
+"deprecated": false
+},
+"T1621": {
+"name": "Multi-Factor Authentication Request Generation",
+"revoked": false,
+"deprecated": false
+},
+"T1622": {
+"name": "Debugger Evasion",
+"revoked": false,
+"deprecated": false
+},
+"T1647": {
+"name": "Plist File Modification",
+"revoked": false,
+"deprecated": false
+},
+"T1648": {
+"name": "Serverless Execution",
+"revoked": false,
+"deprecated": false
+},
+"T1649": {
+"name": "Steal or Forge Authentication Certificates",
+"revoked": false,
+"deprecated": false
+},
+"T1650": {
+"name": "Acquire Access",
+"revoked": false,
+"deprecated": false
+},
+"T1651": {
+"name": "Cloud Administration Command",
+"revoked": false,
+"deprecated": false
+},
+"T1652": {
+"name": "Device Driver Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1653": {
+"name": "Power Settings",
+"revoked": false,
+"deprecated": false
+},
+"T1654": {
+"name": "Log Enumeration",
+"revoked": false,
+"deprecated": false
+},
+"T1656": {
+"name": "Impersonation",
+"revoked": true,
+"deprecated": false
+},
+"T1657": {
+"name": "Financial Theft",
+"revoked": false,
+"deprecated": false
+},
+"T1659": {
+"name": "Content Injection",
+"revoked": false,
+"deprecated": false
+},
+"T1665": {
+"name": "Hide Infrastructure",
+"revoked": false,
+"deprecated": false
+},
+"T1666": {
+"name": "Modify Cloud Resource Hierarchy",
+"revoked": false,
+"deprecated": false
+},
+"T1667": {
+"name": "Email Bombing",
+"revoked": false,
+"deprecated": false
+},
+"T1668": {
+"name": "Exclusive Control",
+"revoked": false,
+"deprecated": false
+},
+"T1669": {
+"name": "Wi-Fi Networks",
+"revoked": false,
+"deprecated": false
+},
+"T1671": {
+"name": "Cloud Application Integration",
+"revoked": false,
+"deprecated": false
+},
+"T1672": {
+"name": "Email Spoofing",
+"revoked": true,
+"deprecated": false
+},
+"T1673": {
+"name": "Virtual Machine Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1674": {
+"name": "Input Injection",
+"revoked": false,
+"deprecated": false
+},
+"T1675": {
+"name": "ESXi Administration Command",
+"revoked": false,
+"deprecated": false
+},
+"T1677": {
+"name": "Poisoned Pipeline Execution",
+"revoked": false,
+"deprecated": false
+},
+"T1678": {
+"name": "Delay Execution",
+"revoked": false,
+"deprecated": false
+},
+"T1679": {
+"name": "Selective Exclusion",
+"revoked": false,
+"deprecated": false
+},
+"T1680": {
+"name": "Local Storage Discovery",
+"revoked": false,
+"deprecated": false
+},
+"T1681": {
+"name": "Search Threat Vendor Data",
+"revoked": false,
+"deprecated": false
+},
+"T1682": {
+"name": "Query Public AI Services",
+"revoked": false,
+"deprecated": false
+},
+"T1683": {
+"name": "Generate Content",
+"revoked": false,
+"deprecated": false
+},
+"T1683.001": {
+"name": "Written Content",
+"revoked": false,
+"deprecated": false
+},
+"T1683.002": {
+"name": "Audio-Visual Content",
+"revoked": false,
+"deprecated": false
+},
+"T1684": {
+"name": "Social Engineering",
+"revoked": false,
+"deprecated": false
+},
+"T1684.001": {
+"name": "Impersonation",
+"revoked": false,
+"deprecated": false
+},
+"T1684.002": {
+"name": "Email Spoofing",
+"revoked": false,
+"deprecated": false
+},
+"T1685": {
+"name": "Disable or Modify Tools",
+"revoked": false,
+"deprecated": false
+},
+"T1685.001": {
+"name": "Disable or Modify Windows Event Log",
+"revoked": false,
+"deprecated": false
+},
+"T1685.002": {
+"name": "Disable or Modify Cloud Log",
+"revoked": false,
+"deprecated": false
+},
+"T1685.003": {
+"name": "Modify or Spoof Tool UI",
+"revoked": false,
+"deprecated": false
+},
+"T1685.004": {
+"name": "Disable or Modify Linux Audit System Log",
+"revoked": false,
+"deprecated": false
+},
+"T1685.005": {
+"name": "Clear Windows Event Logs",
+"revoked": false,
+"deprecated": false
+},
+"T1685.006": {
+"name": "Clear Linux or Mac System Logs",
+"revoked": false,
+"deprecated": false
+},
+"T1685.007": {
+"name": "Impair Autonomous Defenses",
+"revoked": false,
+"deprecated": false
+},
+"T1686": {
+"name": "Disable or Modify System Firewall",
+"revoked": false,
+"deprecated": false
+},
+"T1686.001": {
+"name": "Cloud Firewall",
+"revoked": false,
+"deprecated": false
+},
+"T1686.002": {
+"name": "Network Device Firewall",
+"revoked": false,
+"deprecated": false
+},
+"T1686.003": {
+"name": "Windows Host Firewall",
+"revoked": false,
+"deprecated": false
+},
+"T1687": {
+"name": "Exploitation for Defense Impairment",
+"revoked": false,
+"deprecated": false
+},
+"T1688": {
+"name": "Safe Mode Boot",
+"revoked": false,
+"deprecated": false
+},
+"T1689": {
+"name": "Downgrade Attack",
+"revoked": false,
+"deprecated": false
+},
+"T1690": {
+"name": "Prevent Command History Logging",
+"revoked": false,
+"deprecated": false
+},
+"T1696": {
+"name": "Anti-Automation Evasion",
+"revoked": false,
+"deprecated": false
+},
+"T1696.001": {
+"name": "Automate CAPTCHA Completion",
+"revoked": false,
+"deprecated": false
+},
+"T1696.002": {
+"name": "Avoid CAPTCHA",
+"revoked": false,
+"deprecated": false
+},
+"T1697": {
+"name": "Steal Application Specific Passwords",
+"revoked": false,
+"deprecated": false
+},
+"T1698": {
+"name": "Indirect Prompt Injection",
+"revoked": false,
+"deprecated": false
+},
+"T1699": {
+"name": "Direct Prompt Injection",
+"revoked": false,
+"deprecated": false
+},
+"T1700": {
+"name": "AI-Enabled Exfiltration",
+"revoked": false,
+"deprecated": false
+}
+}
+}

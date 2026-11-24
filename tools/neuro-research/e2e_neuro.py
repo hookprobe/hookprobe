@@ -125,7 +125,7 @@ def build(out, pcaps, sample, seed):
 
 
 def score(out, run_path):
-    import run_eval, l0_thin
+    import run_eval, l0_thin, grounding
     cases = {json.loads(l)["id"]: json.loads(l) for l in open(os.path.join(out, "cases.jsonl"))}
     run = json.load(open(run_path)); rows = run["results"] if isinstance(run, dict) else run
     lat, pps, ppn, gen, ok = [], [], [], [], collections.Counter()
@@ -141,6 +141,8 @@ def score(out, run_path):
         for k in ("schema_ok", "citation_ok"):
             ok[k] += bool(s.get(k))
         ok["hallucination_free"] += not s.get("hallucinated_entities")
+        ok["technique_ids_real"] += grounding.technique_check(o, c["context"])["ok"]       # no invented T-ids
+        ok["services_on_cards"] += grounding.service_check(o, c["context"])["ok"]          # no service without its port
         ok["fallback"] += bool(o.get("_guard_fallback"))
         o2 = l0_thin.compose(c, o)
         ok["rule_T_fired"] += bool(o2.get("_l0_thin"))
