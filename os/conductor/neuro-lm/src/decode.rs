@@ -19,6 +19,7 @@
 use crate::qwen3::{Head, Kv, Model, Work, MAX_BATCH};
 use crate::tok::Tokenizer;
 use crate::LmError;
+use neuro_contract::inv::ToolMachine;
 use neuro_contract::Machine;
 use neuro_kernels::Simd;
 
@@ -292,4 +293,84 @@ pub fn generate_closed(model: &Model, simd: Simd, tok: &Tokenizer, prompt: &[u32
         pos += 1;
     }
     Ok((n, st))
+}
+
+// ------------------------------------------------------------------------------------------- investigation
+
+/// Is `id` allowed next in an investigation answer? Before the trigger everything is, as in llama-server's
+/// lazy grammar. After it: end of generation where the grammar may end; an added token only if the server
+/// renders it as text (`preserved`) and that text fits; any other token if its bytes fit.
+fn allowed_tool(m: &ToolMachine, tok: &Tokenizer, eog: &[u32], preserved: &[u32], id: u32) -> bool {
+    if !m.triggered() {
+        return true;
+    }
+    if eog.contains(&id) {
+        return m.accepting();
+    }
+    if tok.is_added(id) && !preserved.contains(&id) {
+        return false;
+    }
+    match tok.bytes(id as usize) {
+        Some(b) => !b.is_empty() && m.accepts(b),
+        None => false,
+    }
+}
+
+/// The greedy choice for an investigation answer: the highest logit among the tokens llama-server's lazy
+/// tool-call grammar allows, lowest id on ties. Public for the fidelity check, which replays it per step.
+pub fn pick_tool(logits: &[i64], m: &ToolMachine, tok: &Tokenizer, eog: &[u32], preserved: &[u32]) -> Option<u32> {
+    let mut best: Option<(u32, i64)> = None;
+    for (i, &v) in logits.iter().enumerate() {
+        if best.is_none_or(|(_, b)| v > b) {
+            best = Some((i as u32, v));
+        }
+    }
+    let (i, _) = best?;
+    if allowed_tool(m, tok, eog, preserved, i) {
+        return Some(i);
+    }
+    let mut best: Option<(u32, i64)> = None;
+    for (i, &v) in logits.iter().enumerate() {
+        if best.is_none_or(|(_, b)| v > b) && allowed_tool(m, tok, eog, preserved, i as u32) {
+            best = Some((i as u32, v));
+        }
+    }
+    best.map(|b| b.0)
+}
+
+/// Greedy decoding of an investigation answer (Neuro's `inv_contract.json`): free text, or tool calls under
+/// the grammar llama-server derives from the five tools, which starts when the generated text contains the
+/// trigger. `preserved` are the ids of `neuro_contract::inv::PRESERVED_TOKENS`. One forward pass per token: no
+/// head pruning and no speculation yet (answers are about twenty tokens). Writes the generated ids to `out`,
+/// end of generation included; returns their count.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_tool(model: &Model, simd: Simd, tok: &Tokenizer, prompt: &[u32], eog: &[u32], preserved: &[u32], kv: &mut Kv, work: &mut Work, max_new: usize, out: &mut [u32]) -> Result<usize, LmError> {
+    let vocab = model.dims.vocab.min(tok.vocab());
+    if prompt.is_empty() {
+        return Err(LmError::Work);
+    }
+    let mut machine = ToolMachine::new();
+    model.prefill(simd, prompt, kv, work)?;
+    let mut col = (prompt.len() - 1) % work.batch();
+    let mut pos = prompt.len();
+    let mut n = 0usize;
+    loop {
+        let next = pick_tool(work.logits_of(col, model.dims.vocab).get(..vocab).ok_or(LmError::Work)?, &machine, tok, eog, preserved).ok_or(LmError::Token)?;
+        *out.get_mut(n).ok_or(LmError::Work)? = next;
+        n += 1;
+        if eog.contains(&next) {
+            break;
+        }
+        // A token that completes the trigger and then runs past it must fit the grammar from there.
+        if !machine.feed(tok.bytes(next as usize).ok_or(LmError::Token)?) {
+            return Err(LmError::Token);
+        }
+        if n >= max_new || n >= out.len() || pos + 1 >= model.dims.max_ctx {
+            break;
+        }
+        model.forward(simd, &[next as usize], pos, kv, work, Head::All)?;
+        col = 0;
+        pos += 1;
+    }
+    Ok(n)
 }
