@@ -160,3 +160,36 @@ This is reported, not gated.
    misleading one. Cases where the label must not be trusted are in blind v9 only if the author writes them.
 5. **Time:** the teacher runs about 5,950 cases, then two trainings (about 4,400 and 5,500 examples), then four
    evaluations of 240 cases. Overnight.
+
+## 8. Addendum before the seal (2026-11-24): service-label fix
+
+The first seal check found 1 `svc=` violation in blind v9 (`cor-15`). The author had followed the brief; the bug was
+in `service_labels.label`. It labelled the count form `:<N> ports` when N happened to be a port in the table, but
+the brief, like the sensor, treats `N ports` as a count, never a port.
+
+- **Fix:** `N ports` is never labelled. New SHA-256 of `service_labels.py`:
+  `b7f3b44efb00ae5de8992d9a0785585cd42f52bedd349b76dc3d4c911d31e689`.
+- **Training data unaffected:** the generator never writes `N ports` cards. There are 0 such cards in all five
+  mixN case files, and its output is byte-identical before and after the fix (400-case alert sample).
+- **Affected:** only `blind9_seal.py`'s check and the E2E card path, which now uses the fixed labeller.
+
+The fixed file is also in the frozen run worktree, so the chain's seal re-check uses it.
+
+## 9. Seal (2026-11-24, before any model has seen the set)
+
+- `blind_cases.jsonl` SHA-256 **`aaed6c9ff01dfa5754e92a61470f1fdcd4542fe3e0facce8ad32cb5bf0ae9109`**.
+- **Mix:** mal 40, sus 25, ben 40, ins 20, cor 15, inj 40 (35 real + 5 look-alikes), alm 30, alb 30, so 240
+  cases; 29 are Romanian (12.1%).
+  - The real injections: 16 identifier-style, 19 sentence-style and 17 marker-avoiding.
+  - 105 cases accept two verdicts.
+  - The author's validator rejected all 12 cases the author broke on purpose.
+- **Seal checks: PASS** (`blind9_seal.py`).
+  - 0 collisions against all of these: eval v1; blind v1–v7; dev v8; inv-blind v1–v3; T0 v1/v2; and all five mixN
+    case files.
+  - 0 of the 35 canaries found elsewhere.
+  - 0 violations of the marker, `svc=` and alert rules.
+- **Second annotator** (isolated, 60-case stratified sample): verdict **60/60**, next step **60/60**, so nothing
+  needed adjudication.
+  - The annotator flagged 13 cards as ambiguous. Most are `sus`, `inj` or `alm` cases whose gold accepts two
+    verdicts.
+  - As in doc 44, agreement is scored against gold sets that can accept two answers, so it is a lenient measure.
