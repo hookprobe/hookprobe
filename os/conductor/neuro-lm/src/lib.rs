@@ -85,7 +85,7 @@ impl Q4<'_> {
         }
     }
 
-    fn to_act(&self, simd: Simd, x: &[i8], out: &mut [i8]) {
+    fn project_act(&self, simd: Simd, x: &[i8], out: &mut [i8]) {
         let (m, s) = (self.mult, self.shift);
         self.apply(simd, x, |r, a| {
             if let (Some(o), Some(&mu)) = (out.get_mut(r), m.get(r)) {
@@ -103,7 +103,7 @@ impl Q4<'_> {
         });
     }
 
-    fn to_logits(&self, simd: Simd, x: &[i8], out: &mut [i32]) {
+    fn project_logits(&self, simd: Simd, x: &[i8], out: &mut [i32]) {
         let (m, s) = (self.mult, self.shift);
         self.apply(simd, x, |r, a| {
             if let (Some(o), Some(&mu)) = (out.get_mut(r), m.get(r)) {
@@ -239,9 +239,9 @@ impl Model<'_> {
         for (li, l) in self.layers.iter().enumerate() {
             let (xn, res) = (&mut w.xn[..d], &w.res[..d]);
             lm::rmsnorm(res, l.attn_norm, xn);
-            l.wq.to_act(simd, &w.xn[..d], &mut w.q[..qd]);
-            l.wk.to_act(simd, &w.xn[..d], &mut w.k[..kvd]);
-            l.wv.to_act(simd, &w.xn[..d], &mut w.v[..kvd]);
+            l.wq.project_act(simd, &w.xn[..d], &mut w.q[..qd]);
+            l.wk.project_act(simd, &w.xn[..d], &mut w.k[..kvd]);
+            l.wv.project_act(simd, &w.xn[..d], &mut w.v[..kvd]);
             for h in 0..nh {
                 lm::rope(&mut w.q[h * hd..(h + 1) * hd], rope_row);
             }
@@ -266,14 +266,14 @@ impl Model<'_> {
             }
             l.wo.add_residual(simd, &w.att[..qd], &mut w.res[..d]);
             lm::rmsnorm(&w.res[..d], l.ffn_norm, &mut w.xn[..d]);
-            l.w_gate.to_act(simd, &w.xn[..d], &mut w.gate[..dm.ffn]);
-            l.w_up.to_act(simd, &w.xn[..d], &mut w.up[..dm.ffn]);
+            l.w_gate.project_act(simd, &w.xn[..d], &mut w.gate[..dm.ffn]);
+            l.w_up.project_act(simd, &w.xn[..d], &mut w.up[..dm.ffn]);
             lm::lut(&mut w.gate[..dm.ffn], self.silu);
             lm::mul(&mut w.gate[..dm.ffn], &w.up[..dm.ffn]);
             l.w_down.add_residual(simd, &w.gate[..dm.ffn], &mut w.res[..d]);
         }
         lm::rmsnorm(&w.res[..d], self.final_norm, &mut w.xn[..d]);
-        self.head.to_logits(simd, &w.xn[..d], &mut w.logits[..self.head.rows]);
+        self.head.project_logits(simd, &w.xn[..d], &mut w.logits[..self.head.rows]);
         lm::argmax(&w.logits[..dm.vocab]).ok_or(LmError::Shape)
     }
 

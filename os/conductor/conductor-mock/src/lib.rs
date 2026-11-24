@@ -17,11 +17,29 @@ use conductor_core::signer::{CounterStore, Signer};
 use conductor_core::tools::ToolCall;
 use conductor_core::worker::{Refuse, WorkerGate};
 
-pub struct MemCounter(pub u64);
+/// RAM-only sealed state for the host mock (counter, epoch). The device uses `conductor_core::durable::Sealed`.
+pub struct MemCounter(pub u64, pub u32);
+impl MemCounter {
+    pub fn new() -> Self {
+        Self(0, 1)
+    }
+}
+impl Default for MemCounter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl CounterStore for MemCounter {
     fn advance(&mut self) -> Option<u64> {
         self.0 = self.0.checked_add(1)?;
         Some(self.0)
+    }
+    fn epoch(&self) -> Option<u32> {
+        Some(self.1.max(1))
+    }
+    fn bump_epoch(&mut self) -> Option<u32> {
+        self.1 = self.1.max(1).checked_add(1)?;
+        Some(self.1)
     }
 }
 
@@ -350,7 +368,7 @@ pub struct Report {
 
 impl Kernel {
     pub fn new(policy: OwnerPolicy, tier: Tier) -> Self {
-        let mut signer = Signer::new(DEVICE_SEED, SALT_KEY, public_key(&OWNER_SEED), policy, MemCounter(0));
+        let mut signer = Signer::new(DEVICE_SEED, SALT_KEY, public_key(&OWNER_SEED), policy, MemCounter::new());
         let (rec, sig) = owner_pairing(tier, public_key(&WORKER_SEED), u64::MAX, 1);
         signer.install_pairing(&rec, &sig).expect("owner-signed pairing");
         Self { signer, rng: Rng(0x9e3779b97f4a7c15), now: 1_000, tool_data: vec![], max_ticks: 3, cancel_after_sends: None, corrupt_signature: false, frame_mutator: None, mutated: false, latency_ms: 0 }

@@ -24,6 +24,7 @@
 pub mod abi;
 pub mod buf;
 pub mod chain;
+pub mod durable;
 pub mod cap;
 pub mod class;
 pub mod crypto;

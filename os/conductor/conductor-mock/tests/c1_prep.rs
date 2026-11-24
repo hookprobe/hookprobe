@@ -234,7 +234,7 @@ fn epoch_announcement_revokes_outstanding_capabilities() {
     let mut forged = ann;
     forged[33] ^= 1;
     assert_eq!(gate.apply_epoch(&forged), Err(Refuse::Epoch));
-    let other = conductor_core::signer::Signer::new(OTHER_SEED, SALT_KEY, public_key(&OWNER_SEED), policy_p1(), MemCounter(0));
+    let other = conductor_core::signer::Signer::new(OTHER_SEED, SALT_KEY, public_key(&OWNER_SEED), policy_p1(), MemCounter::new());
     assert_eq!(gate.apply_epoch(&other.announce_epoch(1).unwrap()), Err(Refuse::Epoch));
     assert_eq!(gate.min_epoch, 2);
 }

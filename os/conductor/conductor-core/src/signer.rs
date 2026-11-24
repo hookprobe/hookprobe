@@ -13,9 +13,16 @@ use crate::crypto::{hmac_sha256, public_key, sign, TAG_EPOCH, TAG_HP_EXEC};
 use crate::pairing::{open_record, PairingRecord};
 use crate::limits::MAX_TTL_MS;
 
-/// Monotonic counter persisted BEFORE the value is used (ADR 0069: sealed store, one write per use).
+/// The signer's sealed state: the delegation counter and the revocation epoch, both monotonic and both
+/// persisted BEFORE a value is used (ADR 0069's scheme; on the device, [`crate::durable`]). The epoch is
+/// here, not in RAM: a reboot that reset it would bring revoked capabilities back to life.
 pub trait CounterStore {
+    /// The next delegation counter, durable before it is returned (`None` = not durable: sign nothing).
     fn advance(&mut self) -> Option<u64>;
+    /// The current revocation epoch (≥ 1); `None` if it cannot be read (sign nothing).
+    fn epoch(&self) -> Option<u32>;
+    /// Raise the epoch by one, durable before it is returned (`None` = the kill switch did not take).
+    fn bump_epoch(&mut self) -> Option<u32>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +32,8 @@ pub enum SignRefusal {
     EgressMismatch,
     ClassesNotAllowed,
     Counter,
+    /// The revocation epoch could not be read from the sealed store.
+    Epoch,
     Clock,
     Encode,
     /// The pairing exists but its owner confirmation has lapsed.
@@ -50,7 +59,6 @@ pub struct Signer<S: CounterStore> {
     seed: [u8; 32],
     salt_key: [u8; 32],
     pk: [u8; 32],
-    pub epoch: u32,
     pub policy: OwnerPolicy,
     /// Installed only through owner-signed records ([`Signer::install_pairing`]).
     pairings: [Option<PairingRecord>; MAX_PAIRINGS],
@@ -62,7 +70,7 @@ impl<S: CounterStore> Signer<S> {
     /// `seed`: the delegation key (purpose: Conductor delegation only). `salt_key`: the cache-salt key.
     /// Both are distinct from the Noise static key and every other heqk key (key separation, v2 §03).
     pub fn new(seed: [u8; 32], salt_key: [u8; 32], owner_pk: [u8; 32], policy: OwnerPolicy, store: S) -> Self {
-        Self { pk: public_key(&seed), seed, salt_key, epoch: 1, policy, pairings: [None; MAX_PAIRINGS], owner_pk, store }
+        Self { pk: public_key(&seed), seed, salt_key, policy, pairings: [None; MAX_PAIRINGS], owner_pk, store }
     }
 
     /// Install or replace a pairing from an owner-signed record. A record for the same worker and tier
@@ -93,7 +101,7 @@ impl<S: CounterStore> Signer<S> {
         let mut m = [0u8; EPOCH_MSG_LEN];
         let mut w = crate::wire::Writer::new(&mut m);
         w.put(&self.pk)?;
-        w.u32(self.epoch)?;
+        w.u32(self.store.epoch()?)?;
         w.u64(now_ms)?;
         let sig = sign(&self.seed, TAG_EPOCH, &m)?;
         let mut out = [0u8; EPOCH_LEN];
@@ -108,10 +116,15 @@ impl<S: CounterStore> Signer<S> {
     }
 
     /// The owner's kill switch: every capability issued before this is refused by workers that learn the
-    /// new epoch, and the data plane ends every lease (the host's job).
+    /// new epoch, and the data plane ends every lease (the host's job). The new epoch is durable before this
+    /// returns; `None` means the kill switch did not take and must be reported as a failure.
     pub fn bump_epoch(&mut self) -> Option<u32> {
-        self.epoch = self.epoch.checked_add(1)?;
-        Some(self.epoch)
+        self.store.bump_epoch()
+    }
+
+    /// The current revocation epoch from the sealed store.
+    pub fn epoch(&self) -> Option<u32> {
+        self.store.epoch()
     }
 
     pub fn sign(&mut self, r: &SignRequest, now_ms: u64, entropy: &mut dyn FnMut(&mut [u8])) -> Result<[u8; SIGNED_LEN], SignRefusal> {
@@ -134,6 +147,7 @@ impl<S: CounterStore> Signer<S> {
         }
         let ttl = r.ttl_ms.min(MAX_TTL_MS);
         let expiry = now_ms.checked_add(ttl).ok_or(SignRefusal::Clock)?;
+        let epoch = self.store.epoch().ok_or(SignRefusal::Epoch)?;
         let counter = self.store.advance().ok_or(SignRefusal::Counter)?;
         let mut capability_id = [0u8; 16];
         let mut nonce = [0u8; 16];
@@ -151,7 +165,7 @@ impl<S: CounterStore> Signer<S> {
             counter,
             not_before_ms: now_ms,
             expiry_ms: expiry,
-            revocation_epoch: self.epoch,
+            revocation_epoch: epoch,
             nonce,
             cache_salt,
         };
