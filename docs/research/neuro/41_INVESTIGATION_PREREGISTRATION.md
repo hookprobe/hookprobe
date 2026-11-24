@@ -68,3 +68,17 @@ the floor. That look is descriptive; the set stays usable for the gate, because 
 2. `lookup_exposure` rests on KEV, which is thin for home device classes (doc 39 §6.1). The tool says so through
    its counts.
 3. One step per turn. Multi-step investigation is simulated by RESULT lines, not by a live tool loop.
+
+## Addendum: inv-blind v1 sealed (2026-11-24), before any model has seen it
+
+- **SHA-256** `c49f06c94f75b74e453d6943d6605ede8cd5b0ae6e79d41317cc156d8cb68ade`. 150 cases: next 45, multi 35, clears 30, decoy 25, invisible 15; 18 Romanian (12.0%).
+- **Author:** isolated, from `inv-brief.md` (`a0be71ec…`). Its validator passes, and it rejected 16
+  deliberately broken cases and 2 broken full sets.
+- **Seal checks** (`inv_seal.py check`, `abacb6685b0c31aa…`): PASS. Exact mix, schema, address and domain ranges, gold
+  entities in context, RESULT-line form, no CVE id. 0 context collisions with all 19 earlier sets and training
+  files: dev v1–v2, v8; blind v1–v7; T0 v1, v2 templates and v3 parts; the doc 38 pairs; and the 600 generated
+  investigation training cases (`gen_investigate.py`, seed 39).
+- **Second annotator** (isolated, 38-case stratified sample, no gold): 38/38 within the gold's acceptable answers;
+  no adjudication needed. Gold sets accept one or two answers, which makes agreement easier than a single-answer
+  match.
+- Nobody but the author has read the case content.
