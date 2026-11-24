@@ -2142,7 +2142,7 @@ fn cm5_prod_service() -> ! {
                 st.seen = seen as u64;
                 st.forwarded = forwarded as u64;
                 st.dropped = dropped as u64;
-                st.sample_qsecbit(now, telemetry::score());
+                st.sample_qsecbit(now, telemetry::score_wide());
             }
             // A7.7 (review 2026-11-05): GEM RX-ring loss is NOT in drop/faults (rsr=0x7 on 368 of ~1,310
             // heartbeats with faults=0) — report it: resource errors (no free RX descriptor) + overruns.
@@ -3743,6 +3743,8 @@ fn cm5_p10_probe() {
                             let group_keys_later = cfg!(all(feature = "apmc", feature = "wpa3"));
                             if ap.serve_ready() && (ap.gtk_set || group_keys_later) {
                                 chosen_cs = ap_cs;
+                                // 802.11h spectrum management in force (never set by heqk: the firmware default) — Infineon case
+                                kprint!("   [P11-AP] spect (802.11h) = {:?} on chanspec {:#06x} (dfs={})\n", cyw43::spect_mode(), ap_cs, hal::chanspec_is_dfs(ap_cs));
                                 if hal::chanspec_is_dfs(ap_cs) {
                                     dfs_watch = Some(hal::DfsWatch::new());
                                     kprint!("   [P11-DFS] AP on DFS chanspec {:#06x}: the firmware runs the CAC (~60 s, AP silent) — watching; fallback {:#06x}\n", ap_cs, dfs_fallback_cs);
@@ -4338,6 +4340,8 @@ fn cm5_p10_probe() {
                                     reset_at = Some(now().wrapping_add(2 * freq));
                                     reset_why = hal::superv::PLANNED_FACTORY_RESET;
                                 }
+                                // F7: an asynchronous OS-image verify / install advances one bounded step per pass
+                                upload::step(now() / (freq / 1000).max(1));
                                 if upload::take_trial_reboot() {
                                     trial_at = Some(now().wrapping_add(2 * freq));
                                     kprint!(" [OTA] new image written to the inactive slot and verified from the slot — trial boot in 2 s (tryboot one-shot; an unhealthy trial falls back to this slot)\n");
@@ -5304,7 +5308,6 @@ fn cm5_p10_probe() {
                                                 // Parity G11: our SNTP answer (validated: server asked, port 123, our nonce).
                                                 #[cfg(feature = "mcserve")]
                                                 if let Some(ms) = wntp.on_frame(&wbuf[..n], up.dhcp.yiaddr, cyw43::now_secs()) {
-                                                    ioc::set_now_unix((ms / 1000) as u32); // IOC expiry needs a real clock
                                                     #[cfg(feature = "appersist")]
                                                     {
                                                         pf.set_clock(ms, now(), freq);
@@ -5313,6 +5316,8 @@ fn cm5_p10_probe() {
                                                     }
                                                     match mcserve::state().sync_clock(ms, now()) {
                                                         Some(step) => {
+                                                            // IOC expiry follows the clock only once the step is accepted (pre-soak finding 6)
+                                                            ioc::set_now_unix((ms / 1000) as u32);
                                                             kprint!(" [AP-NTP] wall clock set from {}.{}.{}.{} (step {} ms) — timestamps are now real time\n",
                                                                 wntp.server[0], wntp.server[1], wntp.server[2], wntp.server[3], step);
                                                             // keep the board RTC right for the next boot (register 0 only — HBoot enforces it)
@@ -5709,9 +5714,9 @@ fn cm5_p10_probe() {
                                         {
                                             let st = mcserve::state();
                                             st.seen = wifi_frames as u64;
-                                            st.forwarded = nst.out_fwd as u64 + nst.in_fwd as u64;
+                                            st.forwarded = nst.out_fwd + nst.in_fwd;
                                             st.dropped = (ids_drop_out + ids_drop_in) as u64;
-                                            st.sample_qsecbit(now(), telemetry::score());
+                                            st.sample_qsecbit(now(), telemetry::score_wide());
                                             #[cfg(feature = "appersist")]
                                             {
                                                 let c = prodfull::Counters { seen: st.seen, forwarded: st.forwarded, dropped: st.dropped, tx_fail: wifi_tx_dropped as u64, faults: 0, empty: 0 };
@@ -5755,8 +5760,8 @@ fn cm5_p10_probe() {
                                                 mode: match wan_mode { hal::WanMode::Dhcp => 0, hal::WanMode::Static { .. } => 1, _ => 2 },
                                                 ipv6: unsafe { V6.up },
                                                 clients: dh.active() as u32,
-                                                pkts_out: nst.out_fwd as u64,
-                                                pkts_in: nst.in_fwd as u64,
+                                                pkts_out: nst.out_fwd,
+                                                pkts_in: nst.in_fwd,
                                                 dns_inspected: nst.dns_redirect as u64,
                                                 dns_blocked: shield::totals().1,
                                                 blocklist: shield::block_len() as u32,

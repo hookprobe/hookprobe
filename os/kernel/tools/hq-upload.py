@@ -29,7 +29,7 @@ Mission Control uses a certificate from the HookProbe factory CA (ADR 0051): pas
 or --insecure on a bench.
 """
 import importlib.util, os
-import argparse, hashlib, http.cookiejar, json, ssl, sys, urllib.parse, urllib.request
+import argparse, hashlib, http.cookiejar, json, ssl, sys, time, urllib.parse, urllib.request
 
 
 def PS():
@@ -250,8 +250,23 @@ def main():
                 continue
         print("chunk:", json.dumps(c))
         return 1
-    f = form("/api/upload/finish", id=uid)
+    # F7: an OS image is verified (and later installed) by the device's AP loop in small steps — ask for the
+    # asynchronous form and poll, so Wi-Fi keeps running; a device without F7 ignores `async` and answers in full.
+    def wait_job(kind):
+        while True:
+            time.sleep(1)
+            j = req("/api/upload/job")
+            if j.get("kind") == kind and j.get("state") in ("done", "failed"):
+                return j
+    asy = {"async": "1"} if a.type == "os_image" else {}
+    f = form("/api/upload/finish", id=uid, **asy)
     print("finish:", json.dumps(f))
+    if f.get("ok") and f.get("pending") == "verifying":
+        j = wait_job("verify")
+        print("verify:", json.dumps(j))
+        if j.get("state") != "done":
+            return 1
+        f = {"ok": True, "verified": True, "generation": j["generation"], "length": j["length"], "digest": j["digest"]}
     if not f.get("ok"):
         return 1
     if a.no_activate:
@@ -263,8 +278,12 @@ def main():
     if a.type != "os_image" and f.get("digest") != body_dg:
         sys.exit(f"the device staged digest {f.get('digest')}, your file is {body_dg}: refusing to sign")
     env = envelope("activate", PS().TYPE_CODE[a.type], int(f["generation"]), bytes.fromhex(f["digest"]))
-    r = form("/api/upload/activate", id=uid, envelope=env)
+    r = form("/api/upload/activate", id=uid, envelope=env, **asy)
     print("activate:", json.dumps(r))
+    if r.get("ok") and r.get("pending") == "installing":
+        j = wait_job("install")
+        print("install:", json.dumps(j))
+        return 0 if j.get("state") == "done" else 1
     return 0 if r.get("ok") else 1
 
 

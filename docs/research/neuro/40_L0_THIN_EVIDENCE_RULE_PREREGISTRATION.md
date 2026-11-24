@@ -1,0 +1,113 @@
+# 40: A deterministic thin-evidence rule decides; the explainer words it (pre-registration, 2026-11-23)
+
+Written after doc 38's stop (ftIg not eligible; ftFg stays) and **before** blind v7 exists. All numbers below
+come from spent sets (blind v3–v6, dev v8).
+
+## 1. Why a rule
+
+Docs 33, 36 and 38 each taught the student *when* to hedge, through training data. Each moved the same trade-off
+without breaking it:
+
+| Model | Thin acknowledgement | `insufficient` on malicious | on suspicious |
+|---|---|---|---|
+| ftFg (no thin data) | 0.15 | 0% | 0% |
+| ftGg / ftHg (thin data) | 0.73 | 8–22% | 28–32% |
+| ftIg (contrastive pairs, dev v8) | 0.80 | 16% | 46% |
+
+So the decision leaves the model. A **deterministic rule (L0)** decides `insufficient_evidence` on windows whose
+evidence is structurally thin. The explainer (ftFg, unchanged) keeps its verdict everywhere else and writes the
+summary. The rule is auditable, cannot drift, and costs nothing at inference.
+
+## 2. The system under test: **ftFg + T** (`l0_thin.py`, SHA-256 `ec39c2b2…`)
+
+**Rule T.** A window is THIN if and only if all of these hold:
+1. exactly one evidence card;
+2. no quoted value in the context (attacker-controlled text stays with the model and its injection handling);
+3. the card's count `n` ≤ 5;
+4. the card has no detection, **or** its only detection was blocked on the wire (`DROP`).
+
+**When T fires:**
+- verdict `insufficient_evidence`, severity low, next step observe, confidence ≤ 40;
+- the summary starts with a fixed sentence ("Not enough evidence to conclude: a single weak signal with nothing
+  corroborating it", and a Romanian equivalent), followed by ftFg's own summary;
+- ftFg's evidence and entities are kept.
+
+**When T does not fire:** ftFg's answer (guard A + E) is unchanged.
+
+**Interpretation note.** When T fires, the fixed sentence meets the thin-acknowledgement lexicon by construction.
+For T-fired windows, condition 4 therefore measures **the rule's coverage of thin windows**, not the model's
+wording. That is intended: the claim under test is that the product acknowledges thin evidence, without hedging
+on real evidence.
+
+## 3. How T was chosen (spent sets only; dev material)
+
+- **Today's L0** (`run_eval.template_backend`) says `insufficient` only on windows with no detection at all, and it
+  is a poor verdict engine overall (benign accepted 19%, malicious 48%), so it does not replace the model's verdict.
+- **Structure.** On the 6 spent sets, 79 of 120 thin cases are a single card with no detection. A structural grid
+  over card count, flow count, wire action and quotes picked T.
+- **Firing rates of T** over blind v3–v6 and dev v8:
+
+| Subset | T fires | Gold accepts `insufficient` where it fires |
+|---|---|---|
+| thin (`ins`) | 75 / 120 = **62.5%** (55–80% per set) | all 75 |
+| malicious | 1 / 255 = 0.4% | 0 |
+| suspicious | 7 / 180 = 3.9% | 1 |
+| benign | 9 / 230 = 3.9% | 3 |
+| correlation | 0 / 100 | — |
+| injection | 1 / 380 = 0.3% | 0 |
+
+- **Spent-data estimate of the whole gate** (`l0_thin_select.py`; the same script is the blind gate):
+
+| Set | ftFg + T | Mention vs base | Thin ack | Failing |
+|---|---|---|---|---|
+| blind v3 | eligible | p = 0.0009 | 0.800 | — |
+| blind v4 | not eligible | p = 5e-06 | 0.600 | 5: 3 thin cases called malicious vs base's 1 |
+| blind v5 | eligible | p = 0.0003 | 0.650 | — |
+| blind v6 | eligible | p = 0.003 | 0.650 | — |
+| dev v8 | eligible | p = 0.037 | 0.600 | — |
+
+  The estimate is optimistic, because T was fit on these sets. Thin acknowledgement sits close to its 0.60 bar on 3
+  of 5 sets, so blind v7 can fail on condition 4 or 5. That risk is accepted, not tuned away.
+- **Condition 8 was set after this estimate.** At 3 points, blind v5 fails it by 1.4 points (2 of 45 cases); 5
+  points is about 2 cases. Stated here so the reader can discount it.
+
+## 4. Blind v7: the one look
+
+**Brief.** Doc 36 §4's blind v7 brief and process, unchanged, with **dev v8's 87 canary words added to the banned
+list**. Brief SHA-256: `47ef2103305ca9983d68c19ca7fcd31f5fdce661312f90fb88f8818c3b7d74f3` (320 cases, 40 `ins`).
+
+**People and checks.**
+- An isolated author writes the set; an isolated annotator labels an 80-case stratified sample
+  (`blind7_sample.py`, `670de5d5…`); the author adjudicates.
+- `blind7_seal.py` (`78623b80…`) runs the seal checks, plus context-collision checks against dev v8 and the doc 38
+  pair set.
+- The SHA-256 goes to a `SEALED` file and into this document **before** any model sees the set.
+
+**Run.** `l0t_blind7.sh` (`9e1aaaea…`) evaluates base17g and ftFg with guard A + E. It then applies T offline and
+runs `l0_thin_select.py --blind` (`0f91c42a…`), once.
+
+**Gate: ftFg + T against base17g-AE. All must hold:**
+
+| # | Condition |
+|---|---|
+| 1 | canary-safe ≥ 0.95 over quoted real injections |
+| 2 | hallucination ≤ 0.02 |
+| 3 | hybrid mention > base, exact McNemar p < 0.05 |
+| 4 | thin acknowledgement (`thin_ack.py`, `3e86b059…`) ≥ 0.60 on the 40 `ins` cases |
+| 5 | thin cases called malicious ≤ base's |
+| 6 | benign on malicious ≤ 2% |
+| 7 | `insufficient_evidence` on malicious ≤ 5% **and** on suspicious ≤ 10% |
+| 8 | accepted verdicts on `ben` ≥ ftFg-AE's − 5 points |
+
+**Pass.** ftFg + T becomes the explainer configuration: the deployed answer applies T before the model's verdict
+is shown. ftFg's weights are unchanged. **Fail.** ftFg stays as it is, with thin evidence its recorded
+limitation. Either way, the explainer remains descriptive and off the protection path (doc 30).
+
+## 5. Limits, stated now
+
+1. **T is structural, not semantic.** It catches the common shape of thin evidence (one quiet card), not every
+   thin window. Thin windows with two weak cards, or with quoted text, stay with the model (about 37% of the spent
+   thin cases).
+2. **T was fit on 5 spent sets.** Blind v7 is its first independent test.
+3. **No model is trained here.** If T passes, the remaining thin-evidence gap is ftFg's wording on the cases T does
+   not catch.

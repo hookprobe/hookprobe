@@ -586,6 +586,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             Abort,
         }
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        let t_up = crate::clock::ticks(); // F7: any upload handler that blocks the loop > 100 ms says so
         let r = match req.path {
             "/api/upload/begin" => up::begin(&c, req.body, auth).map(|b| {
                 crate::cfgd::note_owner(req.peer); // F-e: the owner's own client must keep its path
@@ -598,12 +599,19 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             "/api/upload/rollback" => up::rollback(&c, req.body, auth).map(Ok_::Act),
             _ => Err("unknown upload step"),
         };
+        let ms = crate::clock::ticks().wrapping_sub(t_up) / (crate::clock::freq() / 1000).max(1);
+        if ms > 100 {
+            arch_aarch64::_print(format_args!(" [UPLOAD-SLOW] {} took {} ms in the AP loop\n", req.path, ms));
+        }
         return match r {
             Ok(o) => json(scratch, |w| {
                 use core::fmt::Write;
                 let _ = match o {
                     Ok_::Begun(id) => write!(w, "{{\"ok\":true,\"id\":\"{:016x}\",\"chunk_max\":{}}}", id, up::CHUNK_MAX),
                     Ok_::Chunk(got) => write!(w, "{{\"ok\":true,\"received\":{}}}", got),
+                    // F7: `async=1` on an os_image — verification runs in the AP loop; poll GET /api/upload/job
+                    Ok_::Fin(f) if f.pending => write!(w, "{{\"ok\":true,\"pending\":\"verifying\",\"poll\":\"/api/upload/job\"}}"),
+                    Ok_::Act(a) if a.pending => write!(w, "{{\"ok\":true,\"pending\":\"installing\",\"generation\":{},\"poll\":\"/api/upload/job\"}}", a.gen),
                     Ok_::Fin(f) => {
                         // R6 = D (additive): the staged content's SHA-256 — the activate envelope binds it
                         let _ = write!(w, "{{\"ok\":true,\"verified\":true,\"generation\":{},\"active_generation\":{},\"length\":{},\"digest\":\"", f.gen, f.active_gen, f.len);
@@ -690,6 +698,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             let _ = write!(w, "\"sent\":{},\"failed\":{},\"held_back\":{},\"queued\":{},\"last_status\":{},\"max_per_hour\":{}}}",
                 st.sent, st.failed, st.held_back, st.queued, st.last_status, crate::alerthook::MAX_PER_HOUR);
         }),
+        "/api/upload/job" => json(scratch, crate::upload::render_job), // F7: async os_image verify / install
         "/api/upload" => {
             crate::upload::expire(now_ms);
             json(scratch, crate::upload::render)
