@@ -21,5 +21,9 @@ fn main() {
     writeln!(s, "pub const M_RES_64: i32 = {};", mult(0.4, true, 64.0)).unwrap();
     writeln!(s, "pub const M_RES_128: i32 = {};", mult(0.4, true, 128.0)).unwrap();
     writeln!(s, "pub const M_HEAD_64: i32 = {};", mult(3.0, true, 64.0)).unwrap();
+    let rope = build::rope_neox_table(32, 32, 1e6);
+    writeln!(s, "pub const ROPE_NEOX: [(i32, i32); {}] = {:?};", rope.len(), rope).unwrap();
+    writeln!(s, "pub const EPS_BITS: u32 = {:#x};", 1e-6f32.to_bits()).unwrap();
+    writeln!(s, "pub const KQ_SCALE_BITS: u32 = {:#x};", (1.0f32 / 32f32.sqrt()).to_bits()).unwrap();
     std::fs::write(format!("{}/tables.rs", std::env::var("OUT_DIR").unwrap()), s).unwrap();
 }

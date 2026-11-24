@@ -41,7 +41,9 @@
 ## What Conductor will build next (proposal)
 
 - `hnx-compile` reads **GGUF** (Q8_0 first) as exported by Neuro, converts to HNX for the engine.
-- `neuro-lm`: Q8 GEMV kernel (scalar + NEON SDOT), Qwen3 QK-norm, the Qwen2 pre-tokenizer.
+- `neuro-lm`: Q8 GEMV kernel (scalar + NEON SDOT), Qwen3 QK-norm, the Qwen2 pre-tokenizer. **Status
+  2026-11-24: the `Q8_0` kernels and the Qwen3 decoder are built and verified (README, "The 8-bit path and
+  Qwen3"); the tokenizer is not yet.** Nothing was trained or evaluated.
 - **Fidelity, not quality:** the integer engine's logits and greedy outputs against llama.cpp on the SAME GGUF,
   on Neuro's **dev** set only (never a sealed set). If the outputs match within a stated tolerance, Neuro's
   quality results carry over; if they do not, that is a bug report, not a new evaluation.

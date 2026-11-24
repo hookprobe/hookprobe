@@ -19,7 +19,9 @@
 #![deny(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![allow(clippy::chunks_exact_to_as_chunks, clippy::manual_is_multiple_of)]
 
+pub mod hp;
 pub mod lm;
+pub mod q8;
 
 /// View int8 activations as the bytes the GEMV kernels read (same size and alignment; sound).
 pub fn i8_bytes(x: &[i8]) -> &[u8] {
@@ -61,6 +63,11 @@ impl Simd {
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     pub const unsafe fn neon_dot() -> Simd {
         Simd(Kind::NeonDot)
+    }
+
+    /// True for the NEON path (always false in builds without NEON).
+    pub fn is_neon(self) -> bool {
+        self.0 != Kind::Scalar
     }
 
     pub fn name(self) -> &'static str {

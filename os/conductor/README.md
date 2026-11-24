@@ -136,6 +136,47 @@ Not built: a recurrent cell (RWKV-7; doc 13 leaves the choice to measurement), s
 grammar-constrained decoding, the engine-plan integration (the decoder is composed in Rust, not yet run from
 an HNX plan with persistent state slots), and any speed number (needs a real A76 after KR-1).
 
+## The 8-bit path and Qwen3 (Neuro's explainer architecture)
+
+Neuro's explainer (ftFg) is a Qwen3-1.7B fine-tune that passed its gates as **GGUF `Q8_0`**, so the engine
+now runs that format directly. The 4-bit Q5 path above stays for small specialists; it would clip the
+activation outliers of real pretrained models.
+
+- **`neuro-kernels::q8`**: `Q8_0` rows in the GGUF block layout, byte for byte (34-byte blocks: binary16
+  scale + 32 int8). The converter will copy these bytes, not re-quantise them, so the device runs the exact
+  weights Neuro validated. Activations are quantised per block of 32 (`amax/127`), as llama.cpp's CPU
+  path does. The binary16 scales are decoded with integer operations. Accumulation is i128 and provably
+  cannot overflow. Scalar reference plus NEON + DotProd (SDOT).
+- **`neuro-kernels::hp`**: 64-bit fixed point with 16 fraction bits for everything else. RMSNorm with
+  binary32 gains and eps, NEOX ("rotate half") RoPE from a Q30 table, `exp` (2^(k/256) table built at
+  compile time by integer square roots, linear interpolation), fused SwiGLU, and attention over an
+  `i16` KV cache with a per-vector shift (15 significant bits per vector; binary16 has 11). Still no
+  floating point on the device.
+- **`neuro-lm::qwen3`**: the Qwen3 decoder. Per-head QK-norm, GQA, NEOX RoPE (θ from the model), SwiGLU,
+  no biases, tied or separate output head, greedy generation with stop tokens. `check()` refuses wrong
+  shapes and any infinite or NaN scale or gain. All memory is caller-supplied.
+
+| Gate | Result |
+|---|---|
+| Every one of the 65,536 binary16 values and 200,000 random binary32 values decode exactly | pass |
+| `Q8_0` GEMV: 3,000 rows (32–2,048 columns, activations from 10⁻³ to 6×10⁵ with outlier channels) equal f64 on the same quantised operands; activation scale within 3×10⁻⁵ of `amax/127` | pass |
+| Fixed point vs f64: exp worst relative error 2.7×10⁻⁶; RMSNorm ≤ 1.5 LSB + 10⁻⁶; RoPE at θ = 10⁶ ≤ 1 LSB; SwiGLU ≤ 2 LSB + 10⁻⁵; attention worst error 5.5×10⁻⁶ of the largest \|V\| | pass |
+| **Whole Qwen3-shaped model vs an f64 runtime on the SAME `Q8_0` weights** (3 random 3-layer models with outlier channels, 144 steps; the f64 side keeps every activation and the KV cache in f64, like a float runtime): logit 1 − cosine mean 1.9×10⁻⁸, worst 2.3×10⁻⁷; greedy token equal in 144 of 144 steps | pass |
+| Refused: NaN gain, infinite weight scale, short matrix, wrong RoPE table, infinite eps; bad token, full context, wrong cache size; generation deterministic and stops on a stop token | pass |
+| **Bare metal, emulated Cortex-A76:** `Q8_0` kernel scalar == NEON on 6,000 rows across every binary16 exponent; a whole 2-layer Qwen3-shaped decoder (113 KB of `Q8_0` weights), 32 positions, every logit equal | pass |
+| Device crates still contain no floating point, no `std`, no Linux and no Python (`no_linux_no_python.rs`) | pass |
+
+What this does and does not show. It shows that the integer engine computes what a floating-point runtime
+computes from the same `Q8_0` weights, to about 10⁻⁷ in logits, on random Qwen3-shaped models. It does not
+show quality on Neuro's model. That is the fidelity check in `NEURO_ALIGNMENT.md`: Neuro's exported GGUF,
+its dev set only, against llama.cpp on the same file. One known difference: llama.cpp on a Mac runs Metal,
+which does not quantise activations (its CPU path does). The tolerance for that check must cover this, and
+the test above suggests the effect is small.
+
+Not built yet: the converter (`hnx-compile`, waiting on Neuro's GGUF and answers), the Qwen2 tokenizer
+(151,936 ids and the Qwen pre-tokenizer; the current BPE uses 16-bit ids), a 4-row NEON `Q8_0` kernel for
+speed, and any speed number (needs a real A76 after KR-1).
+
 ## Crates
 
 | Crate | What | Target |

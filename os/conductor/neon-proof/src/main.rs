@@ -166,6 +166,8 @@ extern "C" fn main() -> ! {
     }
     let _ = writeln!(u, "PASS engine: {}x{} Q4 layer ({} byte package, {} MACs per run), {} runs, scalar == {}", ROWS, COLS, n, model.macs(), runs, simd.name());
     lm_proof(&mut u, simd, &mut rng);
+    q8_proof(&mut u, simd, &mut rng);
+    qwen3_proof(&mut u, simd, &mut rng);
     exit(0)
 }
 
@@ -282,5 +284,137 @@ fn lm_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
         }
     }
     let _ = writeln!(u, "PASS decoder: 2 layers, 4 heads / 2 KV heads, RoPE, SwiGLU, 4-bit weights ({} weight bytes); {} positions, every logit equal, scalar == {}", TOTAL, steps, simd.name());
+    let _ = writeln!(u, "  generated tokens after the prompt: {:?}", &generated[prompt.len()..prompt.len() + 12]);
+}
+
+/// Q8_0 rows (GGUF block layout) × per-block quantised activations: NEON + DotProd against the scalar
+/// reference, including edge values and binary16 scales across the whole finite range.
+fn q8_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
+    use neuro_kernels::q8;
+    const MAXC: usize = 2048;
+    static mut WR: [u8; q8::row_bytes(MAXC)] = [0; q8::row_bytes(MAXC)];
+    static mut XV: [i64; MAXC] = [0; MAXC];
+    static mut XQ: [i8; MAXC] = [0; MAXC];
+    static mut XS: [(i32, i32); MAXC / 32] = [(0, 0); MAXC / 32];
+    let (wr, xv, xq, xs) = unsafe { (&mut *core::ptr::addr_of_mut!(WR), &mut *core::ptr::addr_of_mut!(XV), &mut *core::ptr::addr_of_mut!(XQ), &mut *core::ptr::addr_of_mut!(XS)) };
+    let (mut rows, mut macs) = (0u64, 0u64);
+    for round in 0..6_000u32 {
+        let cols = 32 * (1 + (rng.next() % 64) as usize);
+        let wn = q8::row_bytes(cols);
+        for blk in wr[..wn].chunks_exact_mut(q8::BLOCK_BYTES) {
+            // Any finite binary16 scale (exponent 0..=30), sign included.
+            let e = (rng.next() % 31) as u16;
+            let bits = (e << 10) | (rng.next() as u16 & 0x83ff);
+            blk[..2].copy_from_slice(&bits.to_le_bytes());
+            for q in blk[2..].iter_mut() {
+                *q = match round % 5 {
+                    0 => 0x81, // −127
+                    1 => 0x7f,
+                    _ => rng.next() as u8,
+                };
+            }
+        }
+        let mag = [1u32, 12, 24, 40][(round % 4) as usize];
+        for v in xv[..cols].iter_mut() {
+            *v = (rng.next() as i64) >> (63 - mag);
+        }
+        if !q8::quantize(&xv[..cols], &mut xq[..cols], &mut xs[..cols / 32]) {
+            let _ = writeln!(u, "FAIL: q8 quantize refused");
+            exit(1);
+        }
+        let act = q8::Act { q: &xq[..cols], scale: &xs[..cols / 32] };
+        let (a, b) = (q8::row_scalar(&wr[..wn], &act), q8::row(simd, &wr[..wn], &act));
+        if a.is_none() || a != b {
+            let _ = writeln!(u, "FAIL q8 round {round} cols {cols}: scalar {a:?} neon {b:?}");
+            exit(1);
+        }
+        rows += 1;
+        macs += cols as u64;
+    }
+    let _ = writeln!(u, "PASS q8 kernel: {rows} Q8_0 rows, {macs} MACs, every binary16 exponent, {} identical to the scalar reference", simd.name());
+}
+
+/// A whole Qwen3-shaped decoder (QK-norm, NEOX RoPE θ = 1e6, GQA, SwiGLU, tied head, Q8_0 weights in GGUF
+/// layout, binary32 gains) run scalar and NEON from the same prompt: every logit of every step equal.
+fn qwen3_proof(u: &mut Uart, simd: Simd, rng: &mut Rng) {
+    use neuro_kernels::q8::row_bytes;
+    use neuro_lm::qwen3::{Kv, Layer, Mat, Model, Work};
+    use neuro_lm::Dims;
+    const D: Dims = Dims { vocab: 128, d_model: 64, n_layers: 2, n_heads: 4, n_kv_heads: 2, head_dim: 32, ffn: 128, max_ctx: 32 };
+    const QD: usize = 128;
+    const KVD: usize = 64;
+    const SIZES: [usize; 7] = [QD * 68, KVD * 68, KVD * 68, 64 * row_bytes(QD), 128 * 68, 128 * 68, 64 * row_bytes(128)];
+    const PER_LAYER: usize = SIZES[0] + SIZES[1] + SIZES[2] + SIZES[3] + SIZES[4] + SIZES[5] + SIZES[6];
+    const TOTAL: usize = 2 * PER_LAYER + 128 * 68;
+    const NORMS: usize = 2 * (64 + 32 + 32 + 64) * 4 + 64 * 4;
+    const KVN: usize = 2 * 2 * 2 * 32 * 32;
+    const KVS: usize = 2 * 2 * 2 * 32;
+    const A64: usize = 2 * 64 + 2 * QD + 2 * KVD + 2 * 128 + 32 + 128;
+    static mut W: [u8; TOTAL] = [0; TOTAL];
+    static mut G: [u8; NORMS] = [0; NORMS];
+    static mut KV_A: ([i16; KVN], [u8; KVS]) = ([0; KVN], [0; KVS]);
+    static mut KV_B: ([i16; KVN], [u8; KVS]) = ([0; KVN], [0; KVS]);
+    static mut WA: ([i64; A64], [i8; 128], [(i32, i32); 4], [i32; 32]) = ([0; A64], [0; 128], [(0, 0); 4], [0; 32]);
+    static mut WB: ([i64; A64], [i8; 128], [(i32, i32); 4], [i32; 32]) = ([0; A64], [0; 128], [(0, 0); 4], [0; 32]);
+    let (w, g) = unsafe { (&mut *core::ptr::addr_of_mut!(W), &mut *core::ptr::addr_of_mut!(G)) };
+    let embed_off = 2 * PER_LAYER;
+    for (i, blk) in w.chunks_exact_mut(34).enumerate() {
+        // Weight scale ≈ 2^-10 (binary16 exponent 5); embedding scale ≈ 2^-5 (exponent 10).
+        let e: u16 = if i * 34 >= embed_off { 10 } else { 5 };
+        let bits = (e << 10) | (rng.next() as u16 & 0x3ff);
+        blk[..2].copy_from_slice(&bits.to_le_bytes());
+        for q in blk[2..].iter_mut() {
+            *q = rng.next() as u8;
+        }
+    }
+    for c in g.chunks_exact_mut(4) {
+        // binary32 gains around 1.0 (0x3f800000 ± 2^-4 relative)
+        let bits = 0x3f80_0000u32 + (rng.next() as u32 % 0x10_0000) - 0x8_0000;
+        c.copy_from_slice(&bits.to_le_bytes());
+    }
+    let (w, g): (&'static [u8], &'static [u8]) = (w, g);
+    let (mut wo, mut go) = (0usize, 0usize);
+    let mut mat = |rows: usize, cols: usize| {
+        let n = rows * row_bytes(cols);
+        let m = Mat { rows, cols, w: &w[wo..wo + n] };
+        wo += n;
+        m
+    };
+    let mut gain = |n: usize| {
+        let s = &g[go..go + 4 * n];
+        go += 4 * n;
+        s
+    };
+    let mut layer = || Layer { attn_norm: gain(64), wq: mat(QD, 64), wk: mat(KVD, 64), wv: mat(KVD, 64), wo: mat(64, QD), q_norm: gain(32), k_norm: gain(32), ffn_norm: gain(64), w_gate: mat(128, 64), w_up: mat(128, 64), w_down: mat(64, 128) };
+    let layers = [layer(), layer()];
+    let model = Model { dims: D, embed: Mat { rows: 128, cols: 64, w: &w[embed_off..] }, layers: &layers, final_norm: &g[NORMS - 256..], head: None, rope: &tables::ROPE_NEOX, eps: tables::EPS_BITS, kq_scale: tables::KQ_SCALE_BITS };
+    if model.check().is_err() {
+        let _ = writeln!(u, "FAIL: qwen3 model shapes");
+        exit(1);
+    }
+    let (kva, kvb, wa, wb) = unsafe { (&mut *core::ptr::addr_of_mut!(KV_A), &mut *core::ptr::addr_of_mut!(KV_B), &mut *core::ptr::addr_of_mut!(WA), &mut *core::ptr::addr_of_mut!(WB)) };
+    let (Some(mut work_a), Some(mut work_b)) = (Work::new(&D, &mut wa.0, &mut wa.1, &mut wa.2, &mut wa.3), Work::new(&D, &mut wb.0, &mut wb.1, &mut wb.2, &mut wb.3)) else {
+        let _ = writeln!(u, "FAIL: qwen3 work buffers");
+        exit(1)
+    };
+    let (mut kv_a, mut kv_b) = (Kv { vals: &mut kva.0, shifts: &mut kva.1 }, Kv { vals: &mut kvb.0, shifts: &mut kvb.1 });
+    let prompt = [3usize, 77, 12, 101, 64];
+    let mut tok = 0usize;
+    let mut generated = [0u8; 32];
+    for pos in 0..D.max_ctx {
+        let t = if pos < prompt.len() { prompt[pos] } else { tok };
+        let (ra, rb) = (model.step(Simd::SCALAR, t, pos, &mut kv_a, &mut work_a), model.step(simd, t, pos, &mut kv_b, &mut work_b));
+        match (ra, rb) {
+            (Ok(a), Ok(b)) if a == b && work_a.logits == work_b.logits => {
+                tok = a;
+                generated[pos] = a as u8;
+            }
+            _ => {
+                let _ = writeln!(u, "FAIL: qwen3 scalar and {} differ at position {pos}", simd.name());
+                exit(1);
+            }
+        }
+    }
+    let _ = writeln!(u, "PASS qwen3: 2 layers, QK-norm, NEOX RoPE theta 1e6, GQA 4/2, SwiGLU, tied head, Q8_0 ({} weight bytes); {} positions, every logit equal, scalar == {}", TOTAL, D.max_ctx, simd.name());
     let _ = writeln!(u, "  generated tokens after the prompt: {:?}", &generated[prompt.len()..prompt.len() + 12]);
 }
