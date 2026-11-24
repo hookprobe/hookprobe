@@ -22,6 +22,9 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+pub mod attack_ids;
+pub mod grounding;
+
 pub const VERDICTS: [&str; 4] = ["malicious", "suspicious", "benign", "insufficient_evidence"];
 pub const SEVERITIES: [&str; 5] = ["info", "low", "medium", "high", "critical"];
 pub const NEXT_STEPS: [&str; 4] = ["observe", "investigate", "harden", "isolate_review"];

@@ -36,6 +36,22 @@ pub enum Finding {
     MissingRequired = 5,
     /// The model states a verdict L0 cannot reproduce.
     NotReproducible = 6,
+    /// A technique id that is not a real ATT&CK id remains in the prose (guard G did not remove it).
+    InventedTechnique = 7,
+    /// A CVE id no tool result supplied remains in the prose.
+    UngroundedCve = 8,
+    /// A service is named whose port is not on the cards (Neuro `grounding.service_check`); no filter fixes it.
+    ServiceWithoutPort = 9,
+}
+
+/// What the grounding checks (Neuro's `grounding.py`, mirrored in `neuro_contract::grounding`) found in the
+/// answer's prose after guard G. Neuro's severities: invented technique or unreturned CVE = REJECTED; a service
+/// without its port on the cards = UNVERIFIED.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Grounding {
+    pub unknown_techniques: usize,
+    pub ungrounded_cves: usize,
+    pub services_without_port: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +65,12 @@ pub struct Verification {
     pub model_verdict: Option<Verdict>,
 }
 
+/// [`verify_grounded`] with no grounding findings.
 pub fn verify(a: &Answer, job: &JobSpec, included: &[bool; MAX_EVIDENCE]) -> Verification {
+    verify_grounded(a, job, included, Grounding::default())
+}
+
+pub fn verify_grounded(a: &Answer, job: &JobSpec, included: &[bool; MAX_EVIDENCE], g: Grounding) -> Verification {
     let mk = |status, finding, shown, l0_decided| Verification {
         status,
         finding,
@@ -73,6 +94,12 @@ pub fn verify(a: &Answer, job: &JobSpec, included: &[bool; MAX_EVIDENCE]) -> Ver
     if a.summary_len == 0 {
         return mk(Status::Rejected, Finding::EmptySummary, None, false);
     }
+    if g.unknown_techniques > 0 {
+        return mk(Status::Rejected, Finding::InventedTechnique, None, false);
+    }
+    if g.ungrounded_cves > 0 {
+        return mk(Status::Rejected, Finding::UngroundedCve, None, false);
+    }
     // Computational: L0 decides where it has a verdict. "insufficient_evidence" is no claim.
     let claim = a.verdict.filter(|v| *v != Verdict::InsufficientEvidence);
     if let (Some(l0), Some(m)) = (job.l0_verdict(), claim) {
@@ -84,9 +111,15 @@ pub fn verify(a: &Answer, job: &JobSpec, included: &[bool; MAX_EVIDENCE]) -> Ver
     if missing {
         return mk(Status::Incomplete, Finding::MissingRequired, job.l0_verdict(), job.l0_verdict().is_some());
     }
-    match (job.l0_verdict(), claim) {
+    let v = match (job.l0_verdict(), claim) {
         (Some(l0), _) => mk(Status::Valid, Finding::None, Some(l0), true),
         (None, Some(_)) => mk(Status::Unverified, Finding::NotReproducible, None, false),
         (None, None) => mk(Status::Valid, Finding::None, None, false),
+    };
+    // The explanation names a service the cards do not show: the verdict (L0's, if any) stands, the wording is
+    // not verified.
+    if v.status == Status::Valid && g.services_without_port > 0 {
+        return Verification { status: Status::Unverified, finding: Finding::ServiceWithoutPort, ..v };
     }
+    v
 }

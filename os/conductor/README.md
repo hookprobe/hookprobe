@@ -395,10 +395,10 @@ EL0 binary (`el0-harness`, release, opt-level "s", ed25519-compact at "z"):
 
 | | Bytes |
 |---|---|
-| `.text` | 82,716 |
-| `.rodata` | 4,328 |
+| `.text` | 90,736 |
+| `.rodata` | 8,408 |
 | `.data` | 0 |
-| `.bss` (whole job state, in place) | 52,392 |
+| `.bss` (whole job state, in place) | 52,408 |
 | Worst-case stack from `_start` (static bound: no indirect calls, no register-based sp adjustment) | 10,912 |
 | FP/SIMD instructions | 0 (runs on today's softfloat heqk; no R2 needed) |
 
@@ -447,7 +447,12 @@ cd os/conductor/el0-harness && cargo build --release
 - Third-party applications (containers / microVMs on a companion host) are outside C0 and need their own
   ADR.
 
-## Next engine item (alignment with `origin/main` @ `4d7ad4f`)
+## Next engine item (alignment with `origin/main` @ `cbbf56f`)
+
+**Update (Neuro's answers, `cbbf56f`):** the explainer is now two models. **ftFg** handles triage: one shot, no
+tools. **ftL** handles investigation: one tool call or none per turn (doc 43 PASS). Both are Qwen3-1.7B LoRA
+fine-tunes. Guards A, E and G run on the device, and **rule T is dropped** (doc 40 failed). Guard G is built
+(below). The engine's tool loop is needed for ftL only.
 
 Doc 42 failed ftKg, so **ftFg stays the explainer**: one shot, no tools. Neuro validated it with **evidence-closed
 decoding**: a per-request JSON schema whose `evidence` and `entities` enums are exactly the fact ids and aliases
@@ -498,6 +503,7 @@ and the `json_schema` call. Changing `maxLength` 600 → 500 in Neuro's file mad
 | 12 runs on random models (both layouts): plain, pruned, speculative and both give **identical tokens**; every answer parses under the contract | pass |
 | Conductor on the contract: all 28 C0 gate tests, C1-prep, fuzz, quotes, Runtime Proof 001. A fabricated id cannot be written; a card that injects its own `F9 …` line is caught by the verifier; a bidi override hidden as `‮` is refused after unescaping | pass |
 | EL0 harness: `.text` 82,716 B (+7.9 KB for the contract and Neuro's prompt text), `.bss` 52,392 B, **stack bound 10,912 B** (was 13,280), 0 FP/SIMD. `stack_bound` now also recognises half-word and byte jump tables | pass |
+| **Guard G and grounding (Neuro's answers, 2026-11-24).** `neuro_contract::grounding` mirrors `guard_ground.py` and `grounding.py`: 1,518 vectors from Neuro's own functions match exactly. The ATT&CK 20.1 table (867 ids, 3.5 KB) has a drift gate against `attack-ids.json`. The harness runs G on the decoded summary before the verifier, against the cards and the earlier tool results, and records every edit in the ledger (`GroundingEdit`). The verifier applies Neuro's severities: an invented technique or an unreturned CVE → REJECTED; a service without its port on the cards → UNVERIFIED, and L0's verdict stands. Harness cost: `.text` +8.0 KB, `.rodata` +4.1 KB (90,736 / 8,408 B); stack bound unchanged | pass |
 
 Random models repeat characters, which flatters n-gram drafts (0.49 passes per token there). The real-model
 numbers are below.

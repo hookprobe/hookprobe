@@ -48,7 +48,7 @@ pub struct Finding {
 }
 
 /// Workload 5. Two independent signals agree → suspicious; exactly one → insufficient evidence (a single
-/// weak signal, the shape Neuro doc 40's rule T handles); none → no investigation. Whatever it says, the
+/// weak signal; Neuro's rule T for this shape failed doc 40 and was dropped); none → no investigation. Whatever it says, the
 /// enforcement action is `Observed`: Neuro never drives a drop.
 pub fn l0_rule(dna_alarm: bool, s1_alert: bool) -> Option<Verdict> {
     match (dna_alarm, s1_alert) {

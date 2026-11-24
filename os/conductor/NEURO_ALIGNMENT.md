@@ -1,6 +1,6 @@
 # Conductor / heqk-native engine ↔ Neuro: alignment (2026-11-24)
 
-> Written by the Conductor session after reading Neuro's work up to `origin/main` @ `e478bca`; updated at `4d7ad4f` (end of file) (docs 30, 39–42,
+> Written by the Conductor session after reading Neuro's work up to `origin/main` @ `e478bca`; updated at `4d7ad4f` and `cbbf56f` (end of file) (docs 30, 39–42,
 > `data/e2e-2026-11-24.md`, `tools/neuro-research`). The Neuro session was not reachable from this cloud
 > session; this note is the hand-off. Nothing here changes Neuro's decisions.
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | Which models, training, fine-tunes (ftFg, mixK → ftKg), LoRA recipes | **Neuro** (docs 16, 25–26, 42) | none. Conductor trains nothing |
 | Evaluation sets, pre-registrations, gates (blind v7, dev v8, inv-blind v1 sealed) | **Neuro** | none. No parallel quality evaluation |
-| Prompt format, tools (the six tools, `lookup_exposure`), playbooks, guards A/E, rule T | **Neuro** (docs 25, 39–41, 40) | **adopt**, not invent |
+| Prompt format, tools (the six tools, `lookup_exposure`), playbooks, guards A/E/G (rule T dropped, doc 40) | **Neuro** (docs 25, 39–43) | **adopt**, not invent |
 | End-to-end quality and cost of the pipeline (run 1, Mac) | **Neuro** (`e2e_neuro.sh`) | reuse its numbers; do not re-measure |
 | Detection tier on device (DNA, S1, neuro-dp) | Neuro + HomePods (metal) | compose only |
 | heqk-native execution of the explainer: engine, kernels, model package (HNX), loader, admission | **Conductor** (with HomePods for kernel R2–R8) | build |
@@ -27,8 +27,8 @@
    Neuro's gates again.
 2. **Prompt, tools, answer schema.** The Conductor harness (C0) invented its own JSON answer schema and two
    tools (`evidence.get`, `flows.count`). Change: adopt Neuro's `run_eval.SYSTEM` framing, the six tools with
-   their argument types, the `<tool_call>` format of the model's chat template, guard A on the context, guard E
-   and rule T on the answer. Conductor keeps what Neuro does not cover: per-call capability, typed-argument
+   their argument types, the `<tool_call>` format of the model's chat template, guard A on the context, guards E
+   and G on the answer (rule T was dropped: doc 40 failed). Conductor keeps what Neuro does not cover: per-call capability, typed-argument
    authorization, data-class flow checks, the five verifier statuses, the ledger.
 3. **Runtime Proof 001 vs e2e run 1.** Not the same thing, but overlapping. Run 1 measures quality and cost
    (Python + llama-server on the Mac). Proof 001 shows the device-side Rust crates compose in one `no_std`
@@ -175,3 +175,34 @@ unchanged, so the contract still holds (the drift gate passes).
   Rows (b) (Claude Code natively on heqk: no) and (c) (Claude Code operating devices remotely: yes) stand.
 - **New CI wiring:** `tools/ci/lockfiles.txt` and dependabot now list the four Conductor workspaces, so G0
   wiring passes and G4 scans them.
+
+## Update at `cbbf56f`: Neuro's answers (hookprobe/hookprobe#1581, `docs/research/neuro/data/conductor-answers-2026-11-24.md`)
+
+Neuro answered all six questions. What the Conductor took from them:
+
+| Neuro's answer | Conductor |
+|---|---|
+| Explainer = **ftFg** (triage, `0b0d276e…61ed`) + **ftL** (investigation, `27ee1312…0158`, doc 43 PASS); both Qwen3-1.7B @ `70d244cc` LoRAs, full merged Q8_0 GGUFs | Engine target is two packed models (or one base plus two LoRAs merged at load). The tool loop is for ftL only |
+| **Rule T dropped** (doc 40 FAIL) | Removed from this note, the README and the Runtime Proof comment. No code used it |
+| Guards **A, E, G** run on the device | **G built**: `neuro_contract::grounding`, run by the harness before the verifier. A and E: next |
+| Severities: invented technique / unreturned CVE → REJECTED; G's edit → accepted, recorded in the ledger; service without its port → UNVERIFIED | Built exactly so (`verify::Finding::{InventedTechnique, UngroundedCve, ServiceWithoutPort}`, ledger `GroundingEdit`) |
+| Mirror `data/attack-ids.json` with a drift gate | Done: 867 ids, ATT&CK 20.1, `tests/grounding.rs` |
+| Closed mode is part of the contract | Already so (`write_schema(.., closed = true)`) |
+| Card contract = run-1 compressor format, plus the L1 alert as a detection (`det=behaviour_change[-,sev2,…]` on the top remote peer and its fan-out cards); `S0`/`REJ` → `rst`, `SF` → `fin` | Next: the device's card writer (Runtime Proof 001 still uses its own cards) |
+| Fidelity sets: dev v8 (triage), inv-blind v1/v2 (investigation); never a sealed set | Adopted |
+| Shared contract file (`triage_contract.json`) in a later no-behaviour-change PR | Agreed; our drift gate will read the JSON once it lands |
+| Model files stay on the Neuro host until the operator decides | The operator staged them at `~/.cache/hookprobe-neuro/share-conductor/` on the Mac. This cloud session cannot reach them (Remote Control is disabled by the admin) |
+
+**Two findings in Neuro's guard G, from mirroring it byte for byte** (1,518 vectors from Neuro's own functions):
+1. **It is not deterministic.** `_strip` orders the bad tokens with `sorted(set(bad), key=len, reverse=True)`, so
+   tokens of equal length come out in set order, which depends on `PYTHONHASHSEED`. The output changes with it: on
+   `'T8'; telnetssdp] T1[T9]http` one seed keeps `T1`, another removes it. **Proposed fix (one line):**
+   `sorted(set(bad), key=lambda s: (-len(s), s))`. The device uses that order. The vectors were made with
+   exactly that change and checked to be identical under two seeds.
+2. **An unreturned CVE can survive G.** The detector `CVE-\d{4}-\d{4,7}` matches the first 7 digits of an
+   over-long id, and also an id glued to a following letter (`CVE-2021-44228x`). The removal pattern then
+   requires a non-alphanumeric character after the token, so nothing is removed, although `_guard_g` lists the
+   token as removed. 318 of the 1,518 vectors are like this. So "after G, an unreturned CVE cannot remain" does
+   not hold. The verifier's REJECTED is the backstop, and on the device it catches every such case
+   (`tests/grounding.rs`, `conductor-mock/tests/grounding.rs`). **Possible fix, Neuro's call:** remove the
+   detected span by position instead of by a second pattern.
