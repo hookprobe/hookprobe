@@ -82,3 +82,27 @@ the floor. That look is descriptive; the set stays usable for the gate, because 
   no adjudication needed. Gold sets accept one or two answers, which makes agreement easier than a single-answer
   match.
 - Nobody but the author has read the case content.
+
+## Floor (descriptive, one run, 2026-11-24): base17g and ftFg, zero-shot, with tools
+
+`inv_eval.py`, guard A, llama-server with `--jinja` for tool-call parsing. The earlier triage runs without that
+flag did parse tool calls (base17g made real calls on dev v8 and blind v7), so earlier `tool` scores stand.
+
+| | base17g | ftFg |
+|---|---|---|
+| `step_ok` on next (45) | 0.222 | **0.000** |
+| `step_ok` on multi (35) | 0.086 | **0.000** |
+| `step_ok` on clears (30) / decoy (25) / invisible (15) | 0.567 / 0.520 / 1.000 | 1.000 / 1.000 / 1.000 |
+| tool calls made (of 150) | 75 (2 policy proposals, both on multi) | **0** |
+| answers with an unreturned CVE id | 0 | **1** (clears-005: free text naming a CVE id absent from the context) |
+
+**Reading.**
+1. **ftFg has lost tool calling.** Fine-tuned on triage JSON alone (docs 25–26), it answers without a tool on every
+   case. Its dev v8 and blind v7 `tool` subsets show the same: 25 of 25 answers without a call, scoring only where
+   "no call" was gold. Its perfect stop score here is the absence of tool use, not judgement.
+2. **The hard CVE gate is needed.** ftFg wrote a CVE id it was never given. This is the failure doc 39 §1 predicted.
+3. **base17g investigates, but poorly** (next 0.22, multi 0.09), and calls tools on about half the decoys.
+
+**Consequence for P4 (doc 42).** Training must restore tool calling. A triage-only student forgets it. Mixing
+tool-call SFT with the triage mix, and condition 5 (no triage regression), are both necessary. The CVE gate must
+also apply to triage answers, not only to investigation.
