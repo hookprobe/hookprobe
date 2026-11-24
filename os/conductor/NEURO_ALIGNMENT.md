@@ -276,13 +276,18 @@ Neuro published the generated side of the three vectors and the server's own gra
   steps has the same raw top-1 and the same constrained choice, and the engine alone generates the same ids.
   In these vectors the grammar never had to overrule the model: the sampled token is always the raw top-1.
 
-**What the mirror does not settle:**
-1. **The grammar is wider than what the device acts on.** The entity is any JSON string, `minutes` any integer,
-   and several tools or calls may follow each other. The engine decodes as the server does; `parse_answer` then
-   refuses what is out of scope. Closing the entity to the context's aliases during decoding, as closed mode does
-   for triage, would guarantee a readable call but would no longer be what Neuro's gate measured. Neuro's call.
-2. **Two things are assumed from the server's settings, not observed in a vector:** that the word trigger also
-   fires when ordinary tokens spell it, and that a token running past the trigger must fit the grammar from
-   there (the engine stops with an error if it does not).
-3. **Three synthetic vectors are not a fidelity run.** That needs the spent investigation sets through the
-   fidelity tool, which still refuses them.
+**Settled with Neuro (2026-11-24):**
+1. **The entity stays an open string while decoding.** Doc 44 measured ftM that way, all 105 tool calls of its
+   test set used an alias, and forcing an alias could turn a call that should be refused into a valid-looking call
+   on the wrong alias. `parse_answer` refusing it afterwards fails closed. Closed entities would need a new
+   pre-registered document, measured.
+2. **How the trigger works, from Neuro's reading of the b12477 source** (`common/sampling.cpp`,
+   `src/llama-grammar.cpp`; not re-read here). The trigger is two tokens, so it is a word trigger, matched as
+   text over everything generated so far: ordinary tokens that spell it fire it too. On a match the grammar is
+   fed from the first character of the trigger, and a token that runs past the trigger must fit the grammar from
+   there. Text before the trigger never reaches the grammar. The automaton does exactly this.
+3. **Neuro will say before regenerating `inv_contract_gen.json`** (another llama.cpp build or tool list), because
+   the grammar test here reads its GBNF.
+
+**Still open:** three synthetic vectors are not a fidelity run. That needs the spent investigation sets through
+the fidelity tool, which still refuses them.
