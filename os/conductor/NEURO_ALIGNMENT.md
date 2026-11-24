@@ -113,3 +113,23 @@ Two commits landed since `e478bca`. The Conductor branch is rebased onto `4d7ad4
 4. **New:** for the device, is `closed` mode (the per-request enum schema) part of the explainer contract? If yes,
    the engine implements it before the fidelity check. And which of guard A, filter E and rule T run on the device
    or in the harness, and which stay off-device?
+
+## Update: the device uses Neuro's explainer contract (2026-11-24, evening)
+
+- **`neuro-contract` mirrors `run_eval.py`** (enums, bounds, key order, system prompts, framing, id rule,
+  closed-schema text, ChatML with reasoning off). It is the one definition on the device side. The engine
+  decodes with it (evidence-closed, as `--mode closed`), and the Conductor harness builds its prompt and
+  parses replies with it. Conductor's own answer schema is retired.
+- **Drift gate:** a test reads `run_eval.py` and fails on any change to what the device mirrors. A Neuro
+  change to the contract therefore shows up as a failing Conductor test, not as silent divergence.
+- **Proposal to make it one file:** move `VERDICTS`, `SEVERITIES`, `NEXT`, `SYSTEM` and the schema bounds into
+  a small data file (for example `tools/neuro-research/eval/triage_contract.json`). `run_eval.py` and the
+  device crate would then read the same file. Until Neuro decides, the mirror plus the drift gate stand in.
+- **Known differences from llama-server**, all edge cases:
+  - ids next to non-ASCII punctuation, and non-ASCII digits (Python's Unicode `\b` and `\d`);
+  - control tokens inside a string (refused here);
+  - llama.cpp's own Unicode tables.
+
+  The fidelity check on the dev set should compare token ids, as noted above.
+- **Conductor's tool calls** stay a Conductor extension (ftFg makes none). The tool line is added to the
+  system prompt only when a job grants tools.

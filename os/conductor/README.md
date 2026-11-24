@@ -452,3 +452,49 @@ in the context, compiled by llama-server into a grammar. Temperature is 0 and re
 with that configuration, the engine needs the same constraint: a fixed-shape schema automaton that masks logits
 before the argmax, integer only, with no regex engine. Not built yet. Details and the updated questions are in
 `NEURO_ALIGNMENT.md`.
+
+## Evidence-closed decoding, from one contract
+
+**One source of truth.** `neuro-contract` (`no_std`, no allocation, no float) is the only place on the device
+side that defines the explainer's answer. It mirrors Neuro's `tools/neuro-research/eval/run_eval.py`:
+- the enums, bounds and key order;
+- the system prompts (en, ro) and the user framing;
+- the rule that takes fact ids and aliases from the context;
+- the closed-mode schema text, byte for byte as Python's `json.dumps` prints it;
+- the Qwen3 ChatML wrapping with reasoning off;
+- **one byte automaton** for the answer language. It mirrors what llama.cpp's grammar for that schema
+  accepts, including its whitespace rule, its lenient UTF-8 and integers without leading zeros.
+
+The same automaton masks tokens in the engine (`neuro-lm::decode`) and parses replies in Conductor's verifier.
+Conductor's own invented answer shape (`{"answer":{"cites":["ev:N"],…}}`) is gone, and the harness now builds
+Neuro's prompt from the contract.
+
+**Drift gate.** `neuro-contract/tests/drift.rs` reads `run_eval.py` as text and fails on any difference in
+the 3 enums, the 2 system prompts or 17 exact source fragments: the id regexes, the schema bounds, the framing
+and the `json_schema` call. Changing `maxLength` 600 → 500 in Neuro's file made it fail, naming the line.
+
+**Exact speed-ups.**
+- **One batched forward pass** (`Model::forward`) serves the one-token step, prompt prefill in batches, and
+  speculative verification. Matrices are read in 4-row groups, and each group computes every column while it
+  is in cache, so weights come from memory once per batch. Each column runs the same integer code as a
+  single token.
+- **Head pruning.** Outside free text, only the head rows of tokens the grammar allows are computed. On those
+  rows the result is identical to the full head.
+- **Verified speculation.** Drafts come from text the grammar forces (key names, the rest of an enum or id)
+  and from n-gram lookup in the prompt and answer so far. A draft is kept only if it is the masked greedy
+  choice, so the output equals sequential decoding.
+
+| Gate | Result |
+|---|---|
+| Id rule equals a regex reference on 50,000 random contexts; gathering ids line by line equals the joined context on 20,000 | pass |
+| Schema text equals Python's `json.dumps`, byte for byte | pass |
+| Automaton accepts valid answers (compact, spaced, escapes, multi-byte, 600-character limit exact) and refuses fabricated ids, reordered or duplicate or extra keys, out-of-enum values, confidence 101 or `07`, a 9th list item, raw tabs, bad escapes, whitespace beyond the rule, trailing text | pass |
+| Drift gate against `run_eval.py`, and it fails on a deliberate change | pass |
+| Batched forward == one-token steps, every logit, batches 3/8/16, GGUF and packed (host); packed NEON, 4 per pass, 32 positions (bare-metal A76) | pass |
+| Pruned head == full head on its rows | pass |
+| 12 runs on random models (both layouts): plain, pruned, speculative and both give **identical tokens**; every answer parses under the contract | pass |
+| Conductor on the contract: all 28 C0 gate tests, C1-prep, fuzz, quotes, Runtime Proof 001. A fabricated id cannot be written; a card that injects its own `F9 …` line is caught by the verifier; a bidi override hidden as `‮` is refused after unescaping | pass |
+| EL0 harness: `.text` 82,716 B (+7.9 KB for the contract and Neuro's prompt text), `.bss` 52,392 B, **stack bound 10,912 B** (was 13,280), 0 FP/SIMD. `stack_bound` now also recognises half-word and byte jump tables | pass |
+
+Random models repeat characters, which flatters n-gram drafts (0.49 passes per token there). The real-model
+numbers are below.
