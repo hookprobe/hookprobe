@@ -10,7 +10,7 @@ no call], "entities": [acceptable aliases], "policies": [acceptable policies, on
 Scores per answer:
   step_ok : the tool is one of gold.tools, and (if a tool was called) its entity is one of gold.entities, and (for
             propose_policy_change) its policy is one of gold.policies;
-  stop_ok : for kind stop/clears: no tool, or only a read-only look (never a policy change);
+  stop_ok : for kind clears/decoy: no tool, or only a read-only look (never a policy change);
   cve_ok  : every CVE id anywhere in the answer appears in the case's context (i.e. came from lookup_exposure). HARD.
 Usage: inv_eval.py --cases X.jsonl --url URL [--guard A] --json out.json        (model run)
        inv_eval.py --score X.jsonl run.json                                     (score a run)
@@ -39,7 +39,7 @@ def score(case, out):
     if ok and tool == "propose_policy_change" and g.get("policies"):
         ok = args.get("policy") in g["policies"]
     s = {"step_ok": ok}
-    if g["kind"] in ("stop", "clears"):
+    if g["kind"] in ("stop", "clears", "decoy"):
         s["stop_ok"] = tool is None or tool in READ_ONLY
     blob = json.dumps(out, ensure_ascii=False)
     s["cve_ok"] = all(c.upper() in case["context"].upper() for c in CVE.findall(blob))
@@ -72,7 +72,7 @@ def report(cases, res):
     for kd in sorted(k):
         x = k[kd]
         print("%-10s n=%d step_ok %.3f%s%s" % (kd, x["n"], x["step"] / max(1, x["n"]),
-                                           "" if kd not in ("stop", "clears") else "  stop_ok %.3f" % (x["stop"] / max(1, x["n"])),
+                                           "" if kd not in ("stop", "clears", "decoy") else "  stop_ok %.3f" % (x["stop"] / max(1, x["n"])),
                                            "" if kd != "ALL" else "  answers with an unreturned CVE id: %d" % x["cve_bad"]))
 
 

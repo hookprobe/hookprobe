@@ -8,6 +8,7 @@ Per observable playbook, one card template (SIGN below) renders its "seen on the
   multi     the sign + a RESULT line for step 1 -> gold = step 2
   clears    the sign + a RESULT line meeting the playbook's "clears" condition -> gold = stop (no call)
   invisible a window for a technique the gateway cannot see (T1003) -> gold = no call
+  decoy     (v2, doc 42) an ordinary window with no detection that needs no investigation -> gold = no call
 Usage: gen_investigate.py --playbooks data/playbooks.json --n 600 --seed 39 --out inv.jsonl [--ro 0.10]
 """
 import argparse, hashlib, json, os, random, sys
@@ -91,19 +92,26 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--playbooks", required=True); ap.add_argument("--n", type=int, default=600); ap.add_argument("--seed", type=int, default=39)
     ap.add_argument("--ro", type=float, default=0.10); ap.add_argument("--out", required=True); ap.add_argument("--id-prefix", default="inv")
+    ap.add_argument("--v1", action="store_true", help="doc 41 version: no decoy kind (reproduces the P3 output)")
     a = ap.parse_args()
     pbs = [p for p in json.load(open(a.playbooks))["playbooks"]]
     obs = [p for p in pbs if p["observable"]]
     blind = [p for p in pbs if not p["observable"]]
     r = random.Random(a.seed)
     out, seen = [], set()
-    kinds = ["next"] * 4 + ["multi"] * 3 + ["clears"] * 2 + ["invisible"]
+    kinds = ["next"] * 4 + ["multi"] * 3 + ["clears"] * 2 + ["invisible"] + ([] if a.v1 else ["decoy"] * 2)
     while len(out) < a.n:
         kind = r.choice(kinds)
         ro = r.random() < a.ro
         w = g.Win(r)
         H, R = w.ref("H", g.ip_lan(r)), w.ref("R", g.ip_wan(r))
-        if kind == "invisible":
+        if kind == "decoy":
+            w.card("%s->%s:443 n=%d out=%dKB" % (H, R, r.randrange(3, 80), r.randrange(5, 400)))   # ordinary, no detection
+            w.ctx_lines.append("CONTEXT %s is the %s" % (H.split("=")[0], r.choice(list(ROLE.values()))))
+            for _ in range(r.choice([1, 2, 3])):
+                g.distractor(w)
+            gold = {"kind": "decoy", "tools": [None], "entities": [], "technique": "-"}
+        elif kind == "invisible":
             p = r.choice(blind)
             w.card("%s->%s:445 n=%d" % (H, w.ref("H", g.ip_lan(r)), r.randrange(3, 30)))
             w.ctx_lines.append("CONTEXT owner: I think someone stole the passwords stored on %s" % H.split("=")[0])
