@@ -251,7 +251,7 @@ update; (d) remove, after ADR 0061 D3.
    - the sealed state from (1).
 
    The harness's only new syscall is this one.
-5. **Leases in the data plane.** On `StartLease { tier, until, egress_policy_id }`, the worker's compute segment
+5. **Leases in the data plane** (the decision is built and red-team tested: `conductor_core::lease`, `tests/c2_lease.rs`; lift it like the signer). On `StartLease { tier, until, egress_policy_id }`, the worker's compute segment
    may reach only that policy's destinations until `until`. At expiry, on `EndLease`, or when the kill switch
    bumps the epoch, the kernel closes every path. A frame from the worker outside its lease is dropped,
    recorded as evidence, and suspends the worker.

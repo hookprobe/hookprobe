@@ -10,3 +10,4 @@ license = "AGPL-3.0-only"
 [dependencies]
 neuro-contract = { path = "../neuro-contract" }
 conductor-core = { path = "../conductor-core", features = ["signer"] }
+conductor-worker = { path = "../conductor-worker" }

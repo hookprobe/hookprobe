@@ -322,6 +322,22 @@ impl MockWorker {
     }
 }
 
+/// Anything that answers on a worker session: the scripted [`MockWorker`], or the real reference worker
+/// (`conductor-worker`) through an adapter in the C2 tests.
+pub trait Remote {
+    fn tier(&self) -> Tier;
+    fn receive(&mut self, tx: &[u8], session: &[u8; 32], now_ms: u64) -> Vec<Vec<u8>>;
+}
+
+impl Remote for MockWorker {
+    fn tier(&self) -> Tier {
+        self.gate.tier
+    }
+    fn receive(&mut self, tx: &[u8], session: &[u8; 32], now_ms: u64) -> Vec<Vec<u8>> {
+        MockWorker::receive(self, tx, session, now_ms)
+    }
+}
+
 pub fn enc(r: &Response) -> Vec<u8> {
     let mut b = vec![0u8; 4096];
     let n = r.encode(&mut b).expect("encode");
@@ -374,17 +390,12 @@ impl Kernel {
         Self { signer, rng: Rng(0x9e3779b97f4a7c15), now: 1_000, tool_data: vec![], max_ticks: 3, cancel_after_sends: None, corrupt_signature: false, frame_mutator: None, mutated: false, latency_ms: 0 }
     }
 
-    pub fn run(&mut self, h: &mut Harness, job: &[u8], env: Env, worker: &mut MockWorker) -> Report {
-        let tier = worker.gate.tier;
-        let w = std::mem::replace(worker, MockWorker::new(tier, vec![]));
-        let mut ws = vec![w];
-        let rep = self.run_multi(h, job, env, &mut ws);
-        *worker = ws.pop().expect("worker");
-        rep
+    pub fn run<W: Remote>(&mut self, h: &mut Harness, job: &[u8], env: Env, worker: &mut W) -> Report {
+        self.run_multi(h, job, env, std::slice::from_mut(worker))
     }
 
     /// Several workers on different tiers; each Send goes to the worker of the currently open session.
-    pub fn run_multi(&mut self, h: &mut Harness, job: &[u8], env: Env, workers: &mut [MockWorker]) -> Report {
+    pub fn run_multi<W: Remote>(&mut self, h: &mut Harness, job: &[u8], env: Env, workers: &mut [W]) -> Report {
         let mut rep = Report::default();
         let mut current: Option<Tier> = None;
         h.load(job, env).expect("job decodes");
@@ -468,7 +479,7 @@ impl Kernel {
                             continue;
                         }
                         let s = WORKER_SESSION.with(|c| *c.borrow());
-                        let worker = workers.iter_mut().find(|w| Some(w.gate.tier) == current).expect("a worker for the open session");
+                        let worker = workers.iter_mut().find(|w| Some(w.tier()) == current).expect("a worker for the open session");
                         for mut f in worker.receive(h.tx(), &s, now) {
                             if let Some(m) = self.frame_mutator {
                                 if m(&mut self.rng, &mut f) {
@@ -519,4 +530,71 @@ pub fn run_simple(job: &JobBuilder, outputs: &[&str], tamper: Tamper) -> (Report
     let env = env_with(policy_p1(), public_key(&WORKER_SEED), Tier::P1);
     let r = k.run(&mut h, &job.encode(), env, &mut w);
     (r, w)
+}
+
+/// A block device that loses power, for the C1 and C2 power-loss tests. Sectors live on a shared
+/// [`Platter`], so a new `Disk` on the same platter is the next boot.
+pub mod disk {
+    use conductor_core::durable::{BlockDev, IoError};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    /// Sectors that survive power loss, shared between "boots".
+    #[derive(Default, Clone)]
+    pub struct Platter(pub Rc<RefCell<HashMap<u64, [u8; 512]>>>);
+
+    /// A view of the platter for one boot. After `writes_left` writes reach zero, the next write is torn (its first
+    /// `torn` bytes land, the rest of the sector keeps its old content) and the power goes: every later operation
+    /// fails. `bad_readback` makes the next read of a just-written sector return different bytes.
+    pub struct Disk {
+        pub p: Platter,
+        pub writes_left: Option<usize>,
+        pub torn: usize,
+        pub dead: bool,
+        pub bad_readback: bool,
+    }
+
+    impl Disk {
+        pub fn new(p: &Platter) -> Self {
+            Disk { p: p.clone(), writes_left: None, torn: 0, dead: false, bad_readback: false }
+        }
+        pub fn crashing(p: &Platter, after: usize, torn: usize) -> Self {
+            Disk { p: p.clone(), writes_left: Some(after), torn, dead: false, bad_readback: false }
+        }
+    }
+
+    impl BlockDev for Disk {
+        fn read_block(&self, lba: u64, out: &mut [u8; 512]) -> Result<(), IoError> {
+            if self.dead {
+                return Err(IoError);
+            }
+            *out = self.p.0.borrow().get(&lba).copied().unwrap_or([0; 512]);
+            if self.bad_readback {
+                out[100] ^= 1;
+            }
+            Ok(())
+        }
+        fn write_block(&mut self, lba: u64, data: &[u8; 512]) -> Result<(), IoError> {
+            if self.dead {
+                return Err(IoError);
+            }
+            if let Some(n) = self.writes_left.as_mut() {
+                if *n == 0 {
+                    let mut m = self.p.0.borrow_mut();
+                    let old = m.get(&lba).copied().unwrap_or([0; 512]);
+                    let mut s = old;
+                    s[..self.torn].copy_from_slice(&data[..self.torn]);
+                    m.insert(lba, s);
+                    self.dead = true;
+                    return Err(IoError);
+                }
+                *n -= 1;
+            }
+            self.p.0.borrow_mut().insert(lba, *data);
+            Ok(())
+        }
+    }
+
+    pub const TORN: [usize; 9] = [0, 1, 8, 15, 16, 47, 48, 100, 512];
 }
