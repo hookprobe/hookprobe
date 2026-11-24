@@ -3,7 +3,7 @@
 # ADR 0067 D12 decision. el0-harness is a detached crate (its own [workspace]), like os/neuro/el0-neuro.
 [workspace]
 resolver = "2"
-members = ["conductor-core", "conductor-mock", "runtime-proof"]
+members = ["conductor-core", "conductor-mock", "runtime-proof", "neuro-engine"]
 
 [profile.release]
 panic = "abort"

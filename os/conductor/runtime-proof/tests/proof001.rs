@@ -42,6 +42,18 @@ fn replay(p: &mut Proof, findings: &mut Vec<Finding>) {
 #[test]
 fn six_workloads_one_runtime() {
     let mut p = PROOF.lock().unwrap();
+    // Workload 3's model is a data package, packed here (build side) and admitted by the engine.
+    static S1_PKG: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    let pkg: &'static [u8] = S1_PKG.get_or_init(|| {
+        use neuro_l1::s1_model::{BQ, THR_Q, WQ};
+        let mut b = vec![0u8; 512];
+        let n = neuro_engine::pack::linear_specialist(&mut b, &WQ, BQ, THR_Q).unwrap();
+        b.truncate(n);
+        b
+    });
+    let model = neuro_engine::Model::admit(pkg).unwrap();
+    println!("specialist package: {} bytes, root {:02x?}…, {} MACs per run", pkg.len(), &model.root()[..4], model.macs());
+    assert!(p.set_specialist(model));
     let mut findings = vec![];
     let t = Instant::now();
     replay(&mut p, &mut findings);

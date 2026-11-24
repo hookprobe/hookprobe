@@ -18,6 +18,7 @@ conductor-core = { path = "../conductor-core" }
 neuro-core = { path = "../../neuro/neuro-core" }
 neuro-dp   = { path = "../../neuro/neuro-dp" }
 neuro-l1   = { path = "../../neuro/neuro-l1" }
+neuro-engine = { path = "../neuro-engine" }
 
 [dev-dependencies]
 conductor-mock = { path = "../conductor-mock" }

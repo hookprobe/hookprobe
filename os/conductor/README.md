@@ -34,6 +34,28 @@ as `no_std` protocol code (`conductor-core/src/worker.rs`) for a future heqk-nat
 exercised by the mock in the tests. The two kernel requests that make neural computation and applications
 native are in [`KERNEL_REQUESTS.md`](KERNEL_REQUESTS.md).
 
+## neuro-engine, step 1 (N0): an integer specialist engine
+
+A model is a data package (prototype layout `HNX0`, after Neuro doc 06): memory plan, execution plan over a
+closed kernel table, weights, SHA-256 root. Admission checks everything once, including a worst-case bound
+that no accumulator can overflow for any input; after that a run cannot fail, allocates nothing and does a
+known amount of work. The plan is interruptible step by step.
+
+| Gate | Result |
+|---|---|
+| The frozen S1 specialist shipped as a 212-byte package gives bit-identical scores and alerts to `neuro_l1`'s compiled-in code (200,003 inputs) | pass |
+| 300 random 1–3 layer int8 models × 20 inputs match an independently written reference; stepping equals running | pass |
+| Malformed packages refused for the right reason (17 cases, incl. overflow bound, in-place misuse, trailing byte) | pass |
+| 3,000,000 mutated packages (most re-hashed so they pass integrity): no panic; 384,725 admitted and run | pass |
+| Runtime Proof 001 runs S1 through the engine: identical findings to the compiled-in run | pass |
+
+`el0-engine` (aarch64 softfloat, runs on today's heqk, no FP/SIMD grant): `.text` 8,796 B, `.data` 0,
+`.bss` 131,080 B (64 KiB package buffer + 64 KiB arena, sized for the limits, not for S1), stack bound
+10,880 B, 0 imports, 0 FP/SIMD instructions. Not wired into `os/kernel`.
+
+Not in step 1: package signature verification (the kernel's job, R5), a recurrent cell, SIMD kernels
+(step 2, needs KR-1 to run on the device), a language model.
+
 ## Crates
 
 | Crate | What | Target |

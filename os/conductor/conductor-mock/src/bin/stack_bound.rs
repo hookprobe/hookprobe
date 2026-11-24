@@ -99,6 +99,10 @@ fn main() {
             fp_simd += 1;
         }
     }
+    if !frame.contains_key("_start") {
+        eprintln!("no _start in the listing: nothing was measured");
+        std::process::exit(3);
+    }
     let mut memo = HashMap::new();
     let bound = depth("_start", &frame, &calls, &mut memo, &mut Vec::new());
     println!("functions: {}", frame.len());

@@ -95,6 +95,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "neuro-engine"
+version = "0.0.26"
+dependencies = [
+ "neuro-l1",
+ "sha2",
+]
+
+[[package]]
 name = "neuro-l1"
 version = "0.0.26"
 
@@ -106,6 +114,7 @@ dependencies = [
  "conductor-mock",
  "neuro-core",
  "neuro-dp",
+ "neuro-engine",
  "neuro-l1",
 ]
 

@@ -65,6 +65,8 @@ pub struct Proof {
     l1: [neuro_l1::HourAgg; DEVICES],
     active: [bool; DEVICES],
     hour: u64,
+    specialist: Option<neuro_engine::Model<'static>>,
+    arena: [u8; 64],
     pub c: Counters,
 }
 
@@ -83,6 +85,8 @@ impl Proof {
             l1: [const { neuro_l1::HourAgg::new() }; DEVICES],
             active: [false; DEVICES],
             hour: 0,
+            specialist: None,
+            arena: [0; 64],
             c: Counters { frames: 0, frame_bytes: 0, events: 0, hours_closed: 0, findings: 0 },
         }
     }
@@ -135,6 +139,16 @@ impl Proof {
         dp.expire(ts_us, &mut sink);
     }
 
+    /// Install the specialist model (workload 3) as an admitted DATA package. Without one, the hour closes
+    /// with no specialist signal. The model can be replaced without changing this code.
+    pub fn set_specialist(&mut self, m: neuro_engine::Model<'static>) -> bool {
+        if m.input_len() != 28 || m.output_len() != 5 || m.arena_bytes() > self.arena.len() {
+            return false;
+        }
+        self.specialist = Some(m);
+        true
+    }
+
     /// Close the current hour (also call once at the end of a capture).
     pub fn close_hour(&mut self, on_finding: &mut impl FnMut(Finding)) {
         let hr = (self.hour % 24) as usize;
@@ -144,7 +158,12 @@ impl Proof {
             }
             let dna = self.dna[dev].close_hour(hr, &self.agg[dev]);
             let q = self.l1[dev].quantise();
-            let (s1_score, s1_alert) = (neuro_l1::score(&q), neuro_l1::alert(&q));
+            // Workload 3 runs through the engine: the model is data, not code linked into this crate.
+            let mut res = [0u8; 5];
+            let (s1_score, s1_alert) = match &self.specialist {
+                Some(m) if m.run(&mut self.arena, &q, &mut res).is_ok() => (i32::from_le_bytes([res[0], res[1], res[2], res[3]]), res[4] == 1),
+                _ => (0, false),
+            };
             let dna_alarm = dna.score >= CALM_Q8;
             let verdict = l0_rule(dna_alarm, s1_alert);
             self.agg[dev].reset();
