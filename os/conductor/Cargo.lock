@@ -104,6 +104,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "neuro-hnx"
+version = "0.0.26"
+dependencies = [
+ "ed25519-compact",
+ "neuro-engine",
+ "neuro-kernels",
+ "neuro-l1",
+ "sha2",
+]
+
+[[package]]
 name = "neuro-kernels"
 version = "0.0.26"
 

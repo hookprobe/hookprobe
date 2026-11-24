@@ -81,6 +81,33 @@ KR-1, or a Pi 5 bench). Not built: attention, normalisation, tokenizer, sampling
 cd os/conductor/neon-proof && cargo build --release && qemu-system-aarch64 -M virt -cpu cortex-a76 -m 64M -nographic -nic none -semihosting -kernel target/aarch64-unknown-none/release/neon-proof
 ```
 
+## neuro-hnx, step 3: the HNX model container and streaming loader
+
+Neuro doc 06 implemented: a 256-byte header (target, required CPU features, engine ABI, model id and SVN,
+the resource manifest admission reads, SPDX licence of the weights, source and evaluation-report hashes,
+an RFC 6962 Merkle root over the segments), the segment table, a signature over `SHA-256(tag ‖ header)`,
+then the segments, whose concatenation is a `neuro-engine` package. The loader follows doc 06 §4 in order:
+header policy → signature (the platform's; heqk: hybrid via boot-abi) → manifest to admission → segments
+streamed into the reserved region, each hashed against its leaf, any order, each once → engine admission
+plus a check that the manifest told the truth. `no_std`, no alloc, no `unsafe`; written for the kernel to
+lift (Neuro requests R4, R5).
+
+| Gate | Result |
+|---|---|
+| RFC 6962 tree: 1, 2, 3 and 5-leaf vectors; allocation-free fold | pass |
+| A 512×2048 Q4 layer (528,492 B, 130 segments) streamed in order and scrambled, admitted, run: output identical to the payload admitted directly | pass |
+| Refused at the right step: wrong target, missing FP/SIMD grant, engine ABI, non-allowed licence (CC-BY-NC), no evaluation report, SVN rollback; changed leaf (root); another signer; trailing byte; wrong region size, duplicate and out-of-range segments; tampered segment (load failed, region wiped, later feeds refused); a manifest that under-declares arena or work; a verified payload that is not an engine package | pass |
+| **Every one of the 2,048 single-bit flips of the header**, and all 2,832 of a small prefix, refused | pass |
+| 1,000,000 fuzzed prefixes and segment streams: no panic, and every prefix that differs in any byte refused | pass |
+| Builds for `aarch64-unknown-none-softfloat` | pass |
+
+Host timing (x86, not CM5): load, verify and admit 528 KB in about 1.1 ms. On CM5 the eMMC read rate
+(roughly 3–12 MB/s with today's driver, Neuro doc 07) will dominate, not hashing.
+
+Not built: the hybrid signature check (heqk's own `boot-abi` verifier is the platform's job), the kernel
+side that streams segments from storage into a reserved, read-only region (R3, R4), the `hnx-compile`
+converter from real model files, and the A/B update channel for models (an open question in doc 06).
+
 ## Crates
 
 | Crate | What | Target |

@@ -1,0 +1,22 @@
+# neuro-hnx, step 3: the HNX model container and its streaming loader (Neuro doc 06 §2 and §4).
+# no_std, no alloc, no unsafe. Written so the kernel can lift it for Neuro requests R4 (stream an extent
+# into a reserved region, hashing as it goes) and R5 (verify a package). The signature check itself is
+# the platform's (heqk: hybrid Ed25519 + SLH-DSA via boot-abi), passed in as a trait.
+[package]
+name = "neuro-hnx"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+sha2 = { version = "=0.10.9", default-features = false }
+neuro-engine = { path = "../neuro-engine" }
+
+[dev-dependencies]
+ed25519-compact = { version = "=2.3.1", default-features = false }
+neuro-kernels = { path = "../neuro-kernels" }
+neuro-l1 = { path = "../../neuro/neuro-l1" }

@@ -38,7 +38,8 @@ pub const ROOT_LEN: usize = 32;
 pub const MAX_SLOTS: usize = 16;
 pub const MAX_STEPS: usize = 32;
 pub const MAX_ARENA: usize = 64 * 1024;
-pub const MAX_PACKAGE: usize = 1024 * 1024;
+/// Largest package the engine will parse. Admission (ADR 0061) decides what actually fits on a device.
+pub const MAX_PACKAGE: usize = 1 << 30;
 
 /// The closed kernel table. A package can only name these; new kernels are an engine update.
 pub mod kernel {
