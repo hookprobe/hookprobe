@@ -88,6 +88,23 @@ ftM. The script reads every row and fails 1 and 2 as it should.
 2. **A small alert subset** (25 cases). Condition 1 is a bar plus a point comparison, not a significance test.
 3. **Still synthetic training cards.** Template risk as in docs 38 and 43.
 
+## 7. Seal (2026-11-24, before any model has seen the set)
+
+- `blind_cases.jsonl` SHA-256 **`7e616bda2ce1e9ac3665f4c55071882f57e5d7b32d41bdce62730f15261f3de2`**.
+- **Mix:** next 45, multi 35, clears 30, decoy 25, invisible 15, alert 25, so 175 cases; 21 are Romanian (12.0%).
+  The author's validator passed. It also rejected 8 cases the author broke on purpose.
+- **Collisions (normalised context hashes): 0** against all of these:
+  - every earlier blind and dev set (blind v1–v7, dev v8, eval/cases);
+  - inv-blind v1 and v2;
+  - every E2E fixture (runs 1–6);
+  - the generator outputs v1–v4, including ftM's own 900 training cases.
+
+  ftL's own training cases were lost with the scratchpad, so they could not be checked; the regenerated v1–v3
+  samples stand in for them. Any overlap there would favour the incumbent, not ftM.
+- **Second annotator** (isolated, 44-case stratified sample, context only): **44/44 agreement**, so nothing
+  needed adjudication. The annotator flagged 7 cards as ambiguous. Agreement is scored against gold, which may
+  accept more than one answer; this is not a test of a single exact answer.
+
 ## 8. Result
 
 **PASS**: [`data/mixM-results.md`](data/mixM-results.md). ftM replaces ftL as the investigation adapter. On the E2E
