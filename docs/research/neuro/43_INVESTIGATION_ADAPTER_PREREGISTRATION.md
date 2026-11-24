@@ -93,3 +93,15 @@ is not mistaken for done.
    fresh blind author is the check.
 2. **Two models in memory** at the companion tier, until LoRA hot-swap is measured.
 3. **The service misreads** (NTP on SSH) are not addressed by training here; they stay a reported rate.
+
+## Addendum: inv-blind v2 sealed (2026-11-24), before any model has seen it
+
+- **SHA-256** `c61231c589b6744b61321a6bf1628c5977b2387001031403f12edf8ce6707a92`. 150 cases: next 45, multi 35, clears 30, decoy 25, invisible 15; 18 Romanian.
+- **Author:** a new isolated agent from the doc 41 brief (`a0be71ec…`). Its validator passes, and it rejected 14
+  broken cases, a duplicate and a wrong count.
+- **Seal checks** (`inv_seal.py check`): PASS. 0 context collisions with all 22 listed sets, including inv-blind
+  v1, the doc 43 v3 training cases, the v2 and v1 generator outputs, blind v7 and dev v8.
+- **Second annotator** (new isolated agent, 38-case sample): 37/38. The author adjudicated next-031 (changed; reason
+  in the set's README). After it: 38/38.
+- ftL had finished training before the seal (the chain trains first, then waits for it); nothing from this set
+  informed training.
