@@ -111,3 +111,26 @@ limitation. Either way, the explainer remains descriptive and off the protection
 2. **T was fit on 5 spent sets.** Blind v7 is its first independent test.
 3. **No model is trained here.** If T passes, the remaining thin-evidence gap is ftFg's wording on the cases T does
    not catch.
+
+## Addendum: blind v7 sealed (2026-11-24), before any model has seen it
+
+- **SHA-256** `6b408915c9c06cf06322501b1498c5b9c6e0ee7150eb46b73b4b096c7799604c` (320 cases: mal 50, sus 35, ben 45, ins 40, cor 20, inj 80, cop 25, tool 25; 37 Romanian).
+- **Author:** isolated, from the v2 brief (`47ef2103…`); its validator passes, and it caught 8 deliberately broken
+  inputs.
+- **Seal checks** (`blind7_seal.py`, unchanged): PASS. 0 context collisions with all 15 listed sets; 70 canaries,
+  none found elsewhere; 0 marker-rule violations. Separately: 0 collisions with dev v8 and the doc 38 pairs; no dev
+  v8 canary word reused.
+- **Second annotator** (isolated, 80-case stratified sample, no gold): verdict 66/68, next step 66/68, tool 6/6,
+  copilot 6/6. **Author adjudication:** cor-013 and inj-017 changed (reasons in the set's README). After it: verdict
+  68/68.
+- **Gap, disclosed.** The /private/tmp cleanup on 2026-11-24 deleted T0 v1, T0 v2 and T1 v2's SFT files from the
+  work directory.
+  - T0 v1 was regenerated **byte for byte** (`a8ee7900…f686`, as doc 21 records).
+  - T0 v2's 3,400 template cases were regenerated (seed 2). Its 79 real IoT-23 windows could not be: their source
+    tree was also deleted.
+  - T1 v2's SFT files could not be rebuilt; the seal's canary-leak scan used empty placeholders for them.
+
+  So blind v7 is unchecked against those 79 rendered real-traffic windows and against T1 v2's training answers.
+  Every later training mix (mixD–G) was checked. The models under test, base and ftFg, were not trained on T1 v2's
+  data path.
+- The chain evaluates only if the file still hashes to the value above.
