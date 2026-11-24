@@ -12,6 +12,8 @@ Stages (all timed; peak RSS of this process reported after each):
   D  explainer: written as run_eval cases; the model run is done by e2e_neuro.sh (llama-server + run_eval, guard A),
      then guard E (guard_offline.py) and rule T (l0_thin.py) are applied and scored here (`--score`).
   E  lookup_exposure latency, if exposure.py is present (doc 39 P3).
+  F  (optional, INV_GGUF set) one investigation turn per S1 alert with the investigation model (ftL, doc 43), tools
+     and guard A, then guard G: which check it asks for, its latency and grounding (`inv-cases`, `inv-score`).
 Traffic is BENIGN (spent UNSW-IoTraffic); there is no unsealed malicious capture on this machine. So S1 alerts here
 are false alerts, and the explainer's verdict on them is measured for calm wording, not for recall.
 Usage: e2e_neuro.py build <out dir> <pcap>... [--sample 20] [--seed 7]
@@ -174,7 +176,52 @@ def score(out, run_path):
     print(json.dumps(rep, indent=1))
 
 
+def inv_cases(out):
+    """Stage F input: one investigation turn per S1 alert, on the SAME cards the triage turn saw. The gold accepts any
+    answer: this measures what the investigator does and costs on pipeline output, not step accuracy (that is doc 43)."""
+    n = 0
+    with open(os.path.join(out, "inv_cases.jsonl"), "w") as f:
+        for l in open(os.path.join(out, "cases.jsonl")):
+            c = json.loads(l)
+            if not c["id"].startswith("alert"):
+                continue
+            f.write(json.dumps({"id": "inv-" + c["id"], "lang": c["lang"], "task": "investigate", "context": c["context"],
+                                "question": "What should be checked next?",
+                                "gold": {"kind": "next", "tools": [None, "lookup_reputation", "query_flows", "query_dns",
+                                                                    "lookup_exposure", "propose_policy_change"], "entities": []}}) + "\n")
+            n += 1
+    print("investigation turns: %d" % n)
+
+
+def inv_score(out, run_path):
+    import grounding, guard_ground
+    from inv_eval import score as iscore
+    cases = {json.loads(l)["id"]: json.loads(l) for l in open(os.path.join(out, "inv_cases.jsonl"))}
+    run = json.load(open(run_path)); rows = run["results"] if isinstance(run, dict) else run
+    cw = json.load(open(os.path.join(out, "case_windows.json")))
+    turns, lat = [], []
+    for r in rows:
+        c = cases[r["id"]]; o = r["outputs"][0]; g = guard_ground.apply(c, o)
+        if o.get("_latency_s"): lat.append(o["_latency_s"])
+        turns.append(dict(case=r["id"], window=cw.get(r["id"][4:]), tool=o.get("tool"), args=o.get("args"),
+                          cve_ok=iscore(c, o)["cve_ok"], technique_ok=grounding.technique_check(o, c["context"])["ok"],
+                          guard_g=bool(g.get("_guard_g"))))
+    rep = {"turns": len(turns), "latency_s_median": round(sorted(lat)[len(lat) // 2], 2) if lat else None, "per_alert": turns}
+    man = os.environ.get("E2E_MANIFEST")
+    if man:
+        m = json.load(open(man)); mac = ":".join(m["device_mac"][i:i + 2] for i in range(0, 12, 2))
+        for t in turns:
+            h = (t["window"] or "").rsplit("|", 1)[-1]
+            t["injected"] = m["injected_hours"].get(h) if (t["window"] or "").split("|")[1:2] == [mac] else None
+    json.dump(rep, open(os.path.join(out, "stage_F.json"), "w"), indent=1)
+    print(json.dumps(rep, indent=1))
+
+
 if __name__ == "__main__":
+    if sys.argv[1] == "inv-cases":
+        inv_cases(sys.argv[2]); sys.exit(0)
+    if sys.argv[1] == "inv-score":
+        inv_score(sys.argv[2], sys.argv[3]); sys.exit(0)
     if sys.argv[1] == "build":
         args = sys.argv[3:]
         smp = int(args[args.index("--sample") + 1]) if "--sample" in args else 20
