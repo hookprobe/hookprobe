@@ -1,0 +1,41 @@
+# The Conductor reference worker (C2): runs on the owner's GPU box (a general-purpose host — NOT the heqk
+# device), serves request-level inference to ONE paired heqk device over heqk's own PQ-hybrid Noise channel,
+# and never holds authority: it executes only device-signed, single-use HP-EXEC capabilities.
+#
+# Channel: links the EXACT kernel securechannel.rs via #[path] (as onboarding/enrollment/superpop does), so
+# the handshake is byte-identical to the device's by construction — no new cryptographic protocol.
+[package]
+name = "conductor-worker"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[features]
+default = ["securechannel", "securechannel-host-responder"]
+securechannel = []
+securechannel-host-responder = ["securechannel"]
+securechannel-selftest = []
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "conductor-worker"
+path = "src/main.rs"
+
+[dependencies]
+conductor-core   = { path = "../conductor-core", features = ["signer"] }
+# The SAME crates + versions the kernel's securechannel feature pins (see superpop/Cargo.toml).
+boot-abi         = { path = "../../kernel/boot-abi" }
+ml-kem           = { version = "=0.3.4", default-features = false }
+x25519-dalek     = { version = "2", default-features = false, features = ["static_secrets"] }
+chacha20poly1305 = { version = "0.10", default-features = false }
+ed25519-compact  = { version = "=2.3.1", default-features = false }
+getrandom        = "0.2"
+libc             = "0.2"
+serde_json       = "1"
+arch_aarch64     = { path = "../../../onboarding/enrollment/responder-sim/arch-stub", package = "arch-stub" }
+
+[dev-dependencies]
+conductor-mock = { path = "../conductor-mock" }

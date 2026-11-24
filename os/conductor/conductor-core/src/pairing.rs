@@ -80,3 +80,23 @@ pub fn open_record(bytes: &[u8], sig: &[u8; 64], owner_pk: &[u8; 32]) -> Option<
     }
     PairingRecord::decode(bytes)
 }
+
+// ------------------------------------------------------------------ binding every key on both sides
+//
+// Each side has two keys that matter: the device has its Conductor delegation key (signs capabilities) and
+// its channel identity (the SRK-derived Ed25519 key the PQ-hybrid Noise handshake authenticates); the
+// worker has its result-signing key and its Noise responder static (X25519 ‖ ML-KEM-768 ek). The commitment
+// and the six digits cover digests of BOTH keys on BOTH sides, so an attacker cannot pair a genuine result
+// key with its own channel endpoint (or the reverse).
+
+pub const TAG_DEVICE_KEYS: &[u8] = b"hookprobe/conductor/pair-device-keys/v1\0";
+pub const TAG_WORKER_KEYS: &[u8] = b"hookprobe/conductor/pair-worker-keys/v1\0";
+
+pub fn device_keys_digest(delegation_pk: &[u8; 32], channel_identity_pk: &[u8; 32]) -> [u8; 32] {
+    sha256(&[TAG_DEVICE_KEYS, delegation_pk, channel_identity_pk])
+}
+
+/// `channel_static` is the worker's Noise responder public blob (X25519 pk ‖ ML-KEM-768 encapsulation key).
+pub fn worker_keys_digest(result_pk: &[u8; 32], channel_static: &[u8]) -> [u8; 32] {
+    sha256(&[TAG_WORKER_KEYS, result_pk, channel_static])
+}
