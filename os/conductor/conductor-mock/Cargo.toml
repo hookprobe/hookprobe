@@ -1,0 +1,11 @@
+# Host-only C0 test bench: a mock kernel (signer, tool executor, driver loop) and a scripted mock worker,
+# plus the C0 gate tests, the fuzz harness and the measurement tool. Never part of a device image.
+[package]
+name = "conductor-mock"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[dependencies]
+conductor-core = { path = "../conductor-core", features = ["signer"] }
