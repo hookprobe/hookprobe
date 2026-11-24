@@ -12,6 +12,10 @@
 //! any RPMB / boot-area partition switch — reaching those is one wrong EXT_CSD
 //! index away from an unrecoverable brick, so they simply do not exist here.
 //!
+//! ADR 0070 flash stub only (feature `flashstub`, never in a device image): one more gate, `admit_full_medium`,
+//! opens LBA 0..SEC_COUNT of the user area for one flashing session after the stub's positive verdict. Still CMD24
+//! only; the no-CMD6/38/42, no-partition-switch property above holds in that build too.
+//!
 //! Honesty: structured off the SD/eMMC spec + the metal-proven SDHCI primitives
 //! transcribed into `sdhci.rs`. Wired behind `cfg(cm5)`; flash-validated like the
 //! other CM5 probes.
@@ -101,6 +105,10 @@ pub struct Emmc {
     /// that ever takes a bulk write; revoked when a BootConfig sector is admitted.
     #[cfg(feature = "p15-write")]
     slot: Option<(u64, u64)>,
+    /// ADR 0070 flash stub ONLY: the whole user area (LBA 0..sec_count) admitted for one flashing session by
+    /// `admit_full_medium`. The field and the gate do not exist in any other build.
+    #[cfg(feature = "flashstub")]
+    full: bool,
 }
 
 impl Emmc {
@@ -262,6 +270,8 @@ impl Emmc {
             bootcfg: [None, None],
             #[cfg(feature = "p15-write")]
             slot: None,
+            #[cfg(feature = "flashstub")]
+            full: false,
         };
         e.multi_ok = e.multi_selfcheck();
         Ok(e)
@@ -408,6 +418,22 @@ impl Emmc {
         Some((r.lo, r.hi, r.size))
     }
 
+    /// ADR 0070 flash stub ONLY — admit the WHOLE user area (LBA 0..SEC_COUNT) for writing, for one session. The
+    /// stub calls this at WBEGIN, after `boot_abi::verify` + the SVN floor + the HBoot-prefix check returned a
+    /// positive verdict, and revokes it when the session ends. Still CMD24 to the user area only: no CMD6 / CMD38 /
+    /// CMD42, no partition switch, no RPMB. Compiled only with `flashstub`; every other build keeps Gate 1 as is.
+    #[cfg(feature = "flashstub")]
+    pub fn admit_full_medium(&mut self) -> u64 {
+        self.full = true;
+        self.sec_count
+    }
+
+    /// ADR 0070 flash stub ONLY — close the whole-medium window.
+    #[cfg(feature = "flashstub")]
+    pub fn revoke_full_medium(&mut self) {
+        self.full = false;
+    }
+
     /// Drop the inactive-slot admission (after the image is written, or on any failure).
     #[cfg(feature = "p15-write")]
     pub fn revoke_inactive_slot(&mut self) {
@@ -489,6 +515,11 @@ impl Emmc {
 
     #[cfg(feature = "p15-write")]
     fn write_block_impl(&mut self, lba: u64, buf: &[u8; 512]) -> Result<(), BlockErr> {
+        // Gate 0 (ADR 0070 flash stub ONLY): the admitted whole-medium session window.
+        #[cfg(feature = "flashstub")]
+        if self.full {
+            return self.cmd24(lba, buf);
+        }
         // Gate 1 (A/B commit): an ADMITTED BootConfig sector, ONE write, and only if the new
         // sector differs from what is on the eMMC NOW in exactly the slot letter of its
         // `kernel=heqk8-?.img` line (a<->b). Nothing else on the boot partition is ever writable.

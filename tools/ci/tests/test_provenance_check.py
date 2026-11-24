@@ -15,13 +15,14 @@ class Provenance(unittest.TestCase):
     def test_a_longer_path_does_not_satisfy_a_shorter_one(self):
         self.assertEqual(pc.missing(["arch-aarch64/src/rp1.rs"], "`arch-aarch64/src/rp1_gpio.rs`"), ["arch-aarch64/src/rp1.rs"])
 
-    def test_driver_files_walks_both_directories_and_only_rust(self):
+    def test_driver_files_walks_the_driver_directories_and_only_rust(self):
         with tempfile.TemporaryDirectory() as d:
-            for rel in ("arch-aarch64/src/a.rs", "arch-aarch64/src/boot.s", "hboot/src/sub/b.rs", "kernel/src/c.rs"):
+            for rel in ("arch-aarch64/src/a.rs", "arch-aarch64/src/boot.s", "hboot/src/sub/b.rs", "kernel/src/c.rs",
+                        "flashstub/src/dwc2.rs", "flashstub/tests/mock.rs"):
                 p = os.path.join(d, rel)
                 os.makedirs(os.path.dirname(p), exist_ok=True)
                 open(p, "w").close()
-            self.assertEqual(pc.driver_files(d), ["arch-aarch64/src/a.rs", "hboot/src/sub/b.rs"])
+            self.assertEqual(pc.driver_files(d), ["arch-aarch64/src/a.rs", "flashstub/src/dwc2.rs", "hboot/src/sub/b.rs"])
 
 
 if __name__ == "__main__":

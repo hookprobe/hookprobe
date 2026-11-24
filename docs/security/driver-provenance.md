@@ -20,20 +20,21 @@ Classes (the worst class in a file wins: D > C > B > A):
 - **C** — cites GPL-2.0 code only as a behaviour or register-value reference ("as Linux does", "Linux uses X").
 - **D** — says it was transcribed, ported, mirrored or copied from GPL-2.0 code, or quotes its lines.
 
-Scope: every `.rs` file in `os/kernel/arch-aarch64/src` and `os/kernel/hboot/src` (59 files; `fwcfg.rs` and `virtio_rng.rs` added 2026-11-23), plus the
+Scope: every `.rs` file in `os/kernel/arch-aarch64/src` and `os/kernel/hboot/src` (59 files; `fwcfg.rs` and `virtio_rng.rs` added 2026-11-23) and
+`os/kernel/flashstub/src` (8 files, ADR 0070 flash stub, added 2026-11-24; `tools/ci/provenance_check.py` checks it too), plus the
 files in `hal/src`, `sae/src`, `el0-wifi/src`, `el0-wpa/src` and `kernel/src` that cite an external code
 base (14 files). Paths are relative to `os/kernel`. "Linux" in a comment that means HookProbe's own
 legacy Linux tier (parity notes, rule numbers, `legacy/linux-tier` ports) is not provenance and is not listed.
 
 ## Summary
 
-| Class | arch-aarch64/src | hboot/src | other dirs | Total |
-|---|---|---|---|---|
-| A | 31 | 8 | 1 | 40 |
-| B | 1 | 0 | 7 | 8 |
-| C | 9 | 2 | 6 | 17 |
-| D | 4 | 2 | 0 | 6 |
-| Total | 45 | 12 | 14 | 71 |
+| Class | arch-aarch64/src | hboot/src | flashstub/src | other dirs | Total |
+|---|---|---|---|---|---|
+| A | 31 | 8 | 8 | 1 | 48 |
+| B | 1 | 0 | 0 | 7 | 8 |
+| C | 9 | 2 | 0 | 6 | 17 |
+| D | 4 | 2 | 0 | 0 | 6 |
+| Total | 45 | 12 | 8 | 14 | 79 |
 
 Class D files: six. They are the six entries of build-plan item L0.2 (`rng200.rs`, `hboot/src/rng.rs`, the
 `gem.rs` RP1 block, the `rtl8111.rs` outbound window and MDIO read, `hboot/src/watchdog.rs`, the SDHCI config
@@ -156,6 +157,23 @@ Citations give our file:line. Quotes are the comment's own words.
 | `hboot/src/stage2.rs` | Stage-2 isolation of HBoot | Arm ARM DDI0487 (:13); Linux KVM, Xen (:13) | "Register values ... from the Arm ARM (DDI0487 D8/D19) + Linux KVM/Xen" (:12) | KVM GPL-2.0 (file not identified, not verified); Xen not verified | C |
 | `hboot/src/t0inv.rs` | Read-only platform inventory at EL2 | SMCCC / PSCI; devicetree | specification facts | — | A |
 | `hboot/src/watchdog.rs` | BCM2712 PM watchdog (A/B trial boot) | own `boot.s` (:11); Linux `bcm2835_wdt` (:63) | "Mirrors the Linux bcm2835_wdt stop sequence" (:63) | `bcm2835_wdt.c` GPL-2.0+ | D |
+
+### flashstub/src
+
+ADR 0070 flash stub (a separate image, never part of a device image). Added 2026-11-24 with the stub. Unlike the
+rows above, these were recorded when the files were written: no upstream code was opened for any of them. A later
+change that consults TinyUSB (MIT) moves `dwc2.rs` to class B; Linux `dwc2` (GPL-2.0) stays excluded (ADR 0067 D11).
+
+| File | What it drives | Cited sources | Relation, in the comment's own words | Upstream licence | Class |
+|---|---|---|---|---|---|
+| `flashstub/src/dwc2.rs` | BCM2712 DWC2 (Synopsys USB 2.0 OTG) core in device mode: reset, FIFO plan, EP0 enumeration, bulk IN/OUT, polled slave mode | USB 2.0 specification ch. 9; DWC2 programming model (register facts) (:11–:12); TinyUSB `src/portable/synopsys/dwc2` named as the only permitted code reference, not opened (:13–:14) | "No upstream driver source was opened while writing it." (:13) | — (TinyUSB MIT, if consulted later) | A |
+| `flashstub/src/desc.rs` | USB descriptors, BOS, MS OS 2.0 descriptor set (WinUSB) | USB 2.0 specification ch. 9; Microsoft OS 2.0 Descriptors specification (:2) | specification facts | — | A |
+| `flashstub/src/image.rs` | Slot-image checks over `boot_abi::verify`, HBoot-prefix rule, both-slot check | own `kernel/src/otaimg.rs`, `hal::abslot` | no external source cited | — | A |
+| `flashstub/src/lib.rs` | The stub's main-loop turn | none | no external source cited | — | A |
+| `flashstub/src/main.rs` | The stub image: handoff, MMU, eMMC probe, USB bring-up | own arch-aarch64 / HBoot code | no external source cited | — | A |
+| `flashstub/src/proto.rs` | HQFL v1 framing, CRC-32 (IEEE 802.3) | ADR 0070 D4; `tools/flash/web/src/stubproto.mjs` (own) | no external source cited | — | A |
+| `flashstub/src/release.rs` | Release / debug flag from the dev-key block-list | own `os/build/heqk-dev-key-fingerprints.txt` | no external source cited | — | A |
+| `flashstub/src/server.rs` | HQFL server: verify-before-write, MBR-last write, read-back, slot check | ADR 0070 D3 / D4 | no external source cited | — | A |
 
 ### hal/src (citing files only)
 

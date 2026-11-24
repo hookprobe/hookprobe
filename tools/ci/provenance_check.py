@@ -13,7 +13,7 @@ import argparse
 import os
 import sys
 
-DRIVER_DIRS = ("arch-aarch64/src", "hboot/src")
+DRIVER_DIRS = ("arch-aarch64/src", "hboot/src", "flashstub/src")  # flashstub: ADR 0070 (DWC2 device driver)
 
 
 def driver_files(kernel_root: str) -> list:

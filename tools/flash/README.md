@@ -38,10 +38,14 @@ a heqk flash stub, no Linux). It replaces the write path of the retired ADR 0037
 Run the tests: `node --test tools/flash/web/test/*.test.mjs` (CI gate g1). Serve the page on localhost
 (`python3 -m http.server -d tools/flash/web 8000`), Chrome or Edge.
 
+**The stub** (`os/kernel/flashstub/`, ADR 0070 D3–D6, host-tested, **not metal-verified**): the BCM2712 DWC2
+OTG core in device mode (polled, FIFO mode), the HQFL v1 server (verify with `boot_abi::verify` + SVN floor +
+HBoot prefix before any write; MBR written last; full read-back; both slot files re-verified through FAT), and
+the stub image, an HBoot payload built with `cargo build --release --features flashstub`. Host tests:
+`cd os/kernel/flashstub && cargo +stable test --release --target x86_64-unknown-linux-gnu` (CI gate g1).
+
 **What is missing** before a CM5 can be flashed from the page:
 
-1. **The heqk flash stub** (ADR 0070 D3/D5): a `flashstub` heqk build that verifies the slot image with
-   `boot_abi::verify`, writes the eMMC through a new whole-medium gate, reads it back and checks the slots.
-   The next step is its **USB device driver**: the BCM2712's DWC2 OTG controller (ADR 0070 D6, open question Q1).
-2. A USB ID for the stub (Q2; the code uses a pid.codes test ID as a placeholder).
-3. The metal test plan M1–M6 in ADR 0070. Step M1 (rpiboot only) can run before the stub exists.
+1. The stub on metal: packing it into `boot.img` (HBoot + the signed stub payload) and the metal test plan
+   M1–M6 in ADR 0070. Step M1 (rpiboot only) can run before the stub is packed.
+2. A USB ID for the stub (Q2; both sides use a pid.codes test ID as a placeholder).

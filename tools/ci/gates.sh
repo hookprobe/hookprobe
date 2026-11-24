@@ -107,6 +107,9 @@ gate_g1() {
   step "host tests: superpop (G19)"    bash -c "cd onboarding/enrollment/superpop && CARGO_TARGET_DIR=$(tdir superpop) cargo +stable test --release"
   step "host tests: evidence-export"   bash -c "cd onboarding/enrollment/evidence-export && CARGO_TARGET_DIR=$(tdir evidence-export) cargo +stable test --release"
   step "host tests: heqk-sign"         bash -c "cd os/build/heqk-sign && CARGO_TARGET_DIR=$(tdir heqk-sign) cargo +stable test --release"
+  # ADR 0070: the heqk flash stub — DWC2 device driver against a register-level model, HQFL server with the real
+  # boot verifier (mirrors tools/flash/web/test/stub.test.mjs), full exchange over the mock USB core.
+  step "host tests: heqk flash stub (DWC2 + HQFL)" bash -c "cd os/kernel/flashstub && CARGO_TARGET_DIR=$(tdir flashstub) cargo +stable test --release --target $HOST_TRIPLE"
   # ADR 0070: the browser flasher's rpiboot + HQFL host code against mock devices (no dependencies, no npm).
   if need node; then
     step "host tests: browser flasher (WebUSB rpiboot, node --test)" bash -c "node --test tools/flash/web/test/*.test.mjs"
