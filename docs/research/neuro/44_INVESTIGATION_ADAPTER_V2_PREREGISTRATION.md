@@ -104,3 +104,8 @@ ftM. The script reads every row and fails 1 and 2 as it should.
 - **Second annotator** (isolated, 44-case stratified sample, context only): **44/44 agreement**, so nothing
   needed adjudication. The annotator flagged 7 cards as ambiguous. Agreement is scored against gold, which may
   accept more than one answer; this is not a test of a single exact answer.
+
+## 8. Result
+
+**PASS**: [`data/mixM-results.md`](data/mixM-results.md). ftM replaces ftL as the investigation adapter. On the E2E
+fixture, both alerts got the pre-registered first check.
