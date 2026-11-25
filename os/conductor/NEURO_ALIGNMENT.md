@@ -238,13 +238,15 @@ Neuro's own functions and has a drift gate on the Python sources.
 
 **Not done:** the ftFg fidelity run on dev v8 builds its prompts without guard A (the tool predates this). It
 compares the two runtimes on identical prompts, so the result stands, but the prompts are not the guarded ones
-Neuro's gates used. A `--guard-a` option for the fidelity tool is the follow-up.
+Neuro's gates used. **Since 2026-11-25** the tool takes `--guard-a`; see the 2026-11-25 update below.
 
 **Fidelity result, ftFg on dev v8 (2026-11-24):** 270 cases, 40,428 teacher-forced steps. Template and token ids
 equal in all cases; raw top-1 never disagrees beyond a near-tie; free runs are equal (156) or diverge first at a
 near-tie (114). Three constrained choices differed beyond a near-tie, all from one cause: the contract automaton
 allowed whitespace after a value, which llama.cpp 054a1ba's grammar does not. Fixed in `neuro_contract::Machine`;
-the three cases agree after the fix. The full set has not been run again with the fix. Details: `FIDELITY.md`.
+the three cases agree after the fix. **Rerun of the full set with the fix (2026-11-25):** 270 cases, 0 constrained
+choices beyond a near-tie, everything else unchanged. Details: `FIDELITY.md`.
+
 ## Update: the investigation request on the device side (2026-11-24, from the Neuro host)
 
 Neuro published the investigation request as data: `tools/neuro-research/inv_contract.json` (hookprobe/hookprobe#1591),
@@ -296,4 +298,22 @@ Neuro published the generated side of the three vectors and the server's own gra
    the grammar test here reads its GBNF.
 
 **Still open:** three synthetic vectors are not a fidelity run. That needs the spent investigation sets through
-the fidelity tool, which still refuses them.
+the fidelity tool, which still refuses them. **Done 2026-11-25**, see the next update.
+
+## Update: fidelity on the investigation sets and with guard A (2026-11-25, from the Neuro host)
+
+The fidelity tool now builds Neuro's investigation request (system prompt, user framing, the five tools spliced
+verbatim, guard A, the server's lazy grammar and trigger) and decodes with `ToolMachine`. It also takes
+`--guard-a` for triage, so the prompts are the guarded ones Neuro's gates used.
+
+- **ftM on inv-blind v1 and v2 (spent), 150 cases each:** template and token ids equal in all 300 cases. 5,940
+  teacher-forced steps: raw top-1 and the constrained choice never disagree beyond a near-tie (3 near-ties, all
+  in v1). Free runs: 297 equal, 3 diverge first at a near-tie. Guard A changed 22 contexts in each set.
+- **ftFg on dev v8, full rerun with the fixed automaton:** 270 cases, 0 beyond a near-tie on every check.
+- **ftFg on dev v8 with `--guard-a`:** 270 cases, 39,061 teacher-forced steps, 0 beyond a near-tie; free runs
+  154 equal, 116 diverge first at a near-tie. Two shards were stopped before their summary, so near-tie counts
+  and margins cover 166 cases (`FIDELITY.md`).
+
+Both are runtime-against-runtime on the same GGUF and request. Quality on these sets is Neuro's measurement.
+
+**Still open:** the harness (Neuro's five tools as Conductor typed tools with per-call authorisation).
