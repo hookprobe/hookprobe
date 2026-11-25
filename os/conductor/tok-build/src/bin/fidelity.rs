@@ -54,6 +54,8 @@ const SPENT: [(&str, &str); 7] = [
 ];
 const CTX: usize = 4096;
 const Q16: f64 = 65536.0;
+/// Largest llama-server response accepted (a completion with ten candidates per step is well under 1 MiB).
+const MAX_RESPONSE: usize = 16 << 20;
 
 struct Args {
     dir: String,
@@ -182,20 +184,36 @@ impl Server {
                 if n == 0 {
                     break;
                 }
+                if n > MAX_RESPONSE - data.len() {
+                    die(&format!("{path}: the response is larger than {MAX_RESPONSE} bytes"));
+                }
                 let mut c = vec![0u8; n + 2];
                 r.read_exact(&mut c).unwrap_or_else(|e| die(&format!("read {path}: {e}")));
                 data.extend_from_slice(&c[..n]);
             }
         } else if let Some(n) = len {
+            if n > MAX_RESPONSE {
+                die(&format!("{path}: the response is larger than {MAX_RESPONSE} bytes"));
+            }
             data.resize(n, 0);
             r.read_exact(&mut data).unwrap_or_else(|e| die(&format!("read {path}: {e}")));
         } else {
-            r.read_to_end(&mut data).unwrap_or_else(|e| die(&format!("read {path}: {e}")));
+            r.take(MAX_RESPONSE as u64 + 1).read_to_end(&mut data).unwrap_or_else(|e| die(&format!("read {path}: {e}")));
+            if data.len() > MAX_RESPONSE {
+                die(&format!("{path}: the response is larger than {MAX_RESPONSE} bytes"));
+            }
         }
         if !status.contains(" 200") {
             die(&format!("{path}: {} {}", status.trim(), String::from_utf8_lossy(&data)));
         }
-        serde_json::from_slice(&data).unwrap_or_else(|e| die(&format!("{path}: not JSON: {e}")))
+        // The peer is the loopback llama-server this tool was pointed at (`--url` is refused unless it resolves to
+        // loopback). Its reply is bounded above and parsed into an untyped `Value` only: no type is built from it,
+        // and every field is read through checked accessors.
+        let v: Value = serde_json::from_slice(&data).unwrap_or_else(|e| die(&format!("{path}: not JSON: {e}")));
+        if !v.is_object() && !v.is_array() {
+            die(&format!("{path}: the response is not a JSON object or array"));
+        }
+        v
     }
 }
 
