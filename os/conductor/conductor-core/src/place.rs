@@ -54,6 +54,10 @@ pub enum PlaceRefusal {
     WorkerBusy = 4,
     /// Every suitable worker quoted that it cannot meet the job's time targets (or did not answer).
     NoWorkerMeetsSlo = 5,
+    /// No evidence card may be shown to the chosen provider (the job has none, or none of its class is allowed
+    /// there). A model asked about nothing invents facts, so there is no model call. What the operator is
+    /// shown instead is the job issuer's rule.
+    NoEvidence = 6,
 }
 
 pub fn place(required_mask: u8, energy_policy: u8, env: &Env) -> Result<Tier, PlaceRefusal> {
