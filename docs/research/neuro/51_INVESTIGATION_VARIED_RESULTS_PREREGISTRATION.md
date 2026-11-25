@@ -100,3 +100,15 @@ SSH brute force. Reported, not gated.
 - **Seal checks: PASS.** 0 collisions with inv-blind v1–v4 and the v4, v5 and v6 generator case files.
 - **Second annotator** (isolated, 44-case sample): **44/44**, so nothing needed adjudication. It flagged 10 cases as
   genuinely ambiguous.
+
+## 8. Result (2026-11-25, one look)
+
+**VERDICT: FAIL** (conditions 1 and 2).
+- Multi rose 0.229 → 0.286.
+- But next fell 0.733 → 0.578, even though ftS trained on ftM's own first-check rows byte for byte, so next+multi was
+  0.450 against 0.512.
+- Alert, decoy, invisible and grounding passed.
+- E2E run 12 chose the two expected checks.
+
+ftM stays. Docs 49 and 51 together show that multi-step training itself costs the first check. Full tables:
+[`data/mixS-results.md`](data/mixS-results.md).
