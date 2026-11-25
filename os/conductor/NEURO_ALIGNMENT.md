@@ -300,6 +300,37 @@ Neuro published the generated side of the three vectors and the server's own gra
 **Still open:** three synthetic vectors are not a fidelity run. That needs the spent investigation sets through
 the fidelity tool, which still refuses them. **Done 2026-11-25**, see the next update.
 
+## Update: the evidence cards on the device side (2026-11-25)
+
+Neuro asked who builds the cards on the device and whether they equal its own. Nobody did. The function now
+exists: `neuro_contract::cards::build_context` mirrors `semantic_compression.rep_cards` and `fill` (estimate token
+counter, bytes / 4) and `e2e_neuro.py`'s rule that the context ends with the `REST` line.
+
+- **Equal to Neuro's builder, byte for byte,** on Neuro's own vectors (`card_contract.json`: 22 windows of the E2E
+  fixture, both alerts, 3 windows with no fact card), on 120 committed synthetic windows and on 6,400 more
+  generated ones. `tests/data/CARD_VECTORS.md` has the generator and what it covers.
+- **No float, no allocation.** Comparisons and printed numbers come from integers. Where Python's float rounding
+  decides and real traffic meets it, the float is reproduced exactly: the mean gap (a device polling every
+  5.000 s is not `periodic` for Python, because its float mean is just under 5) and the `out=…GB` figure.
+  What is left as a stated difference is in the module's header: a coefficient of variation exactly on 0.1 or on
+  a rounding boundary, a budget met exactly by `fill`'s float sum, and score ties that need a severity-5
+  detection.
+- **Two behaviours of the Python are kept as they are**, because the models were measured with them, and both
+  are reported to Neuro: the port a detection is matched on for a pair with two or three ports comes from the
+  iteration order of a Python `set`; and when exactly one card is dropped, the E2E path writes two `REST` lines.
+- **A drift gate** reads Neuro's two sources and fails on a change to any mirrored constant or format string.
+
+**Not covered, and what it waits for:**
+1. **DNS and behaviour events.** Neuro's builder takes them; this function has no input for them. The E2E fixture
+   has neither.
+2. **Who calls it, and with what.** The function needs the window's flows, its detections and the baseline pairs.
+   On the device those come from the kernel's flow table and the L1 alert; `e2e_neuro.py` also maps connection
+   states to `rst` and attaches the alert as a detection. That mapping is the job issuer's and is not built.
+3. **`CONTEXT` lines.** Still not carried by the job format (see the update on the investigation turn). The `REST` line is now
+   produced here, so a job whose evidence is this function's output has it.
+4. **Memory on the device.** The caller provides the working memory; a window that does not fit is an error. The
+   sizes a real device window needs have not been measured.
+
 ## Update: fidelity on the investigation sets and with guard A (2026-11-25, from the Neuro host)
 
 The fidelity tool now builds Neuro's investigation request (system prompt, user framing, the five tools spliced

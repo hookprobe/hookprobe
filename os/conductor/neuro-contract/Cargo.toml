@@ -1,6 +1,8 @@
 # neuro-contract: the explainer's answer contract, the one definition on the device side (mirrors Neuro's
 # run_eval.py; tests/drift.rs fails on any difference). Prompt text, per-request id rule, schema text, and the
 # answer automaton shared by constrained decoding and the verifier. no_std, no alloc, no unsafe, no float.
+# Also Neuro's guards, grounding, investigation request, and evidence cards (src/cards.rs mirrors
+# semantic_compression.py; tests/cards.rs is its gate).
 [package]
 name = "neuro-contract"
 version = "0.0.26"
