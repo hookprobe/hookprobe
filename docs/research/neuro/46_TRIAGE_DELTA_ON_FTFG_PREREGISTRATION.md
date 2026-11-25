@@ -166,3 +166,20 @@ with ftN: 3 and 3; run 7 with ftFg: 0 and 0).
 - **Second annotator** (isolated, 60-case stratified sample): verdict **60/60**, next step **60/60**; nothing to
   adjudicate. It flagged 11 cases as genuinely ambiguous. As in docs 44 and 45, agreement is scored against gold
   sets that can accept two answers, so it is a lenient measure.
+
+## 9. Result (2026-11-25, one look)
+
+**VERDICT: FAIL** (7 of 9). ftPg passed the target and the caution checks it was aimed at:
+- alb 0.633 (ftFg 0.200; McNemar p = 0.00024);
+- alb called malicious: 2;
+- ins called malicious: 0 (ftFg 7);
+- mention, canary-safe, hallucination and Romanian.
+
+It failed two:
+- condition 3: alm 0.733 (ftFg 0.867);
+- condition 8: 11 of 40 malicious windows called `insufficient_evidence` (the cap is 2).
+
+As written in §5, ftFg stays and service labels stay off on the device. The control ftP0 stayed close to ftFg, so
+the rebuild-and-delta method held the incumbent; it was the delta data's verdict balance that over-corrected. The
+E2E run 9 missed two of the three expectations: both real attacks were called `insufficient_evidence`.
+Full tables: [`data/mixP-results.md`](data/mixP-results.md).
