@@ -65,7 +65,7 @@ and `lookup_reputation` on R1 for the SSH brute force. Reported, not gated.
 | File | SHA-256 |
 |---|---|
 | `gen_investigate.py` (v5) | `3b34f92c4e76797196ec96d41dc93b4a6d71bd5b0d501bb5da63025d4f14acfb` |
-| `mixR_chain.sh` | `eebf35bbf4d98950d8b126f697e05339db64c9a1b4bab4af4012b03a7a293f1f` |
+| `mixR_chain.sh` | `eebf35bbf4d98950d8b126f697e05339db64c9a1b4bab4af4012b03a7a293f1f` (replaced by §7) |
 | `mixR_gate.py` | `c620b9fd5007dbafa099abc58ba133717159be6818fdb5a5a9425391f5a8dec3` |
 | `build_inv_sft.py` | `473ce09d70938e83c897e1f515c50b9269de901ead2bd6f5dbc0a05dc9aab776` |
 | `inv_eval.py` | `342192c374f9480361478ff8197b6430afb58e48d99152ba5adb5b9fbbfa57e2` |
@@ -83,3 +83,12 @@ ftL in the incumbent slot and ftM in the candidate slot. It also prints the next
 - The subsets are small (multi 35). A one-look gate on 80 cases detects only large changes.
 - Training continues ftM's adapter, so ftR inherits ftM's behaviour on the kinds v5 shares with v4. That is the
   intent.
+
+## 7. Addendum before training (2026-11-25 19:50)
+
+The chain's first check stopped the run before any data or training. It compared the re-exported ftM file's SHA-256
+with ftMg's. The 310 tensors are identical; only the header field `general.name` differs, because the converter
+derives it from the export directory name ("Rt ftM Fused" vs "Gguf mixM Fused").
+- **Fix:** the check compares tensors (`gguf_to_hf.py verify`, as doc 46 does), not file bytes.
+- New SHA-256 of `mixR_chain.sh`: `8f534f8476eb9baffb8b0765beda891ee387fa493b823c5e02d2219bdc728fb0`.
+- Nothing else changed.

@@ -14,7 +14,8 @@ need "$W/models/student17/config.json"; need "$M/base17-q8_0.gguf"; need "$M/ggu
 [ "$(sha "$M/gguf-mixM-q8_0.gguf")" = 9576cfacef5ad23728e171f157321aedf8ab12c4aba926f89fd0527d5d23dcc9 ] || { log "STOP: ftMg hash"; exit 3; }
 log "ftM's adapter must re-export to ftMg exactly"
 bash "$T/export_gguf.sh" "$W" "$W/models/student17" "$FTM" "$O/rt-ftM" Q8_0 > "$O/export-rt.log" 2>&1
-[ "$(sha "$O/rt-ftM-q8_0.gguf")" = 9576cfacef5ad23728e171f157321aedf8ab12c4aba926f89fd0527d5d23dcc9 ] || { log "STOP: ftM adapter does not re-export to ftMg"; exit 3; }
+# tensors, not file bytes: the GGUF header's general.name comes from the export directory name (doc 49 §7)
+"$W/venv-convert/bin/python" -I "$T/gguf_to_hf.py" verify "$M/gguf-mixM-q8_0.gguf" "$O/rt-ftM-q8_0.gguf" || { log "STOP: ftM adapter does not re-export to ftMg's tensors"; exit 3; }
 rm -rf "$O"/rt-ftM*
 log "investigation cases (gen v5, 900, seed 4901)"
 python3 -I "$T/gen_investigate.py" --playbooks "$T/../../docs/research/neuro/data/playbooks.json" --n 900 --seed 4901 --version 5 --out "$O/inv5_cases.jsonl" || exit 3
