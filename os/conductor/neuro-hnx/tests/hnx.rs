@@ -100,6 +100,7 @@ fn header_for(payload: &[u8], segment_log2: u8) -> Header {
         source_sha256: [1; 32],
         eval_sha256: [2; 32],
         merkle_root: [0; 32],
+        payload_kind: kind::ENGINE,
     }
 }
 
@@ -321,4 +322,61 @@ fn which_single_bit_flips_still_open() {
     }
     println!("prefix {} bytes, {} single-bit flips tried, {} opened", prefix.len(), prefix.len() * 8, hits.len());
     assert!(hits.is_empty(), "{hits:?}");
+}
+
+#[test]
+fn segments_read_straight_into_the_region_are_verified_in_place() {
+    // The storage driver reads each segment into its place (DMA); the loader hashes it there. No staging copy.
+    let payload = q4_payload(64, 512, 11);
+    let (prefix, h) = build(&payload, header_for(&payload, 12), DEV_SEED);
+    let size = h.segment_size();
+    let n = h.n_segments;
+    assert!(n >= 4, "a multi-segment payload");
+    let d = dev();
+
+    // Any order, each once; the result runs exactly as a copied load does.
+    let mut region = vec![0u8; payload.len()];
+    let mut l = Loader::open(&prefix, &d).unwrap();
+    for i in (0..n).rev() {
+        let (s, e) = (i as usize * size, ((i as usize + 1) * size).min(payload.len()));
+        region[s..e].copy_from_slice(&payload[s..e]); // the driver's read
+        assert!(!l.complete());
+        l.accept_in_place(i, &region).unwrap();
+    }
+    assert!(l.complete());
+    assert_eq!(region, payload);
+    assert!(l.finish(&region).is_ok());
+
+    // Refusals are those of `feed`: wrong region size, duplicate, unknown index.
+    let mut l = Loader::open(&prefix, &d).unwrap();
+    assert_eq!(l.accept_in_place(0, &region[..10]), Err(Refusal::Region));
+    l.accept_in_place(0, &region).unwrap();
+    assert_eq!(l.accept_in_place(0, &region), Err(Refusal::Duplicate));
+    assert_eq!(l.accept_in_place(9999, &region), Err(Refusal::BadIndex));
+
+    // One flipped bit in a segment, or a segment not read yet (zeros): the load fails, stays failed, and the
+    // caller's abort leaves nothing of it behind.
+    for corrupt in [true, false] {
+        let mut region = if corrupt { payload.clone() } else { vec![0u8; payload.len()] };
+        if corrupt {
+            region[size + 5] ^= 0x10;
+        }
+        let mut l = Loader::open(&prefix, &d).unwrap();
+        assert_eq!(l.accept_in_place(1, &region), Err(Refusal::SegmentHash(1)));
+        assert_eq!(l.accept_in_place(0, &region), Err(Refusal::Failed));
+        assert!(!l.complete() && l.finish(&region).is_err());
+        l.abort(&mut region);
+        assert!(region.iter().all(|b| *b == 0));
+    }
+
+    // Mixed with `feed` in one load.
+    let mut region = vec![0u8; payload.len()];
+    let mut l = Loader::open(&prefix, &d).unwrap();
+    l.feed(0, &payload[..size], &mut region).unwrap();
+    for i in 1..n {
+        let (s, e) = (i as usize * size, ((i as usize + 1) * size).min(payload.len()));
+        region[s..e].copy_from_slice(&payload[s..e]);
+        l.accept_in_place(i, &region).unwrap();
+    }
+    assert!(l.finish(&region).is_ok());
 }
