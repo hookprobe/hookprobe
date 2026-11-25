@@ -424,6 +424,7 @@ impl Emmc {
     /// CMD42, no partition switch, no RPMB. Compiled only with `flashstub`; every other build keeps Gate 1 as is.
     #[cfg(feature = "flashstub")]
     pub fn admit_full_medium(&mut self) -> u64 {
+        self.clear_admissions();
         self.full = true;
         self.sec_count
     }
@@ -432,6 +433,18 @@ impl Emmc {
     #[cfg(feature = "flashstub")]
     pub fn revoke_full_medium(&mut self) {
         self.full = false;
+        self.clear_admissions();
+    }
+
+    /// A flashing session starts and ends with no other write admission open: an earlier one-shot (a BootConfig
+    /// sector, the inactive slot, a keystore or data-volume window) must not outlive the whole-medium window and still
+    /// pass Gate 1/2 after `revoke_full_medium`. (`flashstub` implies `p15-write`, so these fields always exist here.)
+    #[cfg(feature = "flashstub")]
+    fn clear_admissions(&mut self) {
+        self.bootcfg = [None; 2];
+        self.slot = None;
+        self.win = None;
+        self.dv_win = None;
     }
 
     /// Drop the inactive-slot admission (after the image is written, or on any failure).
