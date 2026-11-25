@@ -5,7 +5,8 @@ hand-built window:
 - `tools/neuro-research/semantic_compression.py`: `rep_cards`, then `fill` with the estimate token counter
   (`Tok` without a real tokenizer, bytes / 4);
 - the rule of `tools/neuro-research/e2e_neuro.py` that the `REST` line is appended when `fill` returned as many
-  lines as there are cards.
+  lines as there are cards and the last of them is not already a `REST` line (Neuro d65431e5c; before it, dropping
+  exactly one card gave two `REST` lines).
 
 `tests/cards.rs` checks `neuro_contract::cards::build_context` against them. Nothing in `os/conductor` runs Python:
 the generator below ran once on the build host and is kept here as documentation only.
@@ -26,7 +27,11 @@ On the Neuro host (2026-11-25), all equal byte for byte:
   `NEURO_CARD_CONTRACT=<path> cargo test -p neuro-contract --test cards`.
 
 The first run of the 6,400 found one difference: a pair with a mean gap of exactly 5 s, where Python's float mean
-is just under 5. The module now computes that mean as the double Python holds; see `src/cards.rs`.
+is just under 5. The module now computes that mean as the double Python holds; see `src/cards.rs`. Neuro then
+compared it rounded to ms (d65431e5c), and switched the 2-3 port match to `min(ports)` and the REST rule above.
+The vectors were regenerated with that code on 2026-11-25: one of the 120 committed windows changed (a pair on
+ports 23 and 2323, whose detection is now matched on 23), and the 6,400 extra windows (seeds 1, 2, 3 at 2,000 and
+the default seed at 400, without `small`) are again equal byte for byte.
 
 ## To regenerate
 
@@ -119,7 +124,7 @@ for _ in range(N):
     budget = r.choice([512, 512, 512, 256, 128, 64, 24])
     cards, residual, _ = sc.rep_cards([dict(e) for e in ev], {"pairs": set(base), "suffixes": set()})
     lines, used = sc.fill(cards, budget, tok, residual)
-    if len(lines) == len(cards):
+    if len(lines) == len(cards) and not (lines and lines[-1].startswith("REST ")):
         lines = lines + [residual([])]
     out.write("V %d %s\n" % (budget, "\n".join(lines).encode().hex()))
     for s, d in base:
