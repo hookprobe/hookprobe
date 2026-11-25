@@ -92,3 +92,16 @@ derives it from the export directory name ("Rt ftM Fused" vs "Gguf mixM Fused").
 - **Fix:** the check compares tensors (`gguf_to_hf.py verify`, as doc 46 does), not file bytes.
 - New SHA-256 of `mixR_chain.sh`: `8f534f8476eb9baffb8b0765beda891ee387fa493b823c5e02d2219bdc728fb0`.
 - Nothing else changed.
+
+## 8. Seal (2026-11-25, before any model has seen the set)
+
+- `blind_cases.jsonl` SHA-256 **`b4ac283d356fc46a86da94c4ba4315c91bf7249d5d2969d8bfe40d6c777b426b`**.
+- **Mix:** next 45, multi 35, clears 30, decoy 25, invisible 15, alert 25 (175 cases); 21 Romanian (12.0%).
+- **Seal checks: PASS** (`INV_SET=v3 inv_seal.py check`): 0 collisions with inv-blind v1–v3, ftM's v4 training
+  cases and ftR's v5 training cases. No CVE id is present.
+- **Second annotator** (isolated, 44-case sample): **43/44** before adjudication.
+  - The one disagreement was `alert-022`. The author kept their gold and added the annotator's step as a second
+    acceptable answer (decision b, recorded in the set's README).
+  - After adjudication the agreement is 44/44, and the seal checks pass on the final file (the hash above).
+- ftR finished training before the seal: checkpoint 200 of 214 (valid 0.010; 0.408 at step 1). Adapter SHA-256
+  `76fdeffa…`, GGUF `3da86e16…`.
