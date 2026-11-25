@@ -525,6 +525,12 @@ def pairs(a, r, banned):
             for _ in range(r.choice([0, 1])):
                 g.distractor(w)
             ctx = w.render()
+            if a.l1_alert:                       # doc 46: both twins behind the generic alert, so only the numbers differ
+                ctx = l1_alert(ctx, verdict)
+                if L1 not in ctx:
+                    ctx = re.sub(r"^(F\d+ \S+->\S+ n=\d+[^\n]*?)[ ]*$", lambda m: m.group(1) + " " + L1, ctx, count=1, flags=re.M)
+            if a.service_labels:
+                ctx = service_labels.label(ctx)
             rows.append((ctx, verdict, ev, ents, mention, nxt, fam))
         hs = [hashlib.sha256(norm(c[0]).encode()).hexdigest() for c in rows]
         if any(h in banned for h in hs):
