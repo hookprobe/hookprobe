@@ -32,9 +32,39 @@ Each case is a `triage` or `injection` case of a spent set. Other task types are
 **Guards before anything runs:**
 - the model must match its line in `SHA256SUMS`;
 - the case set must be one Neuro named as spent: dev v8 or blind v3–v6. A sealed set is refused by its SHA-256.
-- inv-blind (ftL) is refused for now, because the investigation prompt is not in `neuro_contract` yet.
+- an inv-blind set is checked as investigation turns (below) and needs the investigation adapter.
 
 The exit code is 0 only if the verdict is FAITHFUL.
+
+**`--guard-a`** shows the model the context after guard A, as Neuro's gates do: `run_eval.py` applies
+`guard.redact_all` to the context before the prompt and the schema are built, and so does the tool. Without the
+option the prompts carry the raw quoted values.
+
+**Investigation turns.** With an inv-blind set (v1 or v2, both spent) the tool checks the `investigate` cases
+against the investigation adapter (ftM):
+
+- the prompt is `neuro_contract::inv::write_prompt` on the context after guard A (always: it is the contract's
+  `context_transform`);
+- the template check sends Neuro's system prompt, user template and `tools` from `inv_contract.json` to
+  `/apply-template`;
+- the reference decodes on `/completion` under the grammar llama-server derives from the tools on
+  `/chat/completions`, as recorded in `inv_contract_gen.json` (`--inv-gen`): lazy, triggered by `<tool_call>`
+  and a newline, with its four preserved tokens. This route reproduces the generated ids of the three vectors in
+  that file;
+- the engine's side is `neuro_contract::inv::ToolMachine` with `pick_tool` and `generate_tool`.
+
+Start that server with `--jinja --reasoning off`, on its own port:
+
+```bash
+llama-server -m ~/.cache/hookprobe-neuro/share-conductor/ftM-q8_0.gguf --port 8081 -c 8192 -np 1 -ngl 0 -t 4 --jinja --reasoning off --no-webui
+```
+
+```bash
+cargo run --release -p tok-build --bin fidelity -- --dir ~/.cache/hookprobe-neuro/share-conductor --model ftM-q8_0.gguf --set <inv-blind>/blind_cases.jsonl --url http://127.0.0.1:8081 --free-run --out fidelity-ftM.md
+```
+
+One engine process uses one core and about 1.9 GB. Shards (`--shard K/N`) can share one server: the server
+answers a case in seconds, the engine takes minutes.
 
 ## Run it
 
