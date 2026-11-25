@@ -310,14 +310,16 @@ counter, bytes / 4) and `e2e_neuro.py`'s rule that the context ends with the `RE
   fixture, both alerts, 3 windows with no fact card), on 120 committed synthetic windows and on 6,400 more
   generated ones. `tests/data/CARD_VECTORS.md` has the generator and what it covers.
 - **No float, no allocation.** Comparisons and printed numbers come from integers. Where Python's float rounding
-  decides and real traffic meets it, the float is reproduced exactly: the mean gap (a device polling every
-  5.000 s is not `periodic` for Python, because its float mean is just under 5) and the `out=…GB` figure.
+  decides and real traffic meets it, the float is reproduced exactly: the mean gap (printed with `round()`; the
+  5 s floor compares it rounded to ms, so a device polling every 5.000 s is `periodic`) and the `out=…GB` figure.
   What is left as a stated difference is in the module's header: a coefficient of variation exactly on 0.1 or on
   a rounding boundary, a budget met exactly by `fill`'s float sum, and score ties that need a severity-5
   detection.
-- **Two behaviours of the Python are kept as they are**, because the models were measured with them, and both
-  are reported to Neuro: the port a detection is matched on for a pair with two or three ports comes from the
-  iteration order of a Python `set`; and when exactly one card is dropped, the E2E path writes two `REST` lines.
+- **Three quirks this mirror found are fixed on both sides** (Neuro d65431e5c, 2026-11-25; the mirror followed in
+  the CI-gate change): the port a detection is matched on for a pair with two or three ports is the smallest (it
+  was a Python `set`'s iteration order); a context ends with one `REST` line when exactly one card is dropped (it
+  had two); and the 5 s periodicity floor compares the mean gap rounded to ms. Neuro's 22 E2E fixture contexts
+  are unchanged by them; of the 120 committed windows one changed (a pair on ports 23 and 2323).
 - **A drift gate** reads Neuro's two sources and fails on a change to any mirrored constant or format string.
 
 **Not covered, and what it waits for:**

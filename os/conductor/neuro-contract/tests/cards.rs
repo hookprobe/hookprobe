@@ -89,15 +89,16 @@ fn contexts_equal_neuros_python() {
 }
 
 #[test]
-fn one_dropped_card_gives_two_rest_lines_as_neuros_e2e_does() {
-    // `fill` returns the kept lines plus its REST line; with exactly one card dropped that is as many lines as
-    // there are cards, and `e2e_neuro.py` then appends the REST line again. The model was measured with it.
+fn one_dropped_card_gives_one_rest_line() {
+    // `fill` returns the kept lines plus its REST line; with exactly one card dropped that is as many lines as there
+    // are cards. `e2e_neuro.py` appended the REST line again until Neuro's d65431e5c; now it checks the last line.
     let ws = parse(data::VECTORS);
-    let w = ws.iter().find(|w| w.want.matches("REST ").count() == 2).expect("the hand-built window");
+    let w = ws.iter().find(|w| w.want.contains("REST 1 more cards omitted; omitted cards carry detections: port_scan x1;")).expect("the hand-built window");
     let (got, b) = build(w).unwrap();
     assert_eq!(got, w.want);
     assert_eq!(b.cards - b.kept, 1);
-    assert!(got.contains("REST 1 more cards omitted; omitted cards carry detections: port_scan x1;") && got.ends_with("REST 0 more cards omitted; omitted cards carry no detections; plus 0 ordinary flow pairs and 0 ordinary dns groups with no detections"));
+    assert_eq!(got.matches("REST ").count(), 1, "one REST line:\n{got}");
+    assert!(got.lines().last().is_some_and(|l| l.starts_with("REST 1 more cards omitted")));
 }
 
 #[test]
@@ -155,11 +156,6 @@ fn small_cases_by_hand() {
     // 172.16/12 is the site, 172.32 is not; the classification reads the text.
     assert!(is_site("172.16.0.1") && is_site("172.31.255.1") && is_site("10.1.1.1") && is_site("192.168.0.9"));
     assert!(!is_site("172.32.0.1") && !is_site("172.15.0.1") && !is_site("172.160.0.1") && !is_site("100.64.0.1") && !is_site("1172.16.0.1"));
-    // Python's set order for a pair's ports (checked against CPython on 200,000 random sets when this was written).
-    assert_eq!(first_of_set(&[5000, 53]), Some(5000));
-    assert_eq!(first_of_set(&[53, 5000]), Some(5000));
-    assert_eq!(first_of_set(&[9, 17, 1]), Some(9));
-    assert_eq!(first_of_set(&[]), None);
 }
 
 #[test]
@@ -218,12 +214,12 @@ fn cards_match_neuros_sources() {
         "if all((src, r[1]) in fanned for r in rows):".into(),
         format!("if len(ports) >= {FANOUT_PORTS}:\n            flags.append(\"fanout_ports=%d\" % len(ports))\n            w += 4"),
         format!("if n >= {PERIODIC_MIN_FLOWS}:"),
-        format!("if mu >= {PERIODIC_MIN_GAP_S}:"),
+        format!("if round(mu, 3) >= {PERIODIC_MIN_GAP_S}:"),
         "cv = statistics.pstdev(gaps) / mu\n                if cv < 0.1:\n                    flags.append(\"periodic=%ds cv=%.2f\" % (round(mu), cv))\n                    w += 3".into(),
         "if out_b >= 100_000_000:\n            flags.append(\"out=%.1fGB\" % (out_b / 1e9))\n            w += 4".into(),
         "if rst > n / 2 and n > 20:\n            flags.append(\"rst=%d%%\" % (100 * rst // n))".into(),
         "novel = (src, dst) not in baseline[\"pairs\"]".into(),
-        "note, dw, hits = det_note(src, dst, None if len(ports) > 3 else next(iter(ports)))".into(),
+        "note, dw, hits = det_note(src, dst, None if len(ports) > 3 else min(ports))".into(),
         "w += dw + (1.0 if novel else 0.0)".into(),
         format!("if not flags and not note and n < {ORDINARY_MAX_FLOWS}:"),
         "port_s = (\"%d ports\" % len(ports)) if len(ports) > 3 else \",\".join(str(p) for p in sorted(ports))".into(),
@@ -244,7 +240,7 @@ fn cards_match_neuros_sources() {
     }
     for f in [
         format!("lines, used = sc.fill(cards, {BUDGET}, tok, residual)"),
-        "if len(lines) == len(cards):".to_string(),
+        "if len(lines) == len(cards) and not (lines and lines[-1].startswith(\"REST \")):".to_string(),
         "lines = lines + [residual([])]".to_string(),
         "st = {\"S0\": \"rst\", \"REJ\": \"rst\", \"SF\": \"fin\"}".to_string(),
     ] {

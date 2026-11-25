@@ -110,6 +110,9 @@ gate_g1() {
   # ADR 0070: the heqk flash stub — DWC2 device driver against a register-level model, HQFL server with the real
   # boot verifier (mirrors tools/flash/web/test/stub.test.mjs), full exchange over the mock USB core.
   step "host tests: heqk flash stub (DWC2 + HQFL)" bash -c "cd os/kernel/flashstub && CARGO_TARGET_DIR=$(tdir flashstub) cargo +stable test --release --target $HOST_TRIPLE"
+  # The Conductor workspace (ADR 0071): its own pinned toolchain (os/conductor/rust-toolchain.toml), host target. Its drift
+  # gates read Neuro's Python sources in tools/neuro-research, so a Neuro change the mirror has not followed fails here.
+  step "host tests: heqk Conductor (os/conductor)" bash -c "cd os/conductor && CARGO_TARGET_DIR=$(tdir conductor) cargo test --workspace --release --locked --target $HOST_TRIPLE"
   # ADR 0070: the browser flasher's rpiboot + HQFL host code against mock devices (no dependencies, no npm).
   if need node; then
     step "host tests: browser flasher (WebUSB rpiboot, node --test)" bash -c "node --test tools/flash/web/test/*.test.mjs"

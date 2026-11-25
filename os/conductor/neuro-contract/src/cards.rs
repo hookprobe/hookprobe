@@ -17,18 +17,17 @@
 //! - a budget met exactly by the estimate in `fill` (Python sums floats);
 //! - two cards whose scores are equal as fractions but are reached by different float additions (possible only
 //!   with a severity-5 detection, weight 0.2).
-//!   Two float results are reproduced exactly, because real traffic meets them: the mean gap (a device polling
-//!   every 5.000 s has a float mean just under 5 and is not periodic for Python), computed here as the double
-//!   Python holds, bit for bit, in integers; and the `out=…GB` figure, where a half-way value is rounded the way
-//!   the nearest double falls.
+//!   Two float results are reproduced exactly, because real traffic meets them: the mean gap, computed here as the
+//!   double Python holds, bit for bit, in integers (it is printed with `round()`, and the 5 s floor compares it
+//!   rounded to ms, `round(mu, 3) >= 5`, so a device polling every 5.000 s is periodic); and the `out=…GB`
+//!   figure, where a half-way value is rounded the way the nearest double falls.
 //!
 //! Memory is the caller's: the flows are sorted in place, and [`Scratch`] holds the cards, fan-outs and aliases.
 //! A window that does not fit is an error ([`ContractError::Space`]), never a shortened context.
 //!
-//! Two behaviours of the Python are kept because the model was measured with them:
-//! - the port a detection is matched on, for a pair with two or three ports, is the first element of a Python
-//!   `set` of those ports (CPython's small-table order), reproduced by [`first_of_set`];
-//! - when exactly one card is dropped, `e2e_neuro.py` appends a second `REST` line after `fill`'s own.
+//! Neuro removed three quirks this mirror had found (d65431e5c, 2026-11-25), and the mirror follows: the port a
+//! detection is matched on, for a pair with two or three ports, is the smallest (it was CPython's set order); a
+//! context ends with one `REST` line even when exactly one card is dropped; and the 5 s floor above.
 
 use crate::{ContractError, Sink};
 
@@ -188,31 +187,6 @@ pub fn is_site(ip: &str) -> bool {
     )
 }
 
-/// The first element CPython yields from a `set` of at most three small non-negative integers inserted in
-/// this order (an 8-slot table; slot `h & 7`, then `i = (5 i + 1 + perturb) & 7` with `perturb >>= 5`).
-pub fn first_of_set(ports: &[u32]) -> Option<u32> {
-    let mut table: [Option<u32>; 8] = [None; 8];
-    for &h in ports {
-        let mut i = (h & 7) as usize;
-        let mut perturb = h;
-        for _ in 0..64 {
-            match table.get(i).copied().flatten() {
-                None => {
-                    if let Some(slot) = table.get_mut(i) {
-                        *slot = Some(h);
-                    }
-                    break;
-                }
-                Some(x) if x == h => break,
-                Some(_) => {
-                    perturb >>= 5;
-                    i = (i.wrapping_mul(5).wrapping_add(1).wrapping_add(perturb as usize)) & 7;
-                }
-            }
-        }
-    }
-    table.iter().flatten().next().copied()
-}
 
 /// `"%.1f" % (bytes / 1e9)` as tenths of a gigabyte. A half-way value goes the way the double nearest to it
 /// lies, as Python's float does; one that a double holds exactly rounds half to even.
@@ -765,13 +739,14 @@ pub fn build_context<'a>(
             w = w.saturating_add(4 * SCALE);
         }
         if n >= PERIODIC_MIN_FLOWS {
-            // The mean gap as Python's double: >= 5 s, and printed with round(), half to even.
+            // The mean gap as Python's double, printed with round(), half to even. The floor is `round(mu, 3) >= 5`:
+            // a double is never exactly 4.9995, so that is mu > 4.9995, i.e. 10^4 mu > 49_995 (mu is fixed point).
             let m = u128::from(n.saturating_sub(1));
             let mu = round53(gap_sum / m.max(1), !gap_sum.is_multiple_of(m.max(1)));
             // cv = pstdev / mean < 0.1, from the gaps in ms: m of them, sum `span`, sum of squares `sum_sq`.
             let d = m.saturating_mul(sum_sq).saturating_sub(span.saturating_mul(span));
             let s2 = span.saturating_mul(span);
-            if mu >= u128::from(PERIODIC_MIN_GAP_S) << FRAC && d.saturating_mul(100) < s2 {
+            if mu.saturating_mul(10_000) > (u128::from(PERIODIC_MIN_GAP_S) * 10_000 - 5) << FRAC && d.saturating_mul(100) < s2 {
                 c.flags |= F_PERIODIC;
                 w = w.saturating_add(3 * SCALE);
                 let (q, r, half) = (mu >> FRAC, mu & ((1u128 << FRAC) - 1), 1u128 << (FRAC - 1));
@@ -798,7 +773,7 @@ pub fn build_context<'a>(
         if nports <= 3 {
             c.ports = [seen.first().copied().unwrap_or(0), seen.get(1).copied().unwrap_or(0), seen.get(2).copied().unwrap_or(0)];
         }
-        let port = if nports > 3 { None } else { first_of_set(seen.get(..n_seen).unwrap_or(&[])) };
+        let port = if nports > 3 { None } else { seen.get(..n_seen).and_then(|s| s.iter().copied().min()) };
         let (best, mask) = best_hit(dets, |d| d.src == head.src && d.dst == head.dst && port.is_none_or(|p| d.port == 0 || d.port == p || d.port == 53));
         mark_ids(dets, mask, &mut used);
         c.det = det_ref(best);
@@ -883,7 +858,8 @@ pub fn build_context<'a>(
     }
     let empty = n_tok > u64::from(budget);
 
-    // Write. `e2e_neuro.py` adds the `REST` line when `fill` returned as many lines as there are cards.
+    // Write. `e2e_neuro.py` adds the `REST` line when `fill` returned as many lines as there are cards and the
+    // last of them is not already a `REST` line (fill's own, written when a card was dropped).
     let lines_from_fill = if empty { 0 } else { kept.saturating_add(usize::from(kept < n_cards)) };
     let mut wrote = false;
     if !empty {
@@ -897,7 +873,8 @@ pub fn build_context<'a>(
             emit(out, &mut wrote, line.bytes())?;
         }
     }
-    if lines_from_fill == n_cards {
+    let last_is_rest = !empty && kept < n_cards;
+    if lines_from_fill == n_cards && !last_is_rest {
         rest_line(0, &Cats::new(), ordinary, &mut line)?;
         emit(out, &mut wrote, line.bytes())?;
     }
