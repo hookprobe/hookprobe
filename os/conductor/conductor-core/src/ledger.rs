@@ -25,6 +25,11 @@ pub enum Kind {
     GroundingEdit = 14,
     /// Guard E replaced the answer's prose by the template sentence. `digest` = SHA-256 of the prose before.
     EchoFallback = 15,
+    /// An investigation turn ended. `code` = [`crate::harness::Investigation`].
+    Investigated = 16,
+    /// The model asked for a policy change. Nothing was applied: the call is staged for the owner.
+    /// `code` = the tool's grant bit; `digest` = SHA-256 of the model's output.
+    Proposed = 17,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

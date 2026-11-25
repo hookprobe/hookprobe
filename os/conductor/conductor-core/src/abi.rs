@@ -104,6 +104,32 @@ pub fn decode_event(b: &[u8]) -> Option<(u64, Event<'_>)> {
     r.done().then_some((now, ev))
 }
 
+/// One tool call: kind u8 (1 evidence.get, 2 flows.count, 3 investigation), then for 1 and 2 `ev u16 hours u8`,
+/// for 3 `tool u8 minutes u16 policy u8 alias_len u8 alias` (the entity as the alias the provider was shown).
+fn put_call(w: &mut Writer, c: ToolCall, h: &Harness) -> Option<()> {
+    match c {
+        ToolCall::EvidenceGet { ev } => {
+            w.u8(1)?;
+            w.u16(ev)?;
+            w.u8(0)
+        }
+        ToolCall::FlowCount { ev, hours } => {
+            w.u8(2)?;
+            w.u16(ev)?;
+            w.u8(hours)
+        }
+        ToolCall::Investigate { tool, entity, minutes, policy } => {
+            let alias = h.entity(entity)?;
+            w.u8(3)?;
+            w.u8(tool)?;
+            w.u16(minutes)?;
+            w.u8(policy)?;
+            w.u8(u8::try_from(alias.len()).ok()?)?;
+            w.put(alias)
+        }
+    }
+}
+
 /// OUT of CMD_EVENT: n u8, then each action (tag u8 + fields), then the payload the actions refer to:
 /// after a Sign, the sign request as an HP-EXEC body with zero authority fields and expiry = ttl; after a
 /// Send, the bytes to send. `payload_len u16` precedes it (0 = none).
@@ -142,18 +168,12 @@ pub fn encode_output(acts: &Actions, h: &Harness, out: &mut [u8]) -> Option<usiz
             }
             Action::RunTool(c) => {
                 w.u8(6)?;
-                match c {
-                    ToolCall::EvidenceGet { ev } => {
-                        w.u8(1)?;
-                        w.u16(ev)?;
-                        w.u8(0)?;
-                    }
-                    ToolCall::FlowCount { ev, hours } => {
-                        w.u8(2)?;
-                        w.u16(ev)?;
-                        w.u8(hours)?;
-                    }
-                }
+                put_call(&mut w, c, h)?;
+            }
+            // 10: stage as a proposal for the owner; never applied.
+            Action::Propose(c) => {
+                w.u8(10)?;
+                put_call(&mut w, c, h)?;
             }
             Action::Ledger(rec) => {
                 w.u8(7)?;
@@ -168,6 +188,7 @@ pub fn encode_output(acts: &Actions, h: &Harness, out: &mut [u8]) -> Option<usiz
                     Outcome::Rejected(v) => (2, v as u16, 1, 0, 0, 0),
                     Outcome::Refused(r) => (3, r as u16, 0, 0, 0, 0),
                     Outcome::Aborted(a) => (4, a as u16, 0, 0, 0, 0),
+                    Outcome::Investigated(i) => (5, i as u16, 0, 0, 0, 0),
                 };
                 w.u8(kind)?;
                 w.u16(code)?;

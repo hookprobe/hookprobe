@@ -101,6 +101,11 @@ impl JobSpec {
         n_evidence: 0,
     };
 
+    /// An investigation turn (Neuro's request with its five tools) instead of an explainer turn.
+    pub fn is_investigation(&self) -> bool {
+        self.tools_granted & crate::tools::bit::INV_ALL != 0
+    }
+
     pub fn l0_verdict(&self) -> Option<Verdict> {
         Verdict::from_u8(self.l0)
     }
@@ -177,7 +182,9 @@ impl JobSpec {
         self.job_id = r.arr().ok_or(e)?;
         self.model_digest = r.arr().ok_or(e)?;
         self.tools_granted = r.u8().ok_or(e)?;
-        if self.tools_granted & !crate::tools::bit::ALL != 0 {
+        // The two tool sets belong to different turns and are never offered together.
+        let t = self.tools_granted;
+        if t & !crate::tools::bit::VALID != 0 || (t & crate::tools::bit::ALL != 0 && t & crate::tools::bit::INV_ALL != 0) {
             return Err(JobError::Option);
         }
         self.l0 = r.u8().ok_or(e)?;

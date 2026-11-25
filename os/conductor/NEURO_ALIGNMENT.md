@@ -316,4 +316,37 @@ verbatim, guard A, the server's lazy grammar and trigger) and decodes with `Tool
 
 Both are runtime-against-runtime on the same GGUF and request. Quality on these sets is Neuro's measurement.
 
-**Still open:** the harness (Neuro's five tools as Conductor typed tools with per-call authorisation).
+**Still open:** the harness (Neuro's five tools as Conductor typed tools with per-call authorisation). Host part built
+the same day: see the next update.
+
+## Update: the investigation turn in the harness (2026-11-25)
+
+The item left open above is built on the host side (`conductor-core`, tested against the mock kernel).
+
+- **The request is Neuro's.** A job granted any of the five tools is an investigation job. Its prompt is
+  `neuro_contract::inv::write_prompt` over the cards after guard A, with nothing of Conductor's added, and it
+  always lists all five tools, because that is the request Neuro measured. The grant decides which calls the
+  device acts on, not what the model is shown.
+- **Every call is authorized on its own** (`tools::authorize_inv`): the tool's grant bit, an alias of the
+  context this provider was shown, `minutes` in range, a policy of the enum. A well-formed call that is not
+  granted is refused and recorded; a call outside the contract rejects the job.
+- **Read tools** (`lookup_reputation`, `query_flows`, `query_dns`, `lookup_exposure`) are run by the device. The
+  result must be one line of inert text. It joins the context as `RESULT <tool> <alias>: <text>`, the line
+  `gen_investigate.py` writes, after guard A, and the next call asks for the next check. A result whose data
+  class may not reach the provider stays on the device and the job ends there.
+- **`propose_policy_change` is never run.** It is handed to the host as a proposal for the owner
+  (`Action::Propose`), with a ledger record carrying the hash of what the model wrote.
+- **The two tool sets are separate.** Conductor's own `evidence.get` and `flows.count` belong to the explainer
+  turn and cannot be granted together with Neuro's five.
+
+**Not built, and what it waits for:**
+1. **`CONTEXT` and `REST` lines.** Neuro's contexts carry `CONTEXT …` lines and end with `REST n more cards`.
+   The job format has only evidence cards, so the harness writes neither. This is the card writer's side
+   (who builds the cards on the device, and from what) and affects the explainer turn in the same way.
+2. **The tools themselves.** The kernel answers a `RunTool`: reputation, flows, DNS and exposure lookups are
+   kernel-side work (KR-3 and Neuro's exposure table). Here the mock answers.
+3. **The worker's side.** A worker must decode an investigation request under the lazy tool-call grammar
+   (`inv::ToolMachine`). The request frame does not yet say which of the two turns it is.
+4. **The bare-metal build** of `el0-harness` with this change was not run on this host (no
+   `aarch64-unknown-none-softfloat` toolchain here), so its size table in `README.md` is unchanged and unchecked.
+
