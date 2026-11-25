@@ -339,6 +339,13 @@ The item left open above is built on the host side (`conductor-core`, tested aga
 - **The two tool sets are separate.** Conductor's own `evidence.get` and `flows.count` belong to the explainer
   turn and cannot be granted together with Neuro's five.
 
+- **A job with no card for the provider is not sent to a model** (either turn): no session, no signature, outcome
+  `Refused(NoEvidence)`. On Neuro's E2E fixture 151 of 679 windows have no fact card, and a model asked about
+  nothing cites nothing or invents `F1`. This is the second line of defence; the rule that such a window gets a
+  fixed answer belongs to the job issuer and is not decided.
+- **Order agreed with Neuro:** fact cards, then `CONTEXT` lines, then `RESULT` lines, then `REST` last. The
+  harness writes cards then `RESULT` lines today; when `REST` exists it goes after them.
+
 **Not built, and what it waits for:**
 1. **`CONTEXT` and `REST` lines.** Neuro's contexts carry `CONTEXT …` lines and end with `REST n more cards`.
    The job format has only evidence cards, so the harness writes neither. This is the card writer's side

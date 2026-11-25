@@ -494,6 +494,11 @@ impl Harness {
                     }
                 }
                 self.prompt_classes = mask;
+                if !self.included.iter().any(|x| *x) {
+                    // Before any session: nothing is opened, signed or sent.
+                    self.tier_raw = 0;
+                    return self.finish(out, Outcome::Refused(PlaceRefusal::NoEvidence));
+                }
                 out.push(Action::Ledger(self.record(Kind::Placed, t as u16, [0; 32])));
                 out.push(Action::OpenSession { tier: t });
                 self.state = State::AwaitSession;

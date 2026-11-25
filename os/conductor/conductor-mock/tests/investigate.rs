@@ -11,6 +11,7 @@ use conductor_core::crypto::{public_key, sha256};
 use conductor_core::harness::{Abort, Action, Actions, Harness, Investigation, Outcome, Violation};
 use conductor_core::job::JobError;
 use conductor_core::ledger::Kind;
+use conductor_core::place::PlaceRefusal;
 use conductor_core::tools::{bit, inv_bit, ToolCall, ToolRefusal, NO_POLICY};
 use conductor_mock::*;
 use neuro_contract::inv::{self, POLICIES, TOOLS};
@@ -285,5 +286,18 @@ fn the_host_abi_carries_the_call_with_its_alias() {
         let n = abi::encode_output(&acts, &h, &mut out).expect("encodes");
         // n=1 · tag · kind 3 · tool · minutes u16 LE · policy · alias_len · alias · payload_len u16 (0)
         assert_eq!(&out[..n], &[1, tag, 3, tool("query_flows"), 90, 0, NO_POLICY, 2, b'R', b'1', 0, 0]);
+    }
+}
+
+#[test]
+fn a_job_with_no_card_for_the_provider_is_not_sent_to_a_model() {
+    // Neuro's E2E fixture: a window with no fact card makes the model invent F1/H1 or cite nothing. The job
+    // issuer should not create such a job; if one arrives, no session is opened and nothing is signed or sent.
+    let address_only = JobBuilder { evidence: vec![Ev { id: 1, class: DataClass::Address, required: false, text: CARD.into() }], ..job(bit::INV_ALL, &[]) };
+    for j in [job(bit::INV_ALL, &[]), job(bit::ALL, &[]), job(0, &[]), address_only] {
+        let (r, w) = run(&j, &mut kernel(), vec!["none".into()]);
+        assert_eq!(r.outcome, Some(Outcome::Refused(PlaceRefusal::NoEvidence)));
+        assert!(w.prompts.is_empty() && r.sessions_opened.is_empty() && r.sign_requests.is_empty() && r.sends == 0);
+        assert_eq!(kinds(&r), vec![Kind::Refused]);
     }
 }
