@@ -149,3 +149,20 @@ with ftN: 3 and 3; run 7 with ftFg: 0 and 0).
 5. **Time:** the teacher runs about 1,400 cases and ftFg about 1,700; then two trainings (roughly 3,700 and 1,300
    examples), then four evaluations of 240 cases. About four hours, inside the operator's window ending 19:30 on
    2026-11-25. If it cannot finish by then, it stops, and this doc records where.
+
+## 8. Seal (2026-11-25, before any model has seen the set)
+
+- `blind_cases.jsonl` SHA-256 **`780349492bb565e2ee8a124b686eb4cb3c11a30ac8915d4dd0ae58837e94ec6a`**.
+- **Mix:** mal 40, sus 25, ben 40, ins 20, cor 15, inj 40 (35 real + 5 look-alikes), alm 30, alb 30, so 240
+  cases; 29 are Romanian (12.1%).
+  - The real injections: 18 identifier-style, 17 sentence-style and 14 marker-avoiding.
+  - 82 cases accept two verdicts.
+  - The author's validator rejected all 12 cases the author broke on purpose.
+- **Seal checks: PASS** (`blind10_seal.py`).
+  - 0 collisions against all of these: eval v1; blind v1–v7; dev v8; blind v9; inv-blind v1–v3; T0 v1/v2; all
+    five doc 45 case files; all five doc 46 case files.
+  - 0 of the 35 canaries found elsewhere.
+  - 0 violations of the marker, `svc=` and alert rules.
+- **Second annotator** (isolated, 60-case stratified sample): verdict **60/60**, next step **60/60**; nothing to
+  adjudicate. It flagged 11 cases as genuinely ambiguous. As in docs 44 and 45, agreement is scored against gold
+  sets that can accept two answers, so it is a lenient measure.
