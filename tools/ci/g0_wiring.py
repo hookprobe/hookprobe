@@ -15,6 +15,9 @@ that class of regression loud. It checks:
   W5  the root dependabot.yml covers every listed lockfile dir + github-actions
   W6  every gate of the ladder is wired into at least one workflow
   W7  the autofix protected-path list covers the gate machinery itself
+  W8  every Cargo workspace in lockfiles.txt is built and tested by a gates.sh step, or is in CARGO_NOT_IN_GATES
+      with how it is covered or why it is not yet (the Conductor workspace was green in CI for weeks while CI never
+      compiled it: #1617 merged with a failing test, 2026-11-25)
 
 Stdlib + PyYAML (present on GitHub runners and Debian/Ubuntu system python).
 """
@@ -35,6 +38,29 @@ ALLOWED_NESTED_GITHUB = {
     "os/kernel/tools/usbboot/.github": "vendored upstream raspberrypi/usbboot — inert by design",
 }
 SKIP_DIRS = {".git", "node_modules", "target", "out", ".claude", "dist"}
+
+# W8: Cargo workspaces no gates.sh step enters, and how each is covered (or why it is not yet). A new workspace must
+# get a test step in gates.sh or a line here; a line here that a gates.sh step now covers is stale and fails.
+CARGO_NOT_IN_GATES = {
+    "os/kernel/el0-hsh": "EL0 server: built by os/kernel/kernel/build.rs, exercised by validate.sh (g2)",
+    "os/kernel/el0-lansvc": "EL0 server: built by os/kernel/kernel/build.rs, exercised by validate.sh (g2)",
+    "os/kernel/el0-tlshost": "EL0 server: built by os/kernel/kernel/build.rs, exercised by validate.sh (g2)",
+    "os/kernel/el0-wasmhost": "EL0 server: built by os/kernel/kernel/build.rs, exercised by validate.sh (g2)",
+    "os/kernel/el0-wifi": "EL0 server: built by os/kernel/kernel/build.rs, exercised by validate.sh (g2)",
+    "os/kernel/el0-wpa": "EL0 server: built by os/kernel/kernel/build.rs, exercised by validate.sh (g2)",
+    "os/kernel/wasip1-fixture": "signed wasip1 fixture: built by os/kernel/kernel/build.rs (g2)",
+    "os/neuro/el0-neuro": "EL0 server: built by os/kernel/kernel/build.rs (g2)",
+    "os/neuro/neuro-core": "built by os/kernel/kernel/build.rs into el0-neuro (g2); its host tests are not yet gated",
+    "os/neuro/neuro-dp": "kernel dependency behind feature `neuro`; its host tests are not yet gated",
+    "os/neuro/neuro-l1": "research artefact, not used by the kernel (docs/research/neuro/31, 35); not yet gated",
+    "os/kernel/efiboot": "arm64-cloud UEFI entry (ADR 0047 item 10), bare-metal target; not yet gated",
+    "os/kernel/arch-x86_64": "x86_64 port skeleton, out of the MVP (ADR 0068); not yet gated",
+    "os/build/kem-diff": "libcrux ML-KEM differential (operator decision 2026-11-08), host tool; not yet gated",
+    "os/build/kem-diff/nostd-check": "libcrux no_std build check for the CM5 target; not yet gated",
+    "os/conductor/el0-engine": "Conductor engine as an EL0 server, bare-metal target, not wired into os/kernel; not yet gated",
+    "os/conductor/el0-harness": "Conductor harness as an EL0 server, bare-metal target, not wired into os/kernel; not yet gated",
+    "os/conductor/neon-proof": "bare-metal NEON test program for QEMU virt, build-host tooling; not yet gated",
+}
 
 # W6: gate -> regex that must match the text of at least one root workflow.
 REQUIRED_WIRING = {
@@ -258,6 +284,23 @@ def main() -> int:
         for must in PROTECTED_MUST_COVER:
             if not any(must.startswith(p) or p == must for p in prot):
                 errs.append(f"W7 protected-paths.txt does not protect {must}")
+
+    # W8
+    gpath = os.path.join(root, "tools/ci/gates.sh")
+    gates = open(gpath).read() if os.path.exists(gpath) else ""
+    for eco, d in listed:
+        if eco != "cargo":
+            continue
+        stepped = d == "os/kernel" or re.search(r"cd\s+" + re.escape(d) + r"(\s|&&|;|\"|$)", gates) is not None
+        if stepped and d in CARGO_NOT_IN_GATES:
+            errs.append(f"W8 {d} has a gates.sh step and is still in CARGO_NOT_IN_GATES — drop the stale line")
+        elif not stepped and d not in CARGO_NOT_IN_GATES:
+            errs.append(f"W8 Cargo workspace {d} is never built or tested by gates.sh — add a step, or a CARGO_NOT_IN_GATES line saying why")
+        elif not stepped:
+            notes.append(f"W8 {d}: {CARGO_NOT_IN_GATES[d]}")
+    for d in CARGO_NOT_IN_GATES:
+        if ("cargo", d) not in listed:
+            errs.append(f"W8 CARGO_NOT_IN_GATES lists {d}, which has no Cargo.lock in tools/ci/lockfiles.txt")
 
     for n in notes:
         print(f"  note: {n}")
