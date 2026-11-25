@@ -10,6 +10,29 @@ remote workers only compute. C0 is the device-side core: the protocol, the HP-EX
 typed tools, the verifier, placement and a sans-IO harness state machine, tested against a mock kernel and a
 scripted, misbehaving mock worker.
 
+## The direction
+
+One sentence, and everything here follows it: **a model runs on any heqk device from one signed file, through one
+load path, on one integer engine, with no Linux, no Python and no other runtime underneath.** The same harness,
+verifier and ledger govern the job whether the model runs on the device or on a worker the device directs.
+
+Why it matters to the product:
+- **The device explains its own alerts with nothing else installed.** A home or a branch gets a local SOC from
+  first boot, air-gapped if it wants, with no account, no cloud and no GPU box. That is the "standalone by
+  default" promise, and a runtime that needs Linux and Python breaks it.
+- **One thing to sign, admit and audit.** A model is data with a manifest: the device knows what it will cost
+  before it loads a byte, refuses what it cannot afford, and can prove afterwards which model answered.
+  A general-purpose runtime on the device is a second operating system to patch and to trust.
+- **Speed where it can be had.** A token is limited by memory bandwidth, so the gains are bytes not read
+  (a packed layout, a pruned output head, verified drafts) and calls not made (rules decide, the model
+  explains). None of that needs another runtime; all of it is measured below.
+- **The same authority when the model is elsewhere.** A large model on the owner's workstation or in a cloud is
+  directed under a capability and a network lease. The device never becomes a client of someone else's stack.
+
+What is decided and not reopened here: no tensor work in the kernel; FP/SIMD for one isolated server only
+(ADR 0072); greedy decoding under Neuro's grammar at temperature 0; the kernel's own crypto crates; no
+Linux-hosted worker. `EXTERNAL_REVIEW.md` records an outside review against these.
+
 ## C0 boundaries (as approved)
 
 No change to `os/kernel` · no x86 dependency · no cloud deployment · no change to packet enforcement · no new
@@ -108,7 +131,40 @@ Host timing (x86, not CM5): load, verify and admit 528 KB in about 1.1 ms. On CM
 
 Not built: the hybrid signature check (heqk's own `boot-abi` verifier is the platform's job), the kernel
 side that streams segments from storage into a reserved, read-only region (R3, R4), the `hnx-compile`
-converter from real model files, and the A/B update channel for models (an open question in doc 06).
+converter for specialist models, and the A/B update channel for models (an open question in doc 06).
+
+### One load path: a language model from the same container
+
+The container now carries a language model too, so there is one way a model reaches the engine.
+
+- **Payload kind** (header byte 208; earlier files have 0 there and are engine packages): `ENGINE`, or `GGUF_LM`,
+  a GGUF file the integer engine binds. A language-model payload may be up to 8 GiB.
+- **No staging copy:** `Loader::accept_in_place` verifies a segment the storage driver read straight into its
+  place in the reserved region. A load needs no memory beyond the region and the loader.
+- **Admission cannot be lied to:** `neuro_gguf::hnx::admit` opens the verified file and recomputes the manifest
+  from it (context, KV state, scratch arena, tensor bytes). A signed header that under-declares any of them is
+  refused. The build side uses the same function.
+- **Build host tool:** `tok-build --bin hnx-lm`: `pack` wraps a GGUF file and signs it; `run` does what a heqk
+  server would: verify, reserve, read and verify in place, admit, bind, answer.
+
+| Gate | Result |
+|---|---|
+| A signed language model (tiny Qwen3) loads segment by segment in place, is admitted, and the engine produces the same tokens as from the file | pass |
+| A manifest under-declaring the arena, the KV state, the bytes per token or the sessions; a context beyond training; another architecture | refused |
+| Not every segment; one changed byte (the load fails and the region is wiped); the wrong payload kind in either direction; another signer; an unknown kind byte | refused |
+| In-place verification: any order, each once, mixed with copied segments; same refusals as the copying path | pass |
+
+**Neuro's ftFg (Qwen3-1.7B, Q8_0, 1.83 GB) through this path, on the build host** (Apple M5 Pro, NEON; a test
+key; not a device number): packed into 875 segments of 2 MiB in 7 s. Opened and signature-checked in under
+1 ms; 1,749 MiB read and verified in place in 3.2 s (hashing at 583 MiB/s, the plain `sha2` crate); admitted at
+context 4,096 (KV state 472 MB, arena 25 MB); asked the capital of France, it answers `Paris` in its JSON
+habit. 0.06 s per token in the GGUF layout and 0.03 s in the packed layout, prompt included. One changed
+weight byte: segment 429 refused and the region wiped. A changed header byte or another key: refused at open.
+
+Still host-side in this path, to move into the container or the image: the tokenizer tables and the RoPE table
+(built here from the GGUF at load; a device carries them precomputed), and the packed layout (packed here
+after load; it should be the stored form). The signature is Ed25519 with a test key; release signing and the
+hybrid scheme are the platform's.
 
 ## neuro-lm: the language-model pieces
 

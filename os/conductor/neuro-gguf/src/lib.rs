@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+pub mod hnx;
 pub mod qwen3;
 
 pub const MAGIC: [u8; 4] = *b"GGUF";

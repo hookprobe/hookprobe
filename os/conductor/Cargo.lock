@@ -161,6 +161,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ct-codecs"
+version = "1.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fd9f3db6f2cfef61c10613071955154ffdc9e515daebff26de4b54e35038fdd"
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -250,6 +256,10 @@ name = "ed25519-compact"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c24599140dc39d7a81e4476e7573d41bbc18e07c803900298e522a5fbcfbfb6"
+dependencies = [
+ "ct-codecs",
+ "getrandom 0.4.3",
+]
 
 [[package]]
 name = "either"
@@ -447,6 +457,9 @@ dependencies = [
 name = "neuro-gguf"
 version = "0.0.26"
 dependencies = [
+ "ed25519-compact",
+ "neuro-hnx",
+ "neuro-kernels",
  "neuro-lm",
 ]
 
@@ -794,10 +807,12 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 name = "tok-build"
 version = "0.0.26"
 dependencies = [
+ "ed25519-compact",
  "fancy-regex",
  "neuro-build",
  "neuro-contract",
  "neuro-gguf",
+ "neuro-hnx",
  "neuro-kernels",
  "neuro-lm",
  "regex",

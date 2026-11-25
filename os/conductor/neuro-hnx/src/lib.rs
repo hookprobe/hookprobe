@@ -17,7 +17,8 @@
 //!    target, feature, licence, model rollback, a missing eval report; check the table against the root.
 //! 2. The platform verifies the signature over [`Loader::signed_digest`] ([`Platform::verify`]).
 //! 3. [`Loader::manifest`] goes to admission (ADR 0061 D4): reserve exactly `payload_bytes`, or refuse.
-//! 4. [`Loader::feed`] streams each segment into the reserved region, hashing it against its leaf; any
+//! 4. [`Loader::feed`] streams each segment into the reserved region, hashing it against its leaf
+//!    ([`Loader::accept_in_place`] when the driver read it straight into the region: no staging copy); any
 //!    order (partial loading later: MoE experts), each exactly once. A mismatch fails the load and
 //!    [`Loader::abort`] wipes the region.
 //! 5. [`Loader::finish`] admits the payload in the engine and checks the manifest told the truth (the
@@ -48,6 +49,17 @@ pub const MIN_SEGMENT_LOG2: u8 = 12; // 4 KiB
 pub const MAX_SEGMENT_LOG2: u8 = 21; // 2 MiB (one AArch64 block mapping)
 pub const MAX_SIG: usize = 8192;
 pub const MAX_PAYLOAD: u64 = 1 << 30;
+/// The largest language-model payload: 8 GiB (the segment table allows 32 GiB at 2 MiB segments).
+pub const MAX_LM_PAYLOAD: u64 = 8 << 30;
+
+/// What the payload is. One container and one loader for every model the device runs.
+pub mod kind {
+    /// A `neuro-engine` package (plan + weights): the specialists. [`crate::Loader::finish`] admits it.
+    pub const ENGINE: u8 = 0;
+    /// A GGUF file of a language model the integer engine binds (`neuro-gguf`). [`crate::Loader::finish_lm`]
+    /// hands back the verified bytes; the binder checks the manifest against the file.
+    pub const GGUF_LM: u8 = 1;
+}
 
 /// Targets (doc 06 §3). `GENERIC_INT` runs on any integer-only engine; the others need their features.
 pub mod target {
@@ -102,6 +114,8 @@ pub struct Header {
     /// Hash of the evaluation report the package passed. Zero = never evaluated = not admissible.
     pub eval_sha256: [u8; 32],
     pub merkle_root: [u8; 32],
+    /// One of [`kind`]. Byte 208, which earlier files leave zero: they are engine packages.
+    pub payload_kind: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +124,8 @@ pub enum Refusal {
     Magic,
     Version,
     Reserved,
+    /// An unknown payload kind, or a `finish` for another kind than the file's.
+    Kind,
     Target,
     Features,
     EngineAbi,
@@ -263,9 +279,13 @@ impl Header {
             source_sha256: r.arr().ok_or(l)?,
             eval_sha256: r.arr().ok_or(l)?,
             merkle_root: r.arr().ok_or(l)?,
+            payload_kind: r.u8().ok_or(l)?,
         };
+        if !matches!(h.payload_kind, kind::ENGINE | kind::GGUF_LM) {
+            return Err(Refusal::Kind);
+        }
         // The pads and the tail are reserved: zero, so no field can hide in them.
-        // Layout: segment_log2 @10, pad @11; max_sessions @52..54, pad @54..56; reserved tail @208..256.
+        // Layout: segment_log2 @10, pad @11; max_sessions @52..54, pad @54..56; payload_kind @208; reserved tail @209..256.
         let pad_ok = b.get(11) == Some(&0) && b.get(54..56) == Some(&[0, 0]);
         if !pad_ok || r.take(HEADER_LEN.saturating_sub(r.i)).ok_or(l)?.iter().any(|&x| x != 0) {
             return Err(Refusal::Reserved);
@@ -305,6 +325,7 @@ impl Header {
         put(&self.source_sha256);
         put(&self.eval_sha256);
         put(&self.merkle_root);
+        put(&[self.payload_kind]);
     }
 
     pub fn segment_size(&self) -> usize {
@@ -373,7 +394,8 @@ impl<'a> Loader<'a> {
         if !(MIN_SEGMENT_LOG2..=MAX_SEGMENT_LOG2).contains(&h.segment_log2) {
             return Err(Refusal::Segments);
         }
-        if m.payload_bytes == 0 || m.payload_bytes > MAX_PAYLOAD {
+        let cap = if h.payload_kind == kind::GGUF_LM { MAX_LM_PAYLOAD } else { MAX_PAYLOAD };
+        if m.payload_bytes == 0 || m.payload_bytes > cap {
             return Err(Refusal::Payload);
         }
         let n = usize::try_from(h.n_segments).map_err(|_| Refusal::Segments)?;
@@ -427,28 +449,60 @@ impl<'a> Loader<'a> {
 
     /// Step 4: one segment into the reserved region (exactly `payload_bytes` long).
     pub fn feed(&mut self, index: u32, data: &[u8], region: &mut [u8]) -> Result<(), Refusal> {
-        if self.failed {
-            return Err(Refusal::Failed);
-        }
-        if u64::try_from(region.len()).ok() != Some(self.header.manifest.payload_bytes) {
-            return Err(Refusal::Region);
-        }
-        let len = self.header.segment_len(index).ok_or(Refusal::BadIndex)?;
-        let (w, bit) = (usize::try_from(index / 64).map_err(|_| Refusal::BadIndex)?, index % 64);
-        let word = self.seen.get_mut(w).ok_or(Refusal::BadIndex)?;
-        if *word & (1u64 << bit) != 0 {
-            return Err(Refusal::Duplicate);
-        }
-        let leaf_at = usize::try_from(index).map_err(|_| Refusal::BadIndex)?.checked_mul(LEAF_LEN).ok_or(Refusal::BadIndex)?;
-        let want = self.table.get(leaf_at..leaf_at.saturating_add(LEAF_LEN)).ok_or(Refusal::BadIndex)?;
-        if data.len() != len || leaf_hash(data) != want {
+        let (start, len) = self.slot(index, region.len())?;
+        if data.len() != len || !self.leaf_matches(index, data)? {
             // Fail closed: the whole load is void; the caller wipes the region and releases the grant.
             self.failed = true;
             return Err(Refusal::SegmentHash(index));
         }
-        let start = usize::try_from(index).map_err(|_| Refusal::BadIndex)?.checked_mul(self.header.segment_size()).ok_or(Refusal::BadIndex)?;
         region.get_mut(start..start.saturating_add(len)).ok_or(Refusal::Region)?.copy_from_slice(data);
-        *word |= 1u64 << bit;
+        self.mark(index)
+    }
+
+    /// Step 4 without a staging copy: the storage driver has read segment `index` straight into its place in
+    /// the reserved region (for example by DMA), and it is hashed there. Nothing is copied, so the only
+    /// memory a load needs beyond the region is this loader.
+    ///
+    /// Until [`Loader::finish`] the region holds bytes that are not all verified, as it does between calls to
+    /// [`Loader::feed`]: it must stay unmapped from the engine until then. A mismatch fails the load, and
+    /// [`Loader::abort`] wipes the region.
+    pub fn accept_in_place(&mut self, index: u32, region: &[u8]) -> Result<(), Refusal> {
+        let (start, len) = self.slot(index, region.len())?;
+        let data = region.get(start..start.saturating_add(len)).ok_or(Refusal::Region)?;
+        if !self.leaf_matches(index, data)? {
+            self.failed = true;
+            return Err(Refusal::SegmentHash(index));
+        }
+        self.mark(index)
+    }
+
+    /// Where segment `index` goes in a region of `region_len` bytes, after the checks every segment gets: the
+    /// load has not failed, the region is exactly the reserved size, the index exists and was not seen.
+    fn slot(&self, index: u32, region_len: usize) -> Result<(usize, usize), Refusal> {
+        if self.failed {
+            return Err(Refusal::Failed);
+        }
+        if u64::try_from(region_len).ok() != Some(self.header.manifest.payload_bytes) {
+            return Err(Refusal::Region);
+        }
+        let len = self.header.segment_len(index).ok_or(Refusal::BadIndex)?;
+        let (w, bit) = (usize::try_from(index / 64).map_err(|_| Refusal::BadIndex)?, index % 64);
+        if self.seen.get(w).ok_or(Refusal::BadIndex)? & (1u64 << bit) != 0 {
+            return Err(Refusal::Duplicate);
+        }
+        let start = usize::try_from(index).map_err(|_| Refusal::BadIndex)?.checked_mul(self.header.segment_size()).ok_or(Refusal::BadIndex)?;
+        Ok((start, len))
+    }
+
+    fn leaf_matches(&self, index: u32, data: &[u8]) -> Result<bool, Refusal> {
+        let leaf_at = usize::try_from(index).map_err(|_| Refusal::BadIndex)?.checked_mul(LEAF_LEN).ok_or(Refusal::BadIndex)?;
+        let want = self.table.get(leaf_at..leaf_at.saturating_add(LEAF_LEN)).ok_or(Refusal::BadIndex)?;
+        Ok(leaf_hash(data) == want)
+    }
+
+    fn mark(&mut self, index: u32) -> Result<(), Refusal> {
+        let (w, bit) = (usize::try_from(index / 64).map_err(|_| Refusal::BadIndex)?, index % 64);
+        *self.seen.get_mut(w).ok_or(Refusal::BadIndex)? |= 1u64 << bit;
         self.received = self.received.saturating_add(1);
         Ok(())
     }
@@ -472,12 +526,36 @@ impl<'a> Loader<'a> {
         if !self.complete() {
             return Err(Refusal::Incomplete);
         }
+        if self.header.payload_kind != kind::ENGINE {
+            return Err(Refusal::Kind);
+        }
         let m = Model::admit(region).map_err(Refusal::Engine)?;
         let man = &self.header.manifest;
         if u64::try_from(m.arena_bytes()).ok() != Some(u64::from(man.arena_bytes)) || m.macs() != man.macs_per_run {
             return Err(Refusal::ManifestMismatch);
         }
         Ok(m)
+    }
+}
+
+impl Loader<'_> {
+    /// Step 5 for a language model ([`kind::GGUF_LM`]): every segment present and verified, so the region
+    /// is the signed file, byte for byte. The binder (`neuro_gguf::hnx::admit`) opens it and checks that the
+    /// manifest told admission the truth; this crate does not know the model's format.
+    pub fn finish_lm<'r>(&self, region: &'r [u8]) -> Result<&'r [u8], Refusal> {
+        if self.failed {
+            return Err(Refusal::Failed);
+        }
+        if !self.complete() {
+            return Err(Refusal::Incomplete);
+        }
+        if self.header.payload_kind != kind::GGUF_LM {
+            return Err(Refusal::Kind);
+        }
+        if u64::try_from(region.len()).ok() != Some(self.header.manifest.payload_bytes) {
+            return Err(Refusal::Region);
+        }
+        Ok(region)
     }
 }
 

@@ -231,9 +231,8 @@ fn inv_sqrt_equals_ieee() {
     }
 }
 
-#[test]
-fn qwen3_binder_refuses_wrong_files() {
-    // A minimal valid Qwen3 file: 1 layer, d 32, 1 head of 32, ffn 32, vocab 4.
+/// A minimal valid Qwen3 file: 1 layer, d 32, 1 head of 32, ffn 32, vocab 4.
+fn qwen3_file(arch: &str, q_ty: u32, ctx: u32) -> Vec<u8> {
     let q8 = |rows: usize, cols: usize| {
         let mut v = vec![];
         for _ in 0..rows * cols / 32 {
@@ -243,39 +242,42 @@ fn qwen3_binder_refuses_wrong_files() {
         v
     };
     let one = |n: usize| 1.0f32.to_bits().to_le_bytes().repeat(n);
-    let build = |arch: &str, q_ty: u32, ctx: u32| {
-        let mut w = W::new();
-        let mut toks = vt::STRING.to_le_bytes().to_vec();
-        toks.extend_from_slice(&4u64.to_le_bytes());
-        for t in ["a", "b", "c", "d"] {
-            s(&mut toks, t.as_bytes());
-        }
-        w.kv_str("general.architecture", arch)
-            .kv_u32("qwen3.block_count", 1)
-            .kv_u32("qwen3.context_length", ctx)
-            .kv_u32("qwen3.embedding_length", 32)
-            .kv_u32("qwen3.feed_forward_length", 32)
-            .kv_u32("qwen3.attention.head_count", 1)
-            .kv_u32("qwen3.attention.head_count_kv", 1)
-            .kv_u32("qwen3.attention.key_length", 32)
-            .kv("qwen3.rope.freq_base", vt::F32, &1e6f32.to_bits().to_le_bytes())
-            .kv("qwen3.attention.layer_norm_rms_epsilon", vt::F32, &1e-6f32.to_bits().to_le_bytes())
-            .kv("tokenizer.ggml.tokens", vt::ARRAY, &toks)
-            .tensor("token_embd.weight", tt::Q8_0, &[32, 4], &q8(4, 32))
-            .tensor("output_norm.weight", tt::F32, &[32], &one(32))
-            .tensor("blk.0.attn_norm.weight", tt::F32, &[32], &one(32))
-            .tensor("blk.0.attn_q.weight", q_ty, &[32, 32], &if q_ty == tt::Q4_0 { vec![0u8; 32 * 18] } else { q8(32, 32) })
-            .tensor("blk.0.attn_k.weight", tt::Q8_0, &[32, 32], &q8(32, 32))
-            .tensor("blk.0.attn_v.weight", tt::Q8_0, &[32, 32], &q8(32, 32))
-            .tensor("blk.0.attn_output.weight", tt::Q8_0, &[32, 32], &q8(32, 32))
-            .tensor("blk.0.attn_q_norm.weight", tt::F32, &[32], &one(32))
-            .tensor("blk.0.attn_k_norm.weight", tt::F32, &[32], &one(32))
-            .tensor("blk.0.ffn_norm.weight", tt::F32, &[32], &one(32))
-            .tensor("blk.0.ffn_gate.weight", tt::Q8_0, &[32, 32], &q8(32, 32))
-            .tensor("blk.0.ffn_up.weight", tt::Q8_0, &[32, 32], &q8(32, 32))
-            .tensor("blk.0.ffn_down.weight", tt::Q8_0, &[32, 32], &q8(32, 32));
-        w.build()
-    };
+    let mut w = W::new();
+    let mut toks = vt::STRING.to_le_bytes().to_vec();
+    toks.extend_from_slice(&4u64.to_le_bytes());
+    for t in ["a", "b", "c", "d"] {
+        s(&mut toks, t.as_bytes());
+    }
+    w.kv_str("general.architecture", arch)
+        .kv_u32("qwen3.block_count", 1)
+        .kv_u32("qwen3.context_length", ctx)
+        .kv_u32("qwen3.embedding_length", 32)
+        .kv_u32("qwen3.feed_forward_length", 32)
+        .kv_u32("qwen3.attention.head_count", 1)
+        .kv_u32("qwen3.attention.head_count_kv", 1)
+        .kv_u32("qwen3.attention.key_length", 32)
+        .kv("qwen3.rope.freq_base", vt::F32, &1e6f32.to_bits().to_le_bytes())
+        .kv("qwen3.attention.layer_norm_rms_epsilon", vt::F32, &1e-6f32.to_bits().to_le_bytes())
+        .kv("tokenizer.ggml.tokens", vt::ARRAY, &toks)
+        .tensor("token_embd.weight", tt::Q8_0, &[32, 4], &q8(4, 32))
+        .tensor("output_norm.weight", tt::F32, &[32], &one(32))
+        .tensor("blk.0.attn_norm.weight", tt::F32, &[32], &one(32))
+        .tensor("blk.0.attn_q.weight", q_ty, &[32, 32], &if q_ty == tt::Q4_0 { vec![0u8; 32 * 18] } else { q8(32, 32) })
+        .tensor("blk.0.attn_k.weight", tt::Q8_0, &[32, 32], &q8(32, 32))
+        .tensor("blk.0.attn_v.weight", tt::Q8_0, &[32, 32], &q8(32, 32))
+        .tensor("blk.0.attn_output.weight", tt::Q8_0, &[32, 32], &q8(32, 32))
+        .tensor("blk.0.attn_q_norm.weight", tt::F32, &[32], &one(32))
+        .tensor("blk.0.attn_k_norm.weight", tt::F32, &[32], &one(32))
+        .tensor("blk.0.ffn_norm.weight", tt::F32, &[32], &one(32))
+        .tensor("blk.0.ffn_gate.weight", tt::Q8_0, &[32, 32], &q8(32, 32))
+        .tensor("blk.0.ffn_up.weight", tt::Q8_0, &[32, 32], &q8(32, 32))
+        .tensor("blk.0.ffn_down.weight", tt::Q8_0, &[32, 32], &q8(32, 32));
+    w.build()
+}
+
+#[test]
+fn qwen3_binder_refuses_wrong_files() {
+    let build = qwen3_file;
     let rope: Vec<(i32, i32)> = vec![(1 << 30, 0); 8 * 16];
     let f = build("qwen3", tt::Q8_0, 64);
     let g = Gguf::open(&f).unwrap();
@@ -294,4 +296,174 @@ fn qwen3_binder_refuses_wrong_files() {
     let g3 = Gguf::open(&f3).unwrap();
     let h3 = hparams(&g3, 8).unwrap();
     assert_eq!(layer(&g3, &h3, 0).err(), Some(BindError::Tensor));
+}
+
+// ------------------------------------------------------------------------------------------- the signed container
+
+mod container {
+    use super::qwen3_file;
+    use neuro_gguf::hnx::{admit, manifest_for, AdmitError};
+    use neuro_gguf::qwen3::{layer, model};
+    use neuro_gguf::tt;
+    use neuro_hnx::{build_prefix, kind, scheme, target, Header, Loader, Platform, Refusal, HEADER_LEN, LEAF_LEN, MAX_SIG};
+    use neuro_lm::qwen3::{Kv, Work};
+    use neuro_kernels::Simd;
+
+    const SEED: [u8; 32] = [0x51; 32];
+    const CTX: usize = 8;
+
+    struct Dev(ed25519_compact::PublicKey);
+    impl Platform for Dev {
+        fn target(&self) -> u8 {
+            target::QEMU_VIRT
+        }
+        fn features(&self) -> u32 {
+            0
+        }
+        fn engine_abi(&self) -> u16 {
+            1
+        }
+        fn verify(&self, scheme: u8, digest: &[u8; 32], sig: &[u8]) -> bool {
+            scheme == scheme::ED25519 && ed25519_compact::Signature::from_slice(sig).is_ok_and(|s| self.0.verify(digest, &s).is_ok())
+        }
+        fn licence_allowed(&self, spdx: &[u8]) -> bool {
+            spdx == b"Apache-2.0"
+        }
+        fn min_svn(&self, _: &[u8; 16]) -> u32 {
+            1
+        }
+    }
+
+    fn dev() -> Dev {
+        Dev(ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(SEED)).pk)
+    }
+
+    /// The build side: wrap a GGUF file as a signed language-model container.
+    fn pack(file: &[u8], edit: impl FnOnce(&mut Header)) -> Vec<u8> {
+        let mut licence = [0u8; 32];
+        licence[..10].copy_from_slice(b"Apache-2.0");
+        let mut h = Header {
+            target: target::GENERIC_INT,
+            scheme: scheme::ED25519,
+            engine_abi: 1,
+            segment_log2: 12,
+            n_segments: 0,
+            model_id: [9; 16],
+            model_svn: 1,
+            manifest: manifest_for(file, CTX).unwrap(),
+            licence,
+            source_sha256: [1; 32],
+            eval_sha256: [2; 32],
+            merkle_root: [0; 32],
+            payload_kind: kind::GGUF_LM,
+        };
+        edit(&mut h);
+        let mut prefix = vec![0u8; HEADER_LEN + file.len().div_ceil(4096) * LEAF_LEN + 2 + 64];
+        let n = build_prefix(&mut h, file, &mut prefix, |d| {
+            let sig = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(SEED)).sk.sign(d, None);
+            let mut out = [0u8; MAX_SIG];
+            out[..64].copy_from_slice(sig.as_ref());
+            Some((out, 64))
+        })
+        .unwrap();
+        prefix.truncate(n);
+        prefix
+    }
+
+    /// The device side: every segment read into its place and verified there.
+    fn load<'p>(prefix: &'p [u8], file: &[u8], region: &mut Vec<u8>) -> Loader<'p> {
+        let mut l = Loader::open(prefix, &dev()).unwrap();
+        *region = vec![0u8; file.len()];
+        for i in 0..l.header().n_segments {
+            let (s, e) = (i as usize * 4096, ((i as usize + 1) * 4096).min(file.len()));
+            region[s..e].copy_from_slice(&file[s..e]);
+            l.accept_in_place(i, region).unwrap();
+        }
+        l
+    }
+
+    fn first_tokens(g: &neuro_gguf::Gguf, h: &neuro_gguf::qwen3::Hparams) -> Vec<usize> {
+        let d = h.dims;
+        let layers = vec![layer(g, h, 0).unwrap()];
+        let rope: Vec<(i32, i32)> = vec![(1 << 30, 0); CTX * d.head_dim / 2];
+        let m = model(g, h, &layers, &rope).unwrap();
+        let (kvn, kvs) = d.kv_len();
+        let (mut vals, mut shifts) = (vec![0i16; kvn], vec![0u8; kvs]);
+        let (a, b, c, e) = Work::lens(&d, 1);
+        let (mut wa, mut wb, mut wc, mut we) = (vec![0i64; a], vec![0i8; b], vec![(0, 0); c], vec![0i32; e]);
+        let mut work = Work::new(&d, 1, &mut wa, &mut wb, &mut wc, &mut we).unwrap();
+        let mut kv = Kv { vals: &mut vals, shifts: &mut shifts };
+        let mut out = vec![];
+        let mut tok = 1usize;
+        for pos in 0..CTX {
+            tok = m.step(Simd::SCALAR, tok, pos, &mut kv, &mut work).unwrap();
+            out.push(tok);
+        }
+        out
+    }
+
+    #[test]
+    fn a_signed_language_model_loads_and_runs() {
+        let file = qwen3_file("qwen3", tt::Q8_0, 64);
+        let prefix = pack(&file, |_| {});
+        let mut region = vec![];
+        let l = load(&prefix, &file, &mut region);
+        assert!(l.header().n_segments >= 2, "more than one segment");
+        let (g, h) = admit(&l, &region).unwrap();
+        assert_eq!((h.dims.max_ctx, h.dims.vocab), (CTX, 4));
+        // The engine runs from the verified region exactly as from the file.
+        let direct = neuro_gguf::Gguf::open(&file).unwrap();
+        let hd = neuro_gguf::qwen3::hparams(&direct, CTX).unwrap();
+        assert_eq!(first_tokens(&g, &h), first_tokens(&direct, &hd));
+        // The specialist path refuses a language model, and the other way round.
+        assert_eq!(l.finish(&region).err(), Some(Refusal::Kind));
+    }
+
+    #[test]
+    fn the_manifest_cannot_lie_and_the_file_cannot_change() {
+        let file = qwen3_file("qwen3", tt::Q8_0, 64);
+        // Each field admission reserves by, under-declared by the signer: refused when the file is opened.
+        let lies: [fn(&mut Header); 4] =
+            [|h| h.manifest.arena_bytes -= 1, |h| h.manifest.state_bytes_per_session -= 1, |h| h.manifest.bytes_per_token -= 1, |h| h.manifest.max_sessions = 2];
+        for lie in lies {
+            let prefix = pack(&file, lie);
+            let mut region = vec![];
+            let l = load(&prefix, &file, &mut region);
+            assert_eq!(admit(&l, &region).err(), Some(AdmitError::ManifestMismatch));
+        }
+        // A context beyond what the model was trained for, and a payload that is not this architecture.
+        let prefix = pack(&file, |h| h.manifest.max_context = 65);
+        let mut region = vec![];
+        let l = load(&prefix, &file, &mut region);
+        assert!(matches!(admit(&l, &region), Err(AdmitError::Bind(_))));
+        let other = qwen3_file("llama", tt::Q8_0, 64);
+        assert!(matches!(manifest_for(&other, CTX), Err(AdmitError::Bind(_))));
+
+        // Not every segment yet; a changed byte; a container of the other kind.
+        let prefix = pack(&file, |_| {});
+        let mut l = Loader::open(&prefix, &dev()).unwrap();
+        let mut region = file.clone();
+        l.accept_in_place(0, &region).unwrap();
+        assert_eq!(admit(&l, &region).err(), Some(AdmitError::Container(Refusal::Incomplete)));
+        region[4096 + 7] ^= 1;
+        assert_eq!(l.accept_in_place(1, &region), Err(Refusal::SegmentHash(1)));
+        assert_eq!(admit(&l, &region).err(), Some(AdmitError::Container(Refusal::Failed)));
+        l.abort(&mut region);
+        assert!(region.iter().all(|b| *b == 0));
+
+        let as_engine = pack(&file, |h| h.payload_kind = kind::ENGINE);
+        let mut region = vec![];
+        let l = load(&as_engine, &file, &mut region);
+        assert_eq!(admit(&l, &region).err(), Some(AdmitError::Container(Refusal::Kind)));
+        assert!(matches!(l.finish(&region), Err(Refusal::Engine(_))), "a GGUF file is not an engine package");
+
+        // A wrong key, and an unknown kind byte.
+        let mut forged = pack(&file, |_| {});
+        let n = forged.len();
+        forged[n - 1] ^= 1;
+        assert_eq!(Loader::open(&forged, &dev()).err(), Some(Refusal::Signature));
+        let mut unknown = pack(&file, |_| {});
+        unknown[208] = 7;
+        assert_eq!(Loader::open(&unknown, &dev()).err(), Some(Refusal::Kind));
+    }
 }
