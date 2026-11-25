@@ -92,3 +92,11 @@ SSH brute force. Reported, not gated.
 - Varied wording is still synthetic: 38 phrasings, not real tool output.
 - Multi is 35 cases. A doubling from about 0.11 is about 4 cases, so the gate detects only clear changes.
 - Clears (30) are not gated. They use v6 wording in training and are reported in the table as usual.
+
+## 7. Seal (2026-11-25, before any model has seen the set)
+
+- `blind_cases.jsonl` SHA-256 **`1e5439e9dee83fe9adc0918e710892e934d5ed3709705fae6a1de9692532b9c7`**.
+- **Mix:** next 45, multi 35, clears 30, decoy 25, invisible 15, alert 25 (175 cases); 21 Romanian (12.0%).
+- **Seal checks: PASS.** 0 collisions with inv-blind v1–v4 and the v4, v5 and v6 generator case files.
+- **Second annotator** (isolated, 44-case sample): **44/44**, so nothing needed adjudication. It flagged 10 cases as
+  genuinely ambiguous.
