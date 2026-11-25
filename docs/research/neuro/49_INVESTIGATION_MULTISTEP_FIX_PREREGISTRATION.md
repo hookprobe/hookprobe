@@ -105,3 +105,11 @@ derives it from the export directory name ("Rt ftM Fused" vs "Gguf mixM Fused").
   - After adjudication the agreement is 44/44, and the seal checks pass on the final file (the hash above).
 - ftR finished training before the seal: checkpoint 200 of 214 (valid 0.010; 0.408 at step 1). Adapter SHA-256
   `76fdeffa…`, GGUF `3da86e16…`.
+
+## 9. Result (2026-11-25, one look)
+
+**VERDICT: FAIL** (condition 1): next+multi 0.325, against ftMg's 0.362; the 0.60 floor was not reached by either
+model. Conditions 2–5 passed (alert 0.680 = ftM's; decoy 0.960; invisible 1.000; grounding clean).
+- Multi-step doubled (0.114 → 0.229), but the first check fell (0.556 → 0.400).
+- E2E run 11: ftR made no tool call on either real alert.
+ftM stays. Full tables: [`data/mixR-results.md`](data/mixR-results.md).
