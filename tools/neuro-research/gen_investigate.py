@@ -11,6 +11,8 @@ Per observable playbook, one card template (SIGN below) renders its "seen on the
   decoy     (v2, doc 42) an ordinary window with no detection that needs no investigation -> gold = no call
   v3 (doc 43, --version 3): multi = a DIFFERENT next tool after a supporting result, or a policy proposal once
             two results support it (doc 42 found v2 multi-step targets repeated step 1's tool)
+  v5 (doc 49, --version 5): v4 plus v3's multi-step targets. v4 tested `version == 3` there, so its multi cases fell
+            back to v2's (repeat a lookup; never a policy proposal).
   v4 (doc 44, --version 4): adds `alert` cases in the E2E L1-alert card shape (the card's shape decides the check:
             fan-out -> the device's flows; one remote -> its reputation), more decoy and invisible cases, and
             invisible gold = no tool only
@@ -98,8 +100,9 @@ def main():
     ap.add_argument("--playbooks", required=True); ap.add_argument("--n", type=int, default=600); ap.add_argument("--seed", type=int, default=39)
     ap.add_argument("--ro", type=float, default=0.10); ap.add_argument("--out", required=True); ap.add_argument("--id-prefix", default="inv")
     ap.add_argument("--v1", action="store_true", help="doc 41 version: no decoy kind (reproduces the P3 output)")
-    ap.add_argument("--version", type=int, choices=[2, 3, 4], default=2,
-                    help="2 = doc 42 (default, reproduces its output); 3 = doc 43: multi-step targets MOVE ON")
+    ap.add_argument("--version", type=int, choices=[2, 3, 4, 5], default=2,
+                    help="2 = doc 42 (default, reproduces its output); 3 = doc 43: multi-step targets MOVE ON; "
+                         "5 = doc 49: v4's mix with v3's multi-step targets")
     a = ap.parse_args()
     pbs = [p for p in json.load(open(a.playbooks))["playbooks"]]
     obs = [p for p in pbs if p["observable"]]
@@ -107,7 +110,7 @@ def main():
     r = random.Random(a.seed)
     out, seen = [], set()
     kinds = ["next"] * 4 + ["multi"] * 3 + ["clears"] * 2 + ["invisible"] + ([] if a.v1 else ["decoy"] * 2)
-    if a.version == 4:   # doc 44: the L1-alert card shape, and more decoy / invisible cases
+    if a.version >= 4:   # doc 44: the L1-alert card shape, and more decoy / invisible cases
         kinds = ["next"] * 4 + ["multi"] * 3 + ["clears"] * 2 + ["invisible"] * 2 + ["decoy"] * 3 + ["alert"] * 3
     while len(out) < a.n:
         kind = r.choice(kinds)
@@ -148,7 +151,7 @@ def main():
             p = r.choice(blind)
             w.card("%s->%s:445 n=%d" % (H, w.ref("H", g.ip_lan(r)), r.randrange(3, 30)))
             w.ctx_lines.append("CONTEXT owner: I think someone stole the passwords stored on %s" % H.split("=")[0])
-            gold = {"kind": "invisible", "tools": [None] if a.version == 4 else [None, "query_flows"], "entities": [H.split("=")[0]], "technique": p["id"]}
+            gold = {"kind": "invisible", "tools": [None] if a.version >= 4 else [None, "query_flows"], "entities": [H.split("=")[0]], "technique": p["id"]}
         else:
             p = r.choice(obs)
             cls = r.choice(p["classes"])
@@ -163,7 +166,7 @@ def main():
                 st = steps[0]
                 res = RESULT[st["tool"]][0 if kind == "multi" else 1]
                 w.ctx_lines.append("RESULT %s %s: %s" % (st["tool"], tgt if st["tool"] != "lookup_exposure" else H.split("=")[0], res))
-                if kind == "multi" and a.version == 3:
+                if kind == "multi" and a.version in (3, 5):   # doc 49: v4 had dropped this branch (== 3 only)
                     # doc 43: after a supporting result the next check is a DIFFERENT tool; once two results support
                     # it, the case is conclusive and the step is a policy proposal (doc 42's multi-step template gap)
                     other = [x for x in steps[1:] if x["tool"] != st["tool"]]
