@@ -304,7 +304,8 @@ def rep_cards(events, baseline, intern=True):
             gaps = [b[0] - a[0] for a, b in zip(rows, rows[1:])]
             mu = statistics.mean(gaps)
             med = statistics.median(gaps)
-            if mu >= 5:  # beacons are seconds-to-hours apart; sub-5s regularity is a burst, not a beacon
+            if round(mu, 3) >= 5:  # beacons are seconds-to-hours apart; sub-5s regularity is a burst, not a beacon
+                # (rounded to ms: a float mean of exactly-5.000 s gaps can land just under 5; Conductor mirror, 2026-11-25)
                 cv = statistics.pstdev(gaps) / mu
                 if cv < 0.1:
                     flags.append("periodic=%ds cv=%.2f" % (round(mu), cv))
@@ -323,7 +324,8 @@ def rep_cards(events, baseline, intern=True):
         if rst > n / 2 and n > 20:
             flags.append("rst=%d%%" % (100 * rst // n))
         novel = (src, dst) not in baseline["pairs"]
-        note, dw, hits = det_note(src, dst, None if len(ports) > 3 else next(iter(ports)))
+        # min(), not next(iter(set)): set order is CPython hash-slot order, which a mirror cannot reproduce portably
+        note, dw, hits = det_note(src, dst, None if len(ports) > 3 else min(ports))
         for h in hits:
             used_dets.add(h["id"])
         w += dw + (1.0 if novel else 0.0)
