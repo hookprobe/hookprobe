@@ -29,12 +29,21 @@
 //!   fidelity --dir DIR --model FILE.gguf --set CASES.jsonl [--url http://127.0.0.1:8080] [--limit N]
 //!            [--tie 0.5] [--free-run] [--packed] [--scalar] [--out REPORT.md]
 //!
-//! ftL (investigation turns) is not covered yet: its prompt is not in `neuro_contract`. Running it on the
-//! triage framing would check only the numerics, so the tool refuses inv-blind sets for now and says so.
-use neuro_contract::{context_ids, write_schema, write_system, write_user, Allowed, IdList, Lang, Machine, Out};
+//! `--guard-a` shows the model the context after guard A (`neuro_contract::guard::guard_a`), as Neuro's gates do
+//! (`run_eval.py`: `guard.redact_all` on the context before anything else reads it).
+//!
+//! **Investigation turns** (an inv-blind set, `investigate` cases, the investigation adapter): the prompt is
+//! `neuro_contract::inv::write_prompt` on the context after guard A (always, as `inv_contract.json` says); the
+//! template check sends the contract's `tools` to `/apply-template`; the reference decodes under the grammar
+//! llama-server itself derives from those tools, taken from `inv_contract_gen.json` (`--inv-gen`): lazy,
+//! triggered by `<tool_call>` and a newline, with its preserved tokens. The engine's side is
+//! `neuro_contract::inv::ToolMachine` with `neuro_lm::decode::{pick_tool, generate_tool}`. The server must run
+//! with `--jinja --reasoning off`.
+use neuro_contract::inv::{self, ToolMachine};
+use neuro_contract::{context_ids, guard, write_schema, write_system, write_user, Allowed, IdList, Lang, Machine, Out};
 use neuro_gguf::{qwen3 as bind, Gguf};
 use neuro_kernels::Simd;
-use neuro_lm::decode::{generate_closed, pick, Options};
+use neuro_lm::decode::{generate_closed, generate_tool, pick, pick_tool, Options};
 use neuro_lm::qwen3::{Kv, Model, Work};
 use neuro_lm::tok::Tokenizer;
 use serde_json::{json, Value};
@@ -73,10 +82,14 @@ struct Args {
     max_tokens: usize,
     /// Check only these case ids, and print every disagreeing step with both sides' candidates.
     cases: Vec<String>,
+    /// Show the model the context after guard A (triage sets; investigation sets always do).
+    guard_a: bool,
+    /// Neuro's `inv_contract_gen.json` (the server's tool-call grammar) and, beside it, `inv_contract.json`.
+    inv_gen: String,
 }
 
 fn args() -> Args {
-    let mut a = Args { dir: String::new(), model: String::new(), set: String::new(), url: "http://127.0.0.1:8080".into(), limit: usize::MAX, shard: (0, 1), tie: 0.5, free_run: false, packed: false, scalar: false, out: None, max_tokens: 700, cases: vec![] };
+    let mut a = Args { dir: String::new(), model: String::new(), set: String::new(), url: "http://127.0.0.1:8080".into(), limit: usize::MAX, shard: (0, 1), tie: 0.5, free_run: false, packed: false, scalar: false, out: None, max_tokens: 700, cases: vec![], guard_a: false, inv_gen: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../tools/neuro-research/inv_contract_gen.json").into() };
     let mut it = std::env::args().skip(1);
     while let Some(k) = it.next() {
         let mut v = || it.next().unwrap_or_else(|| die(&format!("{k} needs a value")));
@@ -96,13 +109,15 @@ fn args() -> Args {
             "--out" => a.out = Some(v()),
             "--case" => a.cases.push(v()),
             "--free-run" => a.free_run = true,
+            "--guard-a" => a.guard_a = true,
+            "--inv-gen" => a.inv_gen = v(),
             "--packed" => a.packed = true,
             "--scalar" => a.scalar = true,
             _ => die(&format!("unknown argument {k}; see the usage at the top of fidelity.rs")),
         }
     }
     if a.dir.is_empty() || a.model.is_empty() || a.set.is_empty() {
-        die("usage: fidelity --dir DIR --model FILE.gguf --set CASES.jsonl [--url http://127.0.0.1:8080] [--limit N] [--shard K/N] [--case ID]... [--tie 0.5] [--free-run] [--packed] [--scalar] [--out REPORT.md]");
+        die("usage: fidelity --dir DIR --model FILE.gguf --set CASES.jsonl [--url http://127.0.0.1:8080] [--limit N] [--shard K/N] [--case ID]... [--guard-a] [--inv-gen inv_contract_gen.json] [--tie 0.5] [--free-run] [--packed] [--scalar] [--out REPORT.md]");
     }
     a
 }
@@ -243,6 +258,29 @@ fn ref_steps(resp: &Value) -> Vec<RefStep> {
 
 // ------------------------------------------------------------------ the engine
 
+/// The answer language of the turn: the triage schema automaton, or the investigation tool-call automaton.
+#[derive(Clone, Copy)]
+enum Mach<'a> {
+    Triage(Machine<'a>),
+    Tool(ToolMachine),
+}
+
+impl Mach<'_> {
+    fn pick(&self, logits: &[i64], tok: &Tokenizer, eog: &[u32], preserved: &[u32]) -> Option<u32> {
+        match self {
+            Mach::Triage(m) => pick(logits, m, tok, eog),
+            Mach::Tool(m) => pick_tool(logits, m, tok, eog, preserved),
+        }
+    }
+
+    fn feed(&mut self, bytes: &[u8]) -> bool {
+        match self {
+            Mach::Triage(m) => m.feed(bytes),
+            Mach::Tool(m) => m.feed(bytes),
+        }
+    }
+}
+
 fn simd(scalar: bool) -> Simd {
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     if !scalar && std::arch::is_aarch64_feature_detected!("dotprod") {
@@ -271,6 +309,8 @@ fn top2(l: &[i64]) -> ((u32, i64), (u32, i64)) {
 #[derive(Default)]
 struct Tally {
     cases: usize,
+    /// Contexts guard A changed.
+    guarded: usize,
     skipped: usize,
     steps: usize,
     raw_top1_agree: usize,
@@ -312,9 +352,22 @@ fn main() {
     let Some((_, set_name)) = SPENT.iter().find(|(h, _)| *h == set_sha) else {
         die(&format!("{}: SHA-256 {set_sha} is not a set Neuro named as spent (dev v8, blind v3–v6, inv-blind v1/v2). Sealed sets are never used.", a.set));
     };
-    if set_name.starts_with("inv-blind") {
-        die("inv-blind (ftL investigation turns) is not covered yet: the investigation prompt is not in neuro_contract. Use dev v8 with ftFg.");
-    }
+    // Investigation turns: Neuro's contract (messages, tools) and the grammar its server derived from the tools.
+    let is_inv = set_name.starts_with("inv-blind");
+    let (inv_contract, inv_gen): (Value, Value) = if is_inv {
+        let read = |p: &std::path::Path| -> Value { serde_json::from_str(&std::fs::read_to_string(p).unwrap_or_else(|e| die(&format!("read {}: {e}", p.display())))).unwrap_or_else(|e| die(&format!("{}: {e}", p.display()))) };
+        let gen_path = std::path::Path::new(&a.inv_gen);
+        let (c, g) = (read(&gen_path.with_file_name("inv_contract.json")), read(gen_path));
+        if g["model_gguf_sha256"].as_str() != Some(got.as_str()) {
+            die(&format!("{}: the grammar in {} was recorded for model {}, not this one", a.model, a.inv_gen, g["model_gguf_sha256"]));
+        }
+        if g["server_grammar"]["grammar_lazy"] != json!(true) || g["server_grammar"]["grammar_triggers"] != json!([{"type": 1, "value": inv::TRIGGER}]) {
+            die("inv_contract_gen.json: the server grammar is not lazy with the contract's trigger; update neuro_contract::inv first");
+        }
+        (c, g)
+    } else {
+        (Value::Null, Value::Null)
+    };
     let srv = Server::new(&a.url);
 
     // The engine.
@@ -336,6 +389,7 @@ fn main() {
     let tb = tok_build::blob(&tok_build::from_gguf(&g).expect("tokenizer"), &tok_build::unicode_ranges(), &tok_build::nfc_tables()).expect("blob");
     let tok = Tokenizer::new(&tb).expect("tokenizer");
     let eog = [tok.added_id(b"<|im_end|>").expect("im_end"), tok.added_id(b"<|endoftext|>").expect("endoftext")];
+    let preserved: Vec<u32> = inv::PRESERVED_TOKENS.iter().map(|t| tok.added_id(t.as_bytes()).unwrap_or_else(|| die(&format!("{t} is not an added token of this model")))).collect();
     let sd = simd(a.scalar);
     let d = model.dims;
     eprintln!("engine ready in {:?}: {} layers, vocab {}, {} layout, {}", t0.elapsed(), d.n_layers, d.vocab, if a.packed { "packed" } else { "GGUF" }, sd.name());
@@ -355,7 +409,7 @@ fn main() {
         }
         let c: Value = serde_json::from_str(line).unwrap_or_else(|e| die(&format!("set line: {e}")));
         let task = c["task"].as_str().unwrap_or("");
-        if task != "triage" && task != "injection" {
+        if if is_inv { task != "investigate" } else { task != "triage" && task != "injection" } {
             t.skipped += 1;
             continue;
         }
@@ -369,7 +423,19 @@ fn main() {
         }
         let id = c["id"].as_str().unwrap_or("?").to_string();
         let lang = if c["lang"].as_str() == Some("ro") { Lang::Ro } else { Lang::En };
-        let (ctx, q) = (c["context"].as_str().unwrap_or(""), c["question"].as_str().unwrap_or(""));
+        let (ctx_raw, q) = (c["context"].as_str().unwrap_or(""), c["question"].as_str().unwrap_or(""));
+        // What the model is shown: the context after guard A for investigation turns and with `--guard-a`.
+        let mut shown = vec![0u8; 4 * ctx_raw.len() + 4096];
+        let ctx: String = if is_inv || a.guard_a {
+            let mut o = Out::new(&mut shown);
+            guard::guard_a(ctx_raw.as_bytes(), &mut o).unwrap_or_else(|e| die(&format!("{id}: guard A: {e:?}")));
+            let n = o.n;
+            t.guarded += usize::from(&shown[..n] != ctx_raw.as_bytes());
+            String::from_utf8_lossy(&shown[..n]).into_owned()
+        } else {
+            ctx_raw.to_string()
+        };
+        let ctx = ctx.as_str();
 
         // The prompt from the contract.
         let (mut facts, mut ents) = (IdList::new(), IdList::new());
@@ -387,10 +453,33 @@ fn main() {
         write_schema(&facts, &ents, true, &mut o).expect("schema");
         let nsch = o.n;
         let (sys_s, usr_s) = (String::from_utf8_lossy(&sys[..ns]).into_owned(), String::from_utf8_lossy(&usr[..nu]).into_owned());
-        let text = format!("<|im_start|>system\n{sys_s}<|im_end|>\n<|im_start|>user\n{usr_s}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n");
+        let (text, tpl_body) = if is_inv {
+            let mut p = vec![0u8; 65536];
+            let mut o = Out::new(&mut p);
+            inv::write_prompt(lang, ctx.as_bytes(), q.as_bytes(), &mut o).unwrap_or_else(|e| die(&format!("{id}: prompt: {e:?}")));
+            let n = o.n;
+            // The messages as Neuro's client sends them: its system prompt, its user template, its tools.
+            let system = inv_contract["system"][if lang == Lang::Ro { "ro" } else { "en" }].as_str().unwrap_or_else(|| die("inv_contract.json: no system prompt"));
+            let user = inv_contract["user_template"].as_str().unwrap_or_else(|| die("inv_contract.json: no user_template")).replacen("%s", ctx, 1).replacen("%s", q, 1);
+            // The tools go out as Neuro's text (`tools_json`): the template prints each tool's keys in the order
+            // sent, and a `serde_json::Value` would sort them.
+            let tools = inv_contract["tools_json"].as_str().unwrap_or_else(|| die("inv_contract.json: no tools_json"));
+            let _: Value = serde_json::from_str(tools).unwrap_or_else(|e| die(&format!("inv_contract.json: tools_json: {e}")));
+            let mut b = serde_json::to_vec(&json!({"messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})).expect("json");
+            b.pop();
+            b.extend_from_slice(b",\"tools\":");
+            b.extend_from_slice(tools.as_bytes());
+            b.push(b'}');
+            (String::from_utf8_lossy(&p[..n]).into_owned(), b)
+        } else {
+            (
+                format!("<|im_start|>system\n{sys_s}<|im_end|>\n<|im_start|>user\n{usr_s}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"),
+                serde_json::to_vec(&json!({"messages": [{"role": "system", "content": sys_s}, {"role": "user", "content": usr_s}]})).expect("json"),
+            )
+        };
 
         // 1. Template: llama-server's rendering of the same messages.
-        let tpl = srv.post("/apply-template", &json!({"messages": [{"role": "system", "content": sys_s}, {"role": "user", "content": usr_s}]}));
+        let tpl = srv.post_bytes("/apply-template", &tpl_body);
         let tpl_ok = tpl["prompt"].as_str() == Some(text.as_str());
         t.template_mismatch += usize::from(!tpl_ok);
 
@@ -409,10 +498,26 @@ fn main() {
         // schema's property order, and a `serde_json::Value` round trip would sort them alphabetically.
         let _: Value = serde_json::from_slice(&sch[..nsch]).unwrap_or_else(|e| die(&format!("{id}: schema JSON: {e}")));
         let mut body = serde_json::to_vec(&json!({"prompt": prompt, "n_predict": a.max_tokens, "temperature": 0.0, "top_k": 1, "n_probs": if a.cases.is_empty() { 2 } else { 10 }, "post_sampling_probs": false, "cache_prompt": false})).expect("json");
-        body.pop();
-        body.extend_from_slice(b",\"json_schema\":");
-        body.extend_from_slice(&sch[..nsch]);
-        body.push(b'}');
+        if is_inv {
+            // The grammar llama-server derives from the tools on /chat/completions, given to /completion as it is.
+            let g = &inv_gen["server_grammar"];
+            let mut v: Value = serde_json::from_slice(&body).expect("json");
+            v["n_predict"] = json!(inv::MAX_TOKENS);
+            for k in ["grammar", "grammar_lazy", "grammar_triggers"] {
+                v[k] = g[k].clone();
+            }
+            // /completion takes the preserved tokens as text; their ids must be the ones the server recorded.
+            if g["preserved_tokens"] != json!(preserved) {
+                die("inv_contract_gen.json: the preserved token ids differ from neuro_contract::inv::PRESERVED_TOKENS");
+            }
+            v["preserved_tokens"] = json!(inv::PRESERVED_TOKENS);
+            body = serde_json::to_vec(&v).expect("json");
+        } else {
+            body.pop();
+            body.extend_from_slice(b",\"json_schema\":");
+            body.extend_from_slice(&sch[..nsch]);
+            body.push(b'}');
+        }
         let resp = srv.post_bytes("/completion", &body);
         let steps = ref_steps(&resp);
 
@@ -421,7 +526,7 @@ fn main() {
         let mut kv = Kv { vals: &mut vals, shifts: &mut shifts };
         model.prefill(sd, &prompt, &mut kv, &mut w).unwrap_or_else(|e| die(&format!("{id}: prefill: {e:?}")));
         let mut col = (np - 1) % 8;
-        let mut m = Machine::new(Allowed { facts: &facts, entities: &ents, closed: true });
+        let mut m = if is_inv { Mach::Tool(ToolMachine::new()) } else { Mach::Triage(Machine::new(Allowed { facts: &facts, entities: &ents, closed: true })) };
         let (mut first_bug, mut case_bugs) = (None, 0usize);
         for (k, s) in steps.iter().enumerate() {
             let logits = w.logits_of(col, d.vocab);
@@ -446,7 +551,7 @@ fn main() {
                 case_bugs += 1;
                 first_bug.get_or_insert(k);
             }
-            let p = pick(&logits[..d.vocab.min(tok.vocab())], &m, &tok, &eog);
+            let p = m.pick(&logits[..d.vocab.min(tok.vocab())], &tok, &eog, &preserved);
             if p == Some(s.id) {
                 t.pick_agree += 1;
             } else if tie {
@@ -492,8 +597,15 @@ fn main() {
             let mut hist = vec![0u32; np + opts.max_new];
             let mut list = vec![0u32; opts.prune_max];
             let mut out = vec![0u32; opts.max_new];
-            let m = Machine::new(Allowed { facts: &facts, entities: &ents, closed: true });
-            let (n, _) = generate_closed(&model, sd, &tok, &prompt, &eog, m, &mut kv, &mut w, &mut hist, &mut list, opts, &mut out).unwrap_or_else(|e| die(&format!("{id}: generate: {e:?}")));
+            let n = if is_inv {
+                let mut o = vec![0u32; inv::MAX_TOKENS as usize];
+                let n = generate_tool(&model, sd, &tok, &prompt, &eog, &preserved, &mut kv, &mut w, inv::MAX_TOKENS as usize, &mut o).unwrap_or_else(|e| die(&format!("{id}: generate: {e:?}")));
+                out[..n].copy_from_slice(&o[..n]);
+                n
+            } else {
+                let m = Machine::new(Allowed { facts: &facts, entities: &ents, closed: true });
+                generate_closed(&model, sd, &tok, &prompt, &eog, m, &mut kv, &mut w, &mut hist, &mut list, opts, &mut out).unwrap_or_else(|e| die(&format!("{id}: generate: {e:?}"))).0
+            };
             let ref_ids: Vec<u32> = steps.iter().map(|s| s.id).collect();
             let div = out[..n].iter().zip(&ref_ids).position(|(x, y)| x != y).or((n != ref_ids.len()).then_some(n.min(ref_ids.len())));
             free = match div {
@@ -527,8 +639,11 @@ fn main() {
     let pct = |x: usize, n: usize| 100.0 * x as f64 / n.max(1) as f64;
     let mut rep = String::new();
     rep += "# Fidelity: heqk-native integer engine vs llama.cpp (same GGUF)\n\n";
-    rep += &format!("- model: `{}` (SHA-256 `{}`, matches SHA256SUMS)\n- set: {set_name} (`{}…`), {} cases checked, {} skipped (not triage or injection)\n", a.model, got, &set_sha[..8], t.cases, t.skipped);
-    rep += &format!("- engine: {} layout, {}; reference: llama-server at {} (greedy, closed schema, raw top-2)\n- near-tie threshold: llama.cpp top-2 log-prob gap < {}\n\n", if a.packed { "packed" } else { "GGUF" }, sd.name(), a.url, a.tie);
+    rep += &format!("- model: `{}` (SHA-256 `{}`, matches SHA256SUMS)\n- set: {set_name} (`{}…`), {} cases checked, {} skipped ({})\n", a.model, got, &set_sha[..8], t.cases, t.skipped, if is_inv { "not investigate" } else { "not triage or injection" });
+    if is_inv || a.guard_a {
+        rep += &format!("- context: shown after guard A ({} of {} contexts changed by it)\n", t.guarded, t.cases);
+    }
+    rep += &format!("- engine: {} layout, {}; reference: llama-server at {} (greedy, {}, raw top-2)\n- near-tie threshold: llama.cpp top-2 log-prob gap < {}\n\n", if a.packed { "packed" } else { "GGUF" }, sd.name(), a.url, if is_inv { "the server's lazy tool-call grammar" } else { "closed schema" }, a.tie);
     if a.shard.1 > 1 {
         rep += &format!("- shard: {} of {} (cases whose index among the checked task types is {} modulo {})\n\n", a.shard.0 + 1, a.shard.1, a.shard.0, a.shard.1);
     }
