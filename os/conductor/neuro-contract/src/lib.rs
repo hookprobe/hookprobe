@@ -25,6 +25,7 @@
 #![deny(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 pub mod attack_ids;
+pub mod cards;
 pub mod grounding;
 pub mod guard;
 pub mod inv;
