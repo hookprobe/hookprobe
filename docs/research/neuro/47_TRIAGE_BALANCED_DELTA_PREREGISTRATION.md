@@ -128,3 +128,19 @@ triage and ftMg for investigation. Doc 46's expectations are unchanged:
   case file); 0 of the 35 canaries found elsewhere; 0 violations of the marker, `svc=` and alert rules.
 - **Second annotator** (isolated, 60-case sample): verdict **60/60**, next step **60/60**. It flagged 12 cases as
   genuinely ambiguous; the agreement measure is lenient, as in docs 44–46.
+
+## 8. Result (2026-11-25, one look)
+
+**VERDICT: FAIL** (6 of 9). ftQg passed:
+- condition 1: alb 0.533, against ftFg's 0.333;
+- conditions 4–7: mention, canary-safe, hallucination and Romanian;
+- condition 9: ins called malicious 4, against ftFg's 12.
+
+It failed three:
+- condition 2: alb called malicious 4 (the cap is 3);
+- condition 3: alm 0.767 (ftFg 0.967);
+- condition 8: 1 malicious window called benign and 3 called insufficient (the caps are 0 and 2).
+
+ftFg stays. Balancing put ftQ halfway between ftFg and ftP on every axis. Its alb gain costs alm one for one. The
+E2E run 10 matched ftFg's run 7: the scan was called malicious, the SSH alert insufficient, and no quiet window
+malicious. Full tables: [`data/mixQ-results.md`](data/mixQ-results.md).
