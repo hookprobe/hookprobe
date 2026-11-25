@@ -151,11 +151,61 @@ had the higher logit on both sides. llama.cpp 054a1ba puts `space` after `{`, `[
 and after the final `}`. `neuro_contract::Machine` now places whitespace as that grammar does
 (`tests/contract.rs`).
 
-**After the fix:** the three cases were run again (`--case`, with `--free-run`): 0 disagreements beyond a
-near-tie, verdict FAITHFUL. **Not done:** the other 267 cases have not been run again with the fixed automaton.
-The fix only removes choices, and llama.cpp's tokens were accepted in the three cases, so no change is expected
-there, but it is not measured.
+**After the fix (2026-11-25):** all 270 cases were run again with the fixed automaton, same model, set, server
+and options. Verdict FAITHFUL on all four shards.
+
+| Check | First run | With the fixed automaton |
+|---|---|---|
+| Chat template and token ids equal llama-server's | 270 of 270 | 270 of 270 |
+| Raw top-1 agrees (teacher-forced, 40,428 steps) | 153 near-ties; 0 beyond | 153 near-ties; 0 beyond |
+| Constrained choice equals llama.cpp's token | 152 near-ties; 3 beyond | 152 near-ties; **0 beyond** |
+| Top-2 margin where top-1 agrees (nats) | mean abs err 0.061, max 0.539 | mean abs err 0.061, max 0.539 |
+| Free run equals llama.cpp's tokens | 156 equal, 114 at a near-tie, 0 otherwise | 156 equal, 114 at a near-tie, 0 otherwise |
 
 `--case ID` (repeatable) checks only those cases and prints every disagreeing step: the eight tokens before it,
 both choices, and llama.cpp's ten raw candidates with the engine's logit for each and whether the automaton
 allows it.
+
+## Result: ftM on inv-blind v1 and v2 (2026-11-25, Neuro Mac)
+
+Run: `ftM-q8_0.gguf` (SHA-256 `9576cfac…dcc9`), the two spent investigation sets, llama-server b12477 (054a1ba) on
+the CPU backend with `--jinja --reasoning off`, three shards per set with `--free-run`, near-tie threshold 0.5.
+The request is Neuro's (`inv_contract.json`): guard A on the context, the five tools, and the server's lazy
+tool-call grammar from `inv_contract_gen.json`. The engine decodes under `neuro_contract::inv::ToolMachine`.
+
+| Check | inv-blind v1 (`c49f06c9…`) | inv-blind v2 (`c61231c5…`) |
+|---|---|---|
+| Cases | 150 | 150 |
+| Contexts changed by guard A | 22 | 22 |
+| Chat template equals llama-server's | 150 of 150 | 150 of 150 |
+| Token ids equal llama-server's | 150 of 150 | 150 of 150 |
+| Raw top-1 agrees (teacher-forced) | 2,908 steps; 3 near-ties; 0 beyond | 3,032 steps; 0 near-ties; 0 beyond |
+| Constrained choice equals llama.cpp's token | 3 near-ties; 0 beyond | all equal |
+| Top-2 margin where top-1 agrees (nats) | mean abs err 0.053, max 0.497 | mean abs err 0.054, max 0.419 |
+| Free run equals llama.cpp's tokens | 147 equal, 3 at a near-tie, 0 otherwise | 150 equal |
+
+**Verdict: FAITHFUL on both sets.** This compares the two runtimes on the same request; it says nothing about
+whether the chosen tool is the right one (that is Neuro's doc 44).
+
+## Result: ftFg on dev v8 with guard A (2026-11-25, Neuro Mac)
+
+Run: as the ftFg run above, with `--guard-a`, so the context is shown after guard A, as Neuro's gates showed it.
+The run was cut at a fixed time. Two of the four shards wrote their reports; the cases of the other two were
+finished by those shards and by six extra processes given the remaining case ids (`--case`). Every one of the
+270 cases has a per-case row, and all processes that reported say FAITHFUL.
+
+| Check | Result |
+|---|---|
+| Cases | 270 checked, each once (duplicates between processes counted once) |
+| Chat template equals llama-server's | 270 of 270 |
+| Token ids equal llama-server's | 270 of 270 |
+| Teacher-forced: raw top-1 and constrained choice | 39,061 steps; **0 disagreements beyond a near-tie** in any case |
+| Free run equals llama.cpp's tokens | 154 equal, 116 diverge first at a near-tie, 0 diverge otherwise |
+| Near-ties and top-2 margin (166 cases with a full report) | 104 near-ties; mean abs err 0.056 to 0.064 per report, max 0.484 |
+
+**Not measured:** the near-tie count and the margin error for the 104 cases whose shard was stopped before it
+wrote its summary; their per-case rows (template, token ids, teacher-forced, free run) are complete. Guard A
+changed 95 of the 166 contexts in the full reports.
+
+**Verdict: FAITHFUL.** With the guarded prompts the two runtimes agree as they do without them.
+
