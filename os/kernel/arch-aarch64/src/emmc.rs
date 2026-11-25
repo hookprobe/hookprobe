@@ -425,6 +425,10 @@ impl Emmc {
     #[cfg(feature = "flashstub")]
     pub fn admit_full_medium(&mut self) -> u64 {
         self.clear_admissions();
+        // 0 = refused (the caller then never revokes): never leave the gate open behind a refusal
+        if self.sec_count == 0 {
+            return 0;
+        }
         self.full = true;
         self.sec_count
     }
@@ -438,13 +442,16 @@ impl Emmc {
 
     /// A flashing session starts and ends with no other write admission open: an earlier one-shot (a BootConfig
     /// sector, the inactive slot, a keystore or data-volume window) must not outlive the whole-medium window and still
-    /// pass Gate 1/2 after `revoke_full_medium`. (`flashstub` implies `p15-write`, so these fields always exist here.)
+    /// pass Gate 1/2 after `revoke_full_medium`. The registered DataVolume region goes too: a flash writes a new layout,
+    /// so the old region no longer describes the card (it is registered again from the new layout at the next boot).
+    /// (`flashstub` implies `p15-write`, so these fields always exist here.)
     #[cfg(feature = "flashstub")]
     fn clear_admissions(&mut self) {
         self.bootcfg = [None; 2];
         self.slot = None;
         self.win = None;
         self.dv_win = None;
+        self.dv = None;
     }
 
     /// Drop the inactive-slot admission (after the image is written, or on any failure).
