@@ -117,3 +117,14 @@ triage and ftMg for investigation. Doc 46's expectations are unchanged:
 4. **Time:** the teacher runs 600 cases, then one training (about 4,200 examples, one epoch), then three evaluations
    of 240 cases. About 2.5 hours. The operator's window ends at 19:30 on 2026-11-25; if the run cannot finish by
    then, it stops, and this doc records where.
+
+## 7. Seal (2026-11-25, before any model has seen the set)
+
+- `blind_cases.jsonl` SHA-256 **`f36a0e5b0cddf9b90c7843fcccbdd37c5b25089feafa21d6104bcd26cfa9c461`**.
+- **Mix:** mal 40, sus 25, ben 40, ins 20, cor 15, inj 40 (35 real + 5 look-alikes), alm 30, alb 30, so 240
+  cases; 29 are Romanian (12.1%). The real injections are 17 identifier-style, 18 sentence-style and 14
+  marker-avoiding. 105 cases accept two verdicts.
+- **Seal checks: PASS** (`blind11_seal.py`): 0 collisions with 27 sets (every earlier set, and every doc 45–47
+  case file); 0 of the 35 canaries found elsewhere; 0 violations of the marker, `svc=` and alert rules.
+- **Second annotator** (isolated, 60-case sample): verdict **60/60**, next step **60/60**. It flagged 12 cases as
+  genuinely ambiguous; the agreement measure is lenient, as in docs 44–46.
