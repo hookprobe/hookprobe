@@ -98,7 +98,8 @@ def build(out, pcaps, sample, seed):
                         "confidence": 70})
         cards, residual, _ = sc.rep_cards(ev2, {"pairs": set(pairs), "suffixes": set()})
         lines, used = sc.fill(cards, 512, tok, residual)
-        if len(lines) == len(cards):          # nothing dropped: still end with the REST line, as the device does
+        if len(lines) == len(cards) and not (lines and lines[-1].startswith("REST ")):   # nothing dropped: still end with
+            # the REST line, as the device does (without the second test, dropping exactly one card gave two REST lines)
             lines = lines + [residual([])]
             used = tok.count("\n".join(lines))
         if os.environ.get("NEURO_SVC_LABELS") == "1":   # doc 45: svc= labels (added after the budget fill: a few tokens over)
