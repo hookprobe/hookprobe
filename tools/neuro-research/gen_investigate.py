@@ -13,6 +13,7 @@ Per observable playbook, one card template (SIGN below) renders its "seen on the
             two results support it (doc 42 found v2 multi-step targets repeated step 1's tool)
   v5 (doc 49, --version 5): v4 plus v3's multi-step targets. v4 tested `version == 3` there, so its multi cases fell
             back to v2's (repeat a lookup; never a policy proposal).
+  v6 (doc 51, --version 6): v5 with varied RESULT wording (RESULT6); --kinds keeps only some case kinds.
   v4 (doc 44, --version 4): adds `alert` cases in the E2E L1-alert card shape (the card's shape decides the check:
             fan-out -> the device's flows; one remote -> its reputation), more decoy and invisible cases, and
             invisible gold = no tool only
@@ -93,6 +94,31 @@ RESULT = {  # (step-1 result that SUPPORTS going on, step-1 result that CLEARS)
     "query_dns": ("random-looking names, one resolved and was contacted", "names of a known content network, all resolved normally"),
     "lookup_exposure": ("class matches devices often attacked through this service", "class unknown; no exposure stated"),
 }
+# doc 51 (--version 6): varied wording, as real tool output would vary. Same meaning per (tool, supports/clears).
+RESULT6 = {
+    "lookup_reputation": (["listed on two threat feeds as malware infrastructure", "flagged as a botnet controller by 3 of 5 feeds",
+                           "reported for brute-force activity in the last 7 days", "known scanner; seen attacking other networks this week",
+                           "newly registered, hosted on infrastructure tied to earlier phishing", "matches an active command-and-control list"],
+                          ["the device maker's own cloud service, not on any feed", "a large content network, no reports",
+                           "clean on every feed; registered to the vendor", "a public time and update service, no reputation issues",
+                           "no listing anywhere; long-standing and widely used", "belongs to the owner's ISP, nothing reported"]),
+    "query_flows": (["the device began new outbound connections right after this", "the device opened connections to 40 new hosts in the next hour",
+                     "outbound traffic from the device tripled after this event", "the device now talks to peers it never contacted before",
+                     "new periodic connections started from the device minutes later", "the device started scanning other local devices"],
+                    ["no change in the device's own outbound behaviour", "the device's traffic stayed within its usual peers and volumes",
+                     "no new destinations or ports from the device since", "the flows stopped and the device returned to its normal pattern",
+                     "only the device's known update and cloud endpoints appear", "volume and peers match its baseline for this hour"]),
+    "query_dns": (["random-looking names, one resolved and was contacted", "dozens of failed lookups for algorithmic names, then one success",
+                   "lookups for a lookalike of a well-known brand, then a connection", "a burst of long subdomains of one domain, like data in names",
+                   "names registered days ago, resolved through an unusual resolver", "many short-lived names that each resolved once"],
+                  ["names of a known content network, all resolved normally", "only the vendor's own update and telemetry names",
+                   "ordinary lookups for popular services, nothing failed", "the same few names it resolves every day",
+                   "lookups for the owner's streaming and news services", "all names belong to the device maker"]),
+    "lookup_exposure": (["class matches devices often attacked through this service", "this device class is a frequent target of the observed port",
+                         "the model has known remote-access weaknesses on this service", "devices of this class are commonly recruited into botnets"],
+                        ["class unknown; no exposure stated", "no known exposure for this class on this service",
+                         "the class does not run the targeted service", "nothing on record for this device class"]),
+}
 
 
 def main():
@@ -100,9 +126,10 @@ def main():
     ap.add_argument("--playbooks", required=True); ap.add_argument("--n", type=int, default=600); ap.add_argument("--seed", type=int, default=39)
     ap.add_argument("--ro", type=float, default=0.10); ap.add_argument("--out", required=True); ap.add_argument("--id-prefix", default="inv")
     ap.add_argument("--v1", action="store_true", help="doc 41 version: no decoy kind (reproduces the P3 output)")
-    ap.add_argument("--version", type=int, choices=[2, 3, 4, 5], default=2,
+    ap.add_argument("--version", type=int, choices=[2, 3, 4, 5, 6], default=2,
                     help="2 = doc 42 (default, reproduces its output); 3 = doc 43: multi-step targets MOVE ON; "
-                         "5 = doc 49: v4's mix with v3's multi-step targets")
+                         "5 = doc 49: v4's mix with v3's multi-step targets; 6 = doc 51: v5 with varied RESULT wording")
+    ap.add_argument("--kinds", default="", help="doc 51: comma list; only these case kinds are written (others are drawn, then skipped)")
     a = ap.parse_args()
     pbs = [p for p in json.load(open(a.playbooks))["playbooks"]]
     obs = [p for p in pbs if p["observable"]]
@@ -112,6 +139,8 @@ def main():
     kinds = ["next"] * 4 + ["multi"] * 3 + ["clears"] * 2 + ["invisible"] + ([] if a.v1 else ["decoy"] * 2)
     if a.version >= 4:   # doc 44: the L1-alert card shape, and more decoy / invisible cases
         kinds = ["next"] * 4 + ["multi"] * 3 + ["clears"] * 2 + ["invisible"] * 2 + ["decoy"] * 3 + ["alert"] * 3
+    res_text = lambda tool, i: r.choice(RESULT6[tool][i]) if a.version == 6 else RESULT[tool][i]
+    keep = set(a.kinds.split(",")) if a.kinds else None
     while len(out) < a.n:
         kind = r.choice(kinds)
         ro = r.random() < a.ro
@@ -164,9 +193,9 @@ def main():
                 gold = {"kind": "next", "tools": [st["tool"]], "entities": ents, "technique": p["id"]}
             else:
                 st = steps[0]
-                res = RESULT[st["tool"]][0 if kind == "multi" else 1]
+                res = res_text(st["tool"], 0 if kind == "multi" else 1)
                 w.ctx_lines.append("RESULT %s %s: %s" % (st["tool"], tgt if st["tool"] != "lookup_exposure" else H.split("=")[0], res))
-                if kind == "multi" and a.version in (3, 5):   # doc 49: v4 had dropped this branch (== 3 only)
+                if kind == "multi" and a.version in (3, 5, 6):   # doc 49: v4 had dropped this branch (== 3 only)
                     # doc 43: after a supporting result the next check is a DIFFERENT tool; once two results support
                     # it, the case is conclusive and the step is a policy proposal (doc 42's multi-step template gap)
                     other = [x for x in steps[1:] if x["tool"] != st["tool"]]
@@ -175,7 +204,7 @@ def main():
                     else:
                         if other:
                             t2 = other[0]["tool"]
-                            w.ctx_lines.append("RESULT %s %s: %s" % (t2, tgt if t2 != "lookup_exposure" else H.split("=")[0], RESULT[t2][0]))
+                            w.ctx_lines.append("RESULT %s %s: %s" % (t2, tgt if t2 != "lookup_exposure" else H.split("=")[0], res_text(t2, 0)))
                         gold = {"kind": "multi", "tools": ["propose_policy_change"], "entities": [H.split("=")[0]],
                                 "policies": ["isolated", "internet_only"], "technique": p["id"]}
                 elif kind == "multi" and len(steps) > 1:
@@ -188,7 +217,7 @@ def main():
                     gold = {"kind": "clears", "tools": [None], "entities": [], "technique": p["id"]}
         ctx = w.render()
         h = hashlib.sha256(" ".join(ctx.split()).lower().encode()).hexdigest()
-        if h in seen:
+        if h in seen or (keep is not None and gold["kind"] not in keep):
             continue
         seen.add(h)
         out.append({"id": "%s-%05d" % (a.id_prefix, len(out)), "lang": "ro" if ro else "en", "task": "investigate", "context": ctx,
