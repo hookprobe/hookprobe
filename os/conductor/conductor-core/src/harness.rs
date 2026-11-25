@@ -9,6 +9,12 @@
 //!
 //! Flow per model call: place → OpenSession → SessionOpened → Sign → Signed → (StartLease, Send) →
 //! Frames… → FINAL → tool call (RunTool → ToolResult → next call) or answer (verify → Finished).
+//!
+//! An investigation job (a job granted any of Neuro's five tools) sends Neuro's request and gets free text
+//! (no check) or one tool call. A read tool is run by the device; its result joins the context as Neuro's
+//! `RESULT <tool> <alias>: <text>` line (`gen_investigate.py`) and the next call asks for the next check,
+//! until the model asks for none, the step budget is used, or a call is refused. A policy change is staged
+//! for the owner and never applied.
 
 use crate::buf::Buf;
 use crate::cap::{self, HpExec, SignRequest, SIGNED_LEN};
@@ -21,7 +27,8 @@ use neuro_contract::{context_ids, grounding, guard, write_system, IdList, Lang, 
 use crate::ledger::{Kind, Record};
 use crate::limits::*;
 use crate::place::{place_excluding, Env, PlaceRefusal};
-use crate::tools::{authorize, ToolCall, ToolRefusal};
+use crate::tools::{authorize, authorize_inv, ToolCall, ToolRefusal};
+use neuro_contract::inv;
 use crate::verify::{verify_grounded, Grounding, Verification};
 
 #[derive(Clone, Copy, Debug)]
@@ -79,6 +86,22 @@ pub enum Outcome {
     Refused(PlaceRefusal),
     /// Stopped by budget, time, cancellation or a host-side failure.
     Aborted(Abort),
+    /// An investigation turn ended as the protocol allows. This says what happened to the model's request,
+    /// never that the request was a good one.
+    Investigated(Investigation),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Investigation {
+    /// Free text: the model asked for no check.
+    NoCheck = 1,
+    /// The device ran the read tool the model asked for (see the `RunTool` action and the ledger).
+    Checked = 2,
+    /// The model asked for a policy change; it is staged for the owner (see the `Propose` action).
+    Proposed = 3,
+    /// The call was well formed but not permitted for this job (see the `ToolRefused` record).
+    Refused = 4,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,6 +118,8 @@ pub enum Action {
     /// Send [`Harness::tx`] (signed capability ‖ request frame) on the session.
     Send,
     RunTool(ToolCall),
+    /// Stage this call as a proposal for the owner (ADR 0053). The host must never apply it.
+    Propose(ToolCall),
     Ledger(Record),
     Finished(Outcome),
 }
@@ -121,6 +146,14 @@ impl Actions {
     }
     pub fn clear(&mut self) {
         *self = Self::default();
+    }
+    /// A list holding `items` (those beyond the capacity are dropped). For hosts and tests that encode actions.
+    pub fn of(items: &[Action]) -> Self {
+        let mut a = Self::new();
+        for i in items {
+            a.push(*i);
+        }
+        a
     }
     pub fn iter(&self) -> impl Iterator<Item = &Action> {
         self.items.iter().take(self.n).flatten()
@@ -188,10 +221,13 @@ pub struct Harness {
     call_started_ms: u64,
     first_chunk: bool,
     lease: bool,
-    /// 0 none, 1 evidence.get, 2 flows.count.
+    /// 0 none, 1 evidence.get, 2 flows.count, 3 an investigation tool.
     pending_kind: u8,
     pending_ev: u16,
     pending_hours: u8,
+    /// tool, entity, policy and minutes of a pending investigation call.
+    pending_inv: [u8; 3],
+    pending_minutes: u16,
     /// Tiers whose worker declined this job's SLO.
     declined: u8,
     quote_nonce: [u8; 16],
@@ -253,6 +289,8 @@ impl Harness {
             pending_kind: 0,
             pending_ev: 0,
             pending_hours: 0,
+            pending_inv: [0; 3],
+            pending_minutes: 0,
             declined: 0,
             quote_nonce: [0; 16],
             quote_sent_ms: 0,
@@ -299,6 +337,8 @@ impl Harness {
         self.first_chunk = false;
         self.lease = false;
         self.pending_kind = 0;
+        self.pending_inv = [0; 3];
+        self.pending_minutes = 0;
         self.declined = 0;
         self.quote_nonce = [0; 16];
         self.quote_sent_ms = 0;
@@ -314,6 +354,10 @@ impl Harness {
         match k {
             1 => Some(ToolCall::EvidenceGet { ev: self.pending_ev }),
             2 => Some(ToolCall::FlowCount { ev: self.pending_ev, hours: self.pending_hours }),
+            3 => {
+                let [tool, entity, policy] = self.pending_inv;
+                Some(ToolCall::Investigate { tool, entity, minutes: self.pending_minutes, policy })
+            }
             _ => None,
         }
     }
@@ -330,6 +374,11 @@ impl Harness {
     /// The decoded summary of the last answer, after guard G.
     pub fn summary(&self) -> &[u8] {
         self.summary.as_slice()
+    }
+    /// Alias `i` of the context the provider was shown: the `entity` of an investigation call. The kernel
+    /// wrote the cards, so it alone can map an alias back to a device.
+    pub fn entity(&self, i: u8) -> Option<&[u8]> {
+        self.ents.get(usize::from(i))
     }
     pub fn prompt(&self) -> &[u8] {
         self.prompt.as_slice()
@@ -369,6 +418,7 @@ impl Harness {
             Outcome::Rejected(v) => (Kind::Violation, v as u16),
             Outcome::Refused(r) => (Kind::Refused, r as u16),
             Outcome::Aborted(a) => (Kind::Aborted, a as u16),
+            Outcome::Investigated(i) => (Kind::Investigated, i as u16),
         };
         out.push(Action::Ledger(self.record(kind, code, [0; 32])));
         out.push(Action::Finished(o));
@@ -513,6 +563,34 @@ impl Harness {
     /// description of it, so text the network carried never reaches the provider. As in `run_eval.py`, the
     /// ids of the schema are those of the context the provider is shown.
     fn build_prompt(&mut self) -> Option<()> {
+        self.build_cards()?;
+        if self.job.is_investigation() {
+            return self.build_inv_prompt();
+        }
+        self.build_explainer_prompt()
+    }
+
+    /// Neuro's investigation request, byte for byte as llama-server renders it (`neuro_contract::inv`): the
+    /// system prompt with the five tools, the cards after guard A, the question. Nothing of Conductor's is
+    /// added, so the prompt is the one Neuro measured.
+    fn build_inv_prompt(&mut self) -> Option<()> {
+        // The transcript is free in an investigation job (results are kept as RESULT lines): scratch space
+        // for the shown context. Guard A covers the RESULT lines too, as `guard.redact_all` covers the whole
+        // context in `inv_eval.py`.
+        let shown = &mut self.transcript;
+        shown.clear();
+        guard::guard_a(self.cards.as_slice(), &mut BufSink(shown)).ok()?;
+        guard::guard_a(self.results_raw.as_slice(), &mut BufSink(shown)).ok()?;
+        self.facts = IdList::new();
+        self.ents = IdList::new();
+        context_ids(shown.as_slice(), &mut self.facts, &mut self.ents).ok()?;
+        self.prompt.clear();
+        inv::write_prompt(LANG, shown.as_slice(), self.job.intent.as_slice(), &mut BufSink(&mut self.prompt)).ok()?;
+        shown.clear();
+        Some(())
+    }
+
+    fn build_cards(&mut self) -> Option<()> {
         self.cards.clear();
         let mut line = [0u8; 8 + MAX_CARD];
         let mut first = true;
@@ -527,6 +605,10 @@ impl Harness {
             let n = card_line(e.id, e.card.as_slice(), &mut line)?;
             self.cards.push(line.get(..n)?)?;
         }
+        Some(())
+    }
+
+    fn build_explainer_prompt(&mut self) -> Option<()> {
         // The ids first: the schema in the system prompt lists them. `prompt` is the scratch space here.
         let p = &mut self.prompt;
         p.clear();
@@ -694,6 +776,9 @@ impl Harness {
         self.step = self.step.saturating_add(1);
         self.end_lease(out);
         out.push(Action::Ledger(self.record(Kind::ResultAccepted, 0, output_hash)));
+        if self.job.is_investigation() {
+            return self.inv_answer(output_hash, out);
+        }
         match json::parse(self.output.as_slice(), &self.facts, &self.ents, &mut self.summary) {
             Err(_e @ (JsonError::Syntax | JsonError::Schema | JsonError::Encoding | JsonError::TooLong | JsonError::Trailing)) => {
                 self.finish(out, Outcome::Rejected(Violation::Schema))
@@ -742,6 +827,8 @@ impl Harness {
                     (self.pending_kind, self.pending_ev, self.pending_hours) = match call {
                         ToolCall::EvidenceGet { ev } => (1, ev, 0),
                         ToolCall::FlowCount { ev, hours } => (2, ev, hours),
+                        // The explainer's parser never yields one; refuse rather than run it.
+                        ToolCall::Investigate { .. } => return self.refuse_tool(call, ToolRefusal::NotGranted, out),
                     };
                     out.push(Action::RunTool(call));
                     self.state = State::AwaitTool;
@@ -749,6 +836,71 @@ impl Harness {
                 Err(why) => self.refuse_tool(call, why, out),
             },
         }
+    }
+
+    /// The answer of an investigation turn. A malformed call ends the job as REJECTED, as a schema violation
+    /// does for the explainer; a well-formed call is authorized on its own, whatever the model was offered.
+    fn inv_answer(&mut self, output_hash: [u8; 32], out: &mut Actions) {
+        let call = match inv::parse_answer(self.output.as_slice(), &self.ents) {
+            Err(_) => return self.finish(out, Outcome::Rejected(Violation::Schema)),
+            Ok(inv::Answer::NoTool) => return self.finish(out, Outcome::Investigated(Investigation::NoCheck)),
+            Ok(inv::Answer::Call(c)) => c,
+        };
+        let typed = match authorize_inv(&call, &self.job, self.ents.len()) {
+            Ok(t) => t,
+            Err(why) => {
+                out.push(Action::Ledger(self.record(Kind::ToolRefused, why as u16, output_hash)));
+                return self.finish(out, Outcome::Investigated(Investigation::Refused));
+            }
+        };
+        if typed.is_proposal() {
+            out.push(Action::Ledger(self.record(Kind::Proposed, typed.bit().into(), output_hash)));
+            out.push(Action::Propose(typed));
+            return self.finish(out, Outcome::Investigated(Investigation::Proposed));
+        }
+        let ToolCall::Investigate { tool, entity, minutes, policy } = typed else {
+            return self.finish(out, Outcome::Aborted(Abort::HostProtocol));
+        };
+        self.pending_kind = 3;
+        self.pending_inv = [tool, entity, policy];
+        self.pending_minutes = minutes;
+        out.push(Action::RunTool(typed));
+        self.state = State::AwaitTool;
+    }
+
+    /// The device's result for an investigation tool: one line of inert, bounded text with a data class. A
+    /// newline would let a result forge a card or another result, so it is refused. The ledger gets the
+    /// result's hash, not its content. The result goes into the next call's context only if its class may
+    /// reach this provider and a step is left; otherwise the job ends with the check done.
+    fn inv_result(&mut self, call: ToolCall, class: u8, data: &[u8], out: &mut Actions) {
+        let (Some(class), Some(tier)) = (DataClass::from_u8(class), self.tier()) else {
+            return self.finish(out, Outcome::Aborted(Abort::HostProtocol));
+        };
+        if data.is_empty() || data.len() > MAX_TOOL_RESULT || !inert_text(data) || data.contains(&b'\n') {
+            return self.finish(out, Outcome::Aborted(Abort::ToolFailed));
+        }
+        out.push(Action::Ledger(self.record(Kind::ToolRun, call.bit().into(), sha256(&[data]))));
+        if !allowed(class, tier, &self.env.policy) || self.step >= self.job.budget.max_steps {
+            return self.finish(out, Outcome::Investigated(Investigation::Checked));
+        }
+        let ToolCall::Investigate { entity, .. } = call else { return self.finish(out, Outcome::Aborted(Abort::HostProtocol)) };
+        // "RESULT <tool> <alias>: <text>", after the cards. `results_raw` is the context's tail as the device
+        // wrote it; the provider sees it after guard A.
+        let mut alias: Buf<{ neuro_contract::ID_MAX }> = Buf::new();
+        let line = self.ents.get(usize::from(entity)).and_then(|a| alias.set(a)).and_then(|()| {
+            let r = &mut self.results_raw;
+            r.push(b"\nRESULT ")?;
+            r.push(call.name())?;
+            r.push(b" ")?;
+            r.push(alias.as_slice())?;
+            r.push(b": ")?;
+            r.push(data)
+        });
+        if line.is_none() {
+            return self.finish(out, Outcome::Aborted(Abort::PromptTooLarge));
+        }
+        self.prompt_classes |= class.bit();
+        self.begin_call(out);
     }
 
     fn refuse_tool(&mut self, call: ToolCall, why: ToolRefusal, out: &mut Actions) {
@@ -778,6 +930,9 @@ impl Harness {
 
     fn tool_result(&mut self, class: u8, data: &[u8], out: &mut Actions) {
         let Some(call) = self.take_pending() else { return self.finish(out, Outcome::Aborted(Abort::HostProtocol)) };
+        if matches!(call, ToolCall::Investigate { .. }) {
+            return self.inv_result(call, class, data, out);
+        }
         let Some(tier) = self.tier() else { return self.finish(out, Outcome::Aborted(Abort::HostProtocol)) };
         // Data flow: a result goes to the provider only if its class may go there.
         let class_ok = DataClass::from_u8(class).is_some_and(|c| allowed(c, tier, &self.env.policy));

@@ -353,6 +353,8 @@ pub struct Kernel {
     pub now: u64,
     /// Tool results by evidence id: (class, text). Missing = tool failure.
     pub tool_data: Vec<(u16, DataClass, String)>,
+    /// Results for investigation tools, handed out in order. None left = tool failure.
+    pub inv_results: std::collections::VecDeque<(u8, String)>,
     /// Stop answering after this many ticks without progress (simulated silence).
     pub max_ticks: usize,
     /// Cancel after this many Send actions (kill switch test); None = never.
@@ -378,6 +380,10 @@ pub struct Report {
     pub signed: Vec<Vec<u8>>,
     pub sends: usize,
     pub tool_calls: Vec<ToolCall>,
+    /// Calls staged for the owner (never applied).
+    pub proposals: Vec<ToolCall>,
+    /// The entity alias of each investigation call, as the host ABI would carry it.
+    pub aliases: Vec<String>,
     pub sessions_opened: Vec<Tier>,
     pub sessions_closed: Vec<Tier>,
 }
@@ -387,7 +393,7 @@ impl Kernel {
         let mut signer = Signer::new(DEVICE_SEED, SALT_KEY, public_key(&OWNER_SEED), policy, MemCounter::new());
         let (rec, sig) = owner_pairing(tier, public_key(&WORKER_SEED), u64::MAX, 1);
         signer.install_pairing(&rec, &sig).expect("owner-signed pairing");
-        Self { signer, rng: Rng(0x9e3779b97f4a7c15), now: 1_000, tool_data: vec![], max_ticks: 3, cancel_after_sends: None, corrupt_signature: false, frame_mutator: None, mutated: false, latency_ms: 0 }
+        Self { signer, rng: Rng(0x9e3779b97f4a7c15), now: 1_000, tool_data: vec![], inv_results: Default::default(), max_ticks: 3, cancel_after_sends: None, corrupt_signature: false, frame_mutator: None, mutated: false, latency_ms: 0 }
     }
 
     pub fn run<W: Remote>(&mut self, h: &mut Harness, job: &[u8], env: Env, worker: &mut W) -> Report {
@@ -491,11 +497,20 @@ impl Kernel {
                     }
                     Action::RunTool(call) => {
                         rep.tool_calls.push(call);
+                        if let ToolCall::Investigate { entity, .. } = call {
+                            rep.aliases.push(String::from_utf8_lossy(h.entity(entity).expect("the alias of the call")).into_owned());
+                            match self.inv_results.pop_front() {
+                                Some((c, t)) => queue.push_back(Owned::Tool(c, t)),
+                                None => queue.push_back(Owned::ToolFailed),
+                            }
+                            continue;
+                        }
                         match self.tool_data.iter().find(|(id, _, _)| *id == call.ev()) {
                             Some((_, c, t)) => queue.push_back(Owned::Tool(*c as u8, t.clone())),
                             None => queue.push_back(Owned::ToolFailed),
                         }
                     }
+                    Action::Propose(call) => rep.proposals.push(call),
                     Action::Ledger(r) => rep.ledger.push(r),
                     Action::Finished(o) => rep.outcome = Some(o),
                 }
