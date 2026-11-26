@@ -9,5 +9,5 @@ capability is granted, so a new piece of hardware should need only a profile her
 | [`waveshare-dual-eth/`](waveshare-dual-eth/) | Waveshare CM5-DUAL-ETH-MINI carrier: the bench board (GEM `end0` + RTL8111H `eth1`) |
 | QEMU `virt` (cortex-a72) | The virtual target. Used by `os/kernel/validate.sh` and `os/kernel/tools/mc-e2e.sh`. |
 | [`hookprobe-sbc/`](hookprobe-sbc/) | HookProbe's own RK3588 board (design in [`hardware/hookprobe-sbc/`](../hardware/hookprobe-sbc/)). **In design, not built.** Gated behind CM5 validation, ADR 0064. |
-| [`nanopi-m5/`](nanopi-m5/) | FriendlyElec NanoPi M5 (RK3576): **bench only**, arrives mid-December 2026; role proposed in ADR 0064 A1 (awaiting operator decision). |
+| [`nanopi-m5/`](nanopi-m5/) | FriendlyElec NanoPi M5 (RK3576): **bench only**, arrives mid-December 2026; role decided in ADR 0064 A1 (operator, 2026-11-26): early Rockchip bench, bench tools + probe only until H0. |
 | RK3588 · N100 · cloud | Planned on heqk (ADR 0047; RK3588 starts on an intermediate board, ADR 0064 D3). |

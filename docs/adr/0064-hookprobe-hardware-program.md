@@ -1,7 +1,8 @@
 # ADR 0064 — HookProbe hardware program: from CM5 to a HookProbe board (RK3588), after CM5 is validated
 
 **Status:** 🟡 **Proposed (2026-11-14)**; **D6 decided by the operator (2026-11-14): CERN-OHL-S-2.0 + commercial
-hardware licence; amended the same day: the design is published now, as work in progress.** The rest awaits operator review. Records the direction the operator set on 2026-11-14:
+hardware licence; amended the same day: the design is published now, as work in progress.** **A1 (NanoPi M5 RK3576
+bench, with the D1 amendment) decided by the operator 2026-11-26: accepted as recommended.** The rest awaits operator review. Records the direction the operator set on 2026-11-14:
 once HookProbe OS is validated on CM5, HookProbe moves to dedicated hardware of its own, through an intermediate
 board with the same processor. Clauses are tagged **[realized]**, **[partial]** or **[vision]** (the ADR
 0043/0044/0047 discipline).
@@ -44,6 +45,9 @@ metal), **ADR 0047** (heqk everywhere: RK3588 is in its D1 platform list, and it
 No hardware engineering spend (routing, fabrication, components) and no RK3588 driver work in `os/kernel` starts
 until gate **H0** below is green. Design research may continue. Hardware is a second product line built on a
 validated OS, not a way around CM5's open items.
+*Amended 2026-11-26 (operator, A1): the operator-purchased NanoPi M5 (RK3576) bench is allowed before H0 for **bench
+tooling, research and the `os/kernel/m5probe` bring-up probe only** (a bench payload outside the kernel crate, in no
+image). H1 HAL decoupling and every RK3576/RK3588 heqk driver still wait for H0.*
 
 ### D2 · Hardware design files live in `hardware/`, public, as work in progress **[realized]**
 *Amended 2026-11-14 (operator): "share it public, so we get feedback and show proof of work". Earlier the same
@@ -137,7 +141,7 @@ file format) runs nightly or on demand once KiCad is on a runner. Until then, `V
 record and is regenerated in the same change as any edit to the generator scripts. From H2 the board's heqk image
 runs under g2/g6 like any platform.
 
-### A1 · An RK3576 (NanoPi M5) Rockchip bench before H2 **[PROPOSED 2026-11-26 — awaiting operator decision; nothing below is decided]**
+### A1 · An RK3576 (NanoPi M5) Rockchip bench before H2 **[DECIDED: operator 2026-11-26 — "accept A1 as recommended"]**
 **Context.** The operator ordered a FriendlyElec NanoPi M5 (RK3576), arriving mid-December 2026, with a 512 GB NVMe.
 The research, hardware data pack, vendor-firmware findings and bench runbook are in
 `docs/design/heqk-nanopi-m5-*-2026-11-26.md`. RK3576 is a **sibling** of RK3588, not the same processor, so it does
@@ -173,7 +177,16 @@ unchanged). D1 should still say explicitly whether this class of work is allowed
 | **D-M5-3 · storage** | NVMe in the M-key slot as the DataVolume/retention tier; first stage in SPI-NOR; UFS module later | as stated. The BootROM cannot boot NVMe, and its SD boot is unreliable on RK3576 |
 | **D-M5-4 · sealing key** | (a) a SiP SMC in our upstream-TF-A build hands hboot a per-boot derived key (secure OTP is secure-world only) · (b) no sealing on the bench (unsealed builds) · (c) a discrete SPI TPM 2.0 on the 30-pin header, rehearsing our board's TPM path (D5) | **(b) now, (c) next**: (a) means maintaining a TF-A fork plus a security-auditor review for a bench board |
 
-**Consequences if accepted as recommended:** M5 bench milestones are named `M5-0…M5-n` and are **not** H-gates. No
+**Decision (operator, 2026-11-26): every recommendation above is accepted.**
+- **D-M5-1 = (a):** the M5 is an early Rockchip bench before H2. D3's RK3588 intermediate board remains required for H2.
+- **D1 scope = (i):** before H0, M5 work is limited to bench tooling, research and the `m5probe` bring-up probe. H1 (HAL
+  decoupling) and every RK3576/RK3588 heqk driver start after H0 (D1 amended below).
+- **D-M5-2 = (a):** no BE200; Wi-Fi on the M5 is an SDIO BCM43456-class module (Radxa A2) on the existing CYW stack.
+- **D-M5-3:** NVMe = DataVolume/retention tier; first stage in SPI-NOR; UFS module later.
+- **D-M5-4 = (b) now, (c) next:** unsealed bench builds; a discrete SPI TPM 2.0 on the 30-pin header is the next step.
+  No TF-A SiP key service.
+
+**Consequences:** M5 bench milestones are named `M5-0…M5-n` and are **not** H-gates. No
 product, marketing or performance claim comes from the M5 (D7). The QEMU rehearsal
 (`tools/diagnostics/m5-qemu-rehearsal.py`) joins the evidence for any change to the M5 boot path.
 
@@ -198,6 +211,6 @@ product, marketing or performance claim comes from the M5 (D7). The QEMU rehears
 2. Pick the intermediate RK3588 board (D3; ROCK 5B suggested).
 3. Name a hardware lead or design house for H3 (routing, SI/PI review).
 4. Confirm the exact QCN9274 module (Fortress board file suggests Compex WLE7002E25) or its successor.
-5. **Decide A1** (proposed 2026-11-26): the M5's role (D-M5-1), what D1 allows before H0, the radio (D-M5-2), the
-   storage (D-M5-3) and the sealing key (D-M5-4). The board arrives mid-December 2026; the day-one bench work in
-   `docs/design/heqk-nanopi-m5-bench-runbook-2026-11-26.md` needs only D-M5-1 (a) and D1 (i).
+5. ~~Decide A1~~ **Decided 2026-11-26 (operator): accepted as recommended** (D-M5-1 (a), D1 (i), D-M5-2 (a), D-M5-3,
+   D-M5-4 (b) then (c)). The board arrives mid-December 2026; day-one bench work follows
+   `docs/design/heqk-nanopi-m5-bench-runbook-2026-11-26.md`.

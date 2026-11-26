@@ -1,8 +1,9 @@
 # appliance/nanopi-m5 — FriendlyElec NanoPi M5 (RK3576), Rockchip bench board
 
-**Status: bench only. Ordered, arrives mid-December 2026. No heqk port yet.** Its role is proposed in
-[ADR 0064 A1](../../docs/adr/0064-hookprobe-hardware-program.md) (awaiting operator decision): an early Rockchip
-bench before H2. It does not replace ADR 0064 D3's RK3588 intermediate board, and it is never a product target.
+**Status: bench only. Ordered, arrives mid-December 2026. No heqk port yet.** Its role was decided in
+[ADR 0064 A1](../../docs/adr/0064-hookprobe-hardware-program.md) (operator, 2026-11-26): an early Rockchip bench
+before H2. It does not replace ADR 0064 D3's RK3588 intermediate board, and it is never a product target. **Until H0:**
+bench tooling, research and the `m5probe` bring-up probe only. The heqk port (H1 and the drivers) waits for H0.
 
 This page is only how HookProbe OS sees the board. Facts and procedures:
 
