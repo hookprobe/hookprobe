@@ -12,10 +12,10 @@
 | [`m5-spi-flash.sh`](m5-spi-flash.sh) | NanoPi M5 SPI-NOR loader write via maskrom + read-back verify (recovery path) |
 | [`m5-probe-build.sh`](m5-probe-build.sh) | Builds the NanoPi M5 bring-up probe (`os/kernel/m5probe`): 31 KiB PIE booti payload that reports EL/FDT/PSCI and tests reset, off, maskrom, watchdog, LED |
 | [`m5-qemu-rehearsal.py`](m5-qemu-rehearsal.py) | Rehearses the M5 netboot chain on the host: same pinned U-Boot (qemu_arm64) + same boot command + same boot.cmd + probe over TFTP, 6 checks |
-| [`m5-netboot/`](m5-netboot/) | dnsmasq + udev examples and the U-Boot `boot.cmd` for the M5 netboot loop |
+| [`m5-netboot/`](m5-netboot/) | dnsmasq + udev examples, the baked-in boot command and the U-Boot `boot.cmd` for the M5 netboot loop |
+| [`os/kernel/tools/gate-r-run.py`](../../os/kernel/tools/gate-r-run.py) | Separation-matrix (Gate R) run |
 
 NanoPi M5 runbook: `docs/design/heqk-nanopi-m5-bench-runbook-2026-11-26.md`.
-| [`os/kernel/tools/gate-r-run.py`](../../os/kernel/tools/gate-r-run.py) | Separation-matrix (Gate R) run |
 
 Serial console: FTDI at 115200. The CM5 prints its boot timing, device identity (`[NETCP] pk=`)
 and Mission Control address on it.
