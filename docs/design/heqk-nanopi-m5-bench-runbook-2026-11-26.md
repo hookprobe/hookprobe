@@ -130,6 +130,15 @@ Keep `m5-console.sh` running the whole time.
 
 Keep the stock microSD: with the switch on UFS/SD it always brings back a known-good Linux.
 
+**Getting the stock SD card.** FriendlyElec's HTTP mirror carries only partition-image sets (`*-images-*.tgz`). The
+verified Debian trixie core and FriendlyWrt sets are already on the bench host in `~/heqk-m5-bench/vendor/`. To make a
+bootable card, either:
+- download `rk3576-sd-debian-trixie-core-6.1-arm64-20260721.img.gz` from FriendlyElec's Google Drive
+  ("01_Official images / 01_SD card images", linked from dl.friendlyelec.com/nanopim5) **in a browser** (scripted
+  downloads hit Drive's quota), check it against `sha256sum.txt` in the same folder, then
+  `zcat … | sudo dd of=/dev/sdX bs=4M conv=fsync`; or
+- build the card from the partition set with FriendlyElec's `sd-fuse_rk3576` tool (`mk-sd-image.sh debian-trixie-core-arm64`).
+
 ## 6. Flashing paths (SPI-NOR first stage)
 
 | Path | When | How |
