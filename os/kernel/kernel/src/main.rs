@@ -15,6 +15,10 @@
 // credentials into the image and never ships (ADR 0045).
 #[cfg(all(feature = "prod", any(feature = "apmode", feature = "stajoin")))]
 compile_error!("`apmode`/`stajoin` cannot be combined with `prod`: `prod` is the GEM sensor loop, the AP product is `apmc` + `appersist`");
+// ADR 0060 amendment W2: on CM5 HBoot starts secondary cores at EL2 with stage-2 first (S0b); the kernel must never
+// start them itself there, or the SEC-2 carve-out would be missing on those cores.
+#[cfg(all(feature = "smpboot", feature = "cm5"))]
+compile_error!("`smpboot` (kernel-started cores over PSCI HVC) cannot be combined with `cm5`: HBoot starts CM5 cores (ADR 0060 S0b)");
 #[allow(dead_code)]
 const fn wpa_psk_ok(p: Option<&str>) -> bool {
     match p {
@@ -7556,6 +7560,11 @@ pub extern "C" fn kmain() -> ! {
         arch_aarch64::semihosting::exit(1);
     }
     kprint!(" [P1b] PASS mmu+frames (with free list)\n");
+
+    // --- ADR 0060 amendment S0a: secondary cores as parked worker cores (QEMU -smp) ---
+    // Runs here, on the kernel's own translation table and before any EL0 task swaps TTBR0.
+    #[cfg(feature = "smpboot")]
+    p_smp_boot();
 
     // --- P2: capability system (untyped -> retype -> CDT -> recursive revoke) ---
     if !p2_caps_test() {
@@ -17263,5 +17272,67 @@ fn pppoe_selftest() {
         let ok = open && redial && gave_up && padt && auth && budget;
         kprint!(" [P-cfgd-pppoe] {} — live-apply follow-up, the PPPoE dial as a bounded state machine stepped by the AP loop (PADI -> PADO -> PADR -> PADS -> LCP -> auth -> IPCP, every step returns at once): a responsive AC opens on the first attempt={} a stage past its budget re-dials with a fresh discovery and opens={} a silent AC: {} attempts then the dial gives up (NoPado), bounded={} a half-open session is PADT'd before the re-dial (LCP never answers)={} Q5: a rejected password ends the dial at once, no re-dial={} the overall budget bounds the dial={}\n",
             if ok { "PASS" } else { "FAIL" }, open, redial, DIAL_ATTEMPTS, gave_up, padt, auth, budget);
+    }
+}
+
+/// ADR 0060 amendment S0a gate `[P-smp-boot]`: core 0 starts every other core over PSCI CPU_ON
+/// (HVC). Each worker comes up at EL1 on the kernel's stage-1 tables, answers a per-core
+/// challenge from Rust and parks; core 1 then executes `brk` and must be contained by the
+/// worker vectors (status FAULT, ESR EC 0x3c) while core 0 carries on. Workers run no kernel
+/// code, so the single-core contract (ARCHITECTURE.md) still holds for the kernel.
+#[cfg(feature = "smpboot")]
+fn p_smp_boot() {
+    use arch_aarch64::smp::{self, StartResult, ST_ALIVE, ST_FAULT};
+    let mut alive = 0u32;
+    let mut contained = false;
+    let mut ok = true;
+    for idx in 1..smp::MAX_CORES {
+        let mpidr = idx as u64; // QEMU virt: Aff0 = cpu index (<= 8 cores per cluster)
+        let challenge = 0x5EED_0000_0000_0000 | (idx as u64) << 16 | 0x1234;
+        let fault_test = idx == 1;
+        let r = unsafe { smp::start_core(idx, mpidr, challenge, fault_test) };
+        match r {
+            StartResult::Refused(-2) => break, // INVALID_PARAMETERS: no such core, discovery done
+            StartResult::Refused(rc) => {
+                kprint!(" smp: core {} CPU_ON refused rc={}\n", idx, rc);
+                ok = false;
+                break;
+            }
+            StartResult::Timeout => {
+                kprint!(" smp: core {} started but never reported\n", idx);
+                ok = false;
+            }
+            StartResult::Up => {
+                let b = smp::block(idx);
+                let st = b.status.load(core::sync::atomic::Ordering::Acquire);
+                let m = b.mpidr.load(core::sync::atomic::Ordering::Relaxed);
+                let resp_ok = b.response.load(core::sync::atomic::Ordering::Relaxed) == smp::expected_response(challenge, m);
+                let el = b.el.load(core::sync::atomic::Ordering::Relaxed);
+                if !resp_ok || el != 1 || m != mpidr {
+                    kprint!(" smp: core {} bad report (mpidr {:#x} el {} response_ok {})\n", idx, m, el, resp_ok);
+                    ok = false;
+                } else if fault_test {
+                    let esr = b.esr.load(core::sync::atomic::Ordering::Relaxed);
+                    if st == ST_FAULT && (esr >> 26) == 0x3c && (esr & 0xffff) == 0x5a {
+                        contained = true;
+                        kprint!(" smp: core {} brk contained on the worker (ESR {:#x}), parked\n", idx, esr);
+                    } else {
+                        kprint!(" smp: core {} fault NOT contained (status {} ESR {:#x})\n", idx, st, esr);
+                        ok = false;
+                    }
+                } else if st == ST_ALIVE {
+                    alive += 1;
+                } else {
+                    ok = false;
+                }
+            }
+        }
+    }
+    let cores = 1 + alive + contained as u32;
+    if ok && contained && alive >= 1 {
+        kprint!(" [P-smp-boot] PASS cores={} (core 0 kernel + {} parked workers at EL1 on shared stage-1, challenge answered; 1 worker fault contained)\n", cores, alive);
+    } else {
+        kprint!(" [P-smp-boot] FAIL cores={} alive={} contained={} (needs QEMU -smp >= 3)\n", cores, alive, contained);
+        arch_aarch64::semihosting::exit(1);
     }
 }
