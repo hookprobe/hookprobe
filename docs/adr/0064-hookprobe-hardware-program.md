@@ -137,6 +137,46 @@ file format) runs nightly or on demand once KiCad is on a runner. Until then, `V
 record and is regenerated in the same change as any edit to the generator scripts. From H2 the board's heqk image
 runs under g2/g6 like any platform.
 
+### A1 · An RK3576 (NanoPi M5) Rockchip bench before H2 **[PROPOSED 2026-11-26 — awaiting operator decision; nothing below is decided]**
+**Context.** The operator ordered a FriendlyElec NanoPi M5 (RK3576), arriving mid-December 2026, with a 512 GB NVMe.
+The research, hardware data pack, vendor-firmware findings and bench runbook are in
+`docs/design/heqk-nanopi-m5-*-2026-11-26.md`. RK3576 is a **sibling** of RK3588, not the same processor, so it does
+not satisfy D3 as written. **What carries over to RK3588:**
+- the BootROM/idbloader → TF-A → U-Boot chain and its blobs policy
+- DWC PCIe
+- DW-APB UART
+- Rockchip GPIO v2, CRU/GRF and OTP
+- the RK806 PMIC
+- DW-MSHC SD/SDIO
+
+**What does not:**
+- GIC-400 (GICv2) vs GIC-600 (GICv3)
+- PCIe Gen2 vs Gen3
+- **no SMMU** on RK3576 *(RK3588's PCIe MMU-600: verify)*
+- 2× 1 GbE SoC GMACs vs our board's RTL8125
+- A72/A53 vs A76/A55
+
+**Already done, and the D1 question it raises.** These items exist ahead of H0:
+- the purchase itself, an operator Red step
+- bench tooling (`tools/diagnostics/m5-*`, `tools/build/m5-firmware-build.sh`)
+- the bring-up probe `os/kernel/m5probe`. It is a bench payload, not a heqk driver, not linked into any image, and its
+  only shared code is the existing `boot-abi` FDT reader
+
+None of these touches the kernel crate or CM5 behaviour (validate.sh build stage, clippy ratchet and release check
+unchanged). D1 should still say explicitly whether this class of work is allowed before H0.
+
+| Decision | Options | Recommendation |
+|---|---|---|
+| **D-M5-1 · role of the M5** | (a) **early Rockchip bench, before H2**: it does **not** replace D3's RK3588 intermediate board, and H2 still needs RK3588 · (b) replace the RK3588 intermediate board · (c) shelve until H0 | **(a)**: it de-risks the shared Rockchip IP and the boot chain cheaply, while (b) would validate a different SoC than our board's |
+| **D1 scope before H0** | (i) bench tooling + research + the probe only; heqk port work (H1 HAL decoupling and every RK3576/RK3588 driver) after H0 · (ii) also start H1 now, on a branch, CM5/QEMU green as its exit criterion · (iii) full M5 port now | **(i)**: CM5 validation stays the priority (D1's reason); H1 touches ~939 kernel call sites and would compete with REL-05..08 for review |
+| **D-M5-2 · radio** | (a) no BE200 · (b) BE200 in the M-key slot | **(a)**. The E-key slot is SDIO + UART only (PCIe/USB pins NC, schematic rev 2411). Intel firmware limits AP mode to 2.4 GHz. With no SMMU, a PCIe radio would be an unconfined DMA master (remediation doctrine X5). Use an SDIO BCM43456 module (Radxa A2) on the existing CYW stack; QCN9274 stays our board's AP radio (D4) |
+| **D-M5-3 · storage** | NVMe in the M-key slot as the DataVolume/retention tier; first stage in SPI-NOR; UFS module later | as stated. The BootROM cannot boot NVMe, and its SD boot is unreliable on RK3576 |
+| **D-M5-4 · sealing key** | (a) a SiP SMC in our upstream-TF-A build hands hboot a per-boot derived key (secure OTP is secure-world only) · (b) no sealing on the bench (unsealed builds) · (c) a discrete SPI TPM 2.0 on the 30-pin header, rehearsing our board's TPM path (D5) | **(b) now, (c) next**: (a) means maintaining a TF-A fork plus a security-auditor review for a bench board |
+
+**Consequences if accepted as recommended:** M5 bench milestones are named `M5-0…M5-n` and are **not** H-gates. No
+product, marketing or performance claim comes from the M5 (D7). The QEMU rehearsal
+(`tools/diagnostics/m5-qemu-rehearsal.py`) joins the evidence for any change to the M5 boot path.
+
 ## Consequences
 
 - RK3588 in ADR 0047 D1 gains a concrete target and an intermediate validation board.
@@ -158,3 +198,6 @@ runs under g2/g6 like any platform.
 2. Pick the intermediate RK3588 board (D3; ROCK 5B suggested).
 3. Name a hardware lead or design house for H3 (routing, SI/PI review).
 4. Confirm the exact QCN9274 module (Fortress board file suggests Compex WLE7002E25) or its successor.
+5. **Decide A1** (proposed 2026-11-26): the M5's role (D-M5-1), what D1 allows before H0, the radio (D-M5-2), the
+   storage (D-M5-3) and the sealing key (D-M5-4). The board arrives mid-December 2026; the day-one bench work in
+   `docs/design/heqk-nanopi-m5-bench-runbook-2026-11-26.md` needs only D-M5-1 (a) and D1 (i).
