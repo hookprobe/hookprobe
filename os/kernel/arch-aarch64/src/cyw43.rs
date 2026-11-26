@@ -1341,6 +1341,13 @@ pub fn dfs_cac_state() -> Option<u32> {
 /// 802.11h spectrum management as the firmware has it (`WLC_GET_SPECT_MANAGMENT`, 245; 0 off, 1 loose 11h, 2 strict 11h, 3
 /// strict + 11d). heqk never sets it (no `WLC_SET_SPECT_MANAGMENT` / `spect` iovar), so this is the firmware default —
 /// read for the Infineon case (2026-11-23: "keep spect 1 for a DFS AP"). Read-only GET. None = no answer.
+static mut RADAR_ON: bool = false;
+/// The firmware confirmed radar detection (WLC_GET_RADAR == 1 after the AP start set it). The DFS channel choice
+/// must not use a DFS channel without it (Infineon 2026-11-25: radar = 0 runs a CAC but detects nothing).
+pub fn radar_on() -> bool {
+    unsafe { RADAR_ON }
+}
+
 pub fn spect_mode() -> Option<u32> {
     // 245 (wlioctl_defs.h: SET 244 / GET 245). 107 is WLC_GET_MONITOR — #1554 read that by mistake.
     const WLC_GET_SPECT_MANAGMENT: u32 = 245;
@@ -3505,6 +3512,23 @@ fn ap_start_inner(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mu
 
     // Configure while DOWN.
     out.down_ok = wlc_set_int(WLC_DOWN, 0);
+    // 802.11h + radar detection (Infineon IFX-261111-2369681, Kevin 2026-11-25): "you must explicitly set radar 1 for
+    // a DFS AP ... you can set spect = 1 and radar = 1 always". The firmware runs a CAC with radar = 0 but does NOT
+    // detect radar then. Set both on every AP start (5 GHz or not — harmless on 2.4 GHz per Infineon) and read back;
+    // `radar_on()` is the fail-safe the DFS channel choice checks before it may use a DFS channel.
+    // wlioctl: SET_SPECT_MANAGMENT 244 / GET 245, SET_RADAR 243 / GET 242 (never 107/108 = MONITOR, 37/38 = RADIO).
+    {
+        const WLC_GET_RADAR: u32 = 242;
+        const WLC_SET_RADAR: u32 = 243;
+        const WLC_SET_SPECT_MANAGMENT: u32 = 244;
+        let sp_ok = wlc_set_int(WLC_SET_SPECT_MANAGMENT, 1);
+        let rd_ok = wlc_set_int(WLC_SET_RADAR, 1);
+        let mut o = [0u8; 4];
+        let rd = if bcdc_dcmd(WLC_GET_RADAR, 0, &[0u8; 4], &mut o).0 { u32::from_le_bytes(o) } else { u32::MAX };
+        unsafe { RADAR_ON = rd == 1 };
+        crate::_print(format_args!(" [P11-AP] 802.11h spect=1 set ok={} read back {:?}; radar=1 set ok={} read back {} — radar detection {}\n",
+            sp_ok, spect_mode(), rd_ok, if rd == u32::MAX { -1 } else { rd as i64 }, if rd == 1 { "ON" } else { "NOT confirmed: no DFS channel will be used" }));
+    }
     #[cfg(feature = "guestprobe")]
     {
         let mut mb = [0u8; 4];

@@ -3746,7 +3746,7 @@ fn cm5_p10_probe() {
                             let group_keys_later = cfg!(all(feature = "apmc", feature = "wpa3"));
                             if ap.serve_ready() && (ap.gtk_set || group_keys_later) {
                                 chosen_cs = ap_cs;
-                                // 802.11h spectrum management in force (never set by heqk: the firmware default) — Infineon case
+                                // 802.11h spectrum management + radar detection, both set at every AP start (Infineon 2026-11-25)
                                 kprint!("   [P11-AP] spect (802.11h) = {:?} on chanspec {:#06x} (dfs={})\n", cyw43::spect_mode(), ap_cs, hal::chanspec_is_dfs(ap_cs));
                                 if hal::chanspec_is_dfs(ap_cs) {
                                     dfs_watch = Some(hal::DfsWatch::new());
@@ -4675,7 +4675,13 @@ fn cm5_p10_probe() {
                                 dfs_last_s = now() / freq;
                                 let st = cyw43::dfs_cac_state();
                                 let on = cyw43::current_chanspec().map(|c| c == chosen_cs);
-                                let act = dfs_watch.as_mut().map_or(hal::DfsAct::Wait, |w| w.step(dfs_last_s, st, on));
+                                // Infineon 2026-11-25: without radar = 1 the firmware runs the CAC but detects no radar — never
+                                // stay on a DFS channel unless the AP start confirmed radar detection (cyw43::radar_on).
+                                let act = if !cyw43::radar_on() {
+                                    hal::DfsAct::Fallback("radar detection not confirmed by the firmware (WLC_GET_RADAR != 1)")
+                                } else {
+                                    dfs_watch.as_mut().map_or(hal::DfsAct::Wait, |w| w.step(dfs_last_s, st, on))
+                                };
                                 match act {
                                     hal::DfsAct::InService => kprint!("   [P11-DFS] CAC done — AP in service on DFS chanspec {:#06x} (dfs_status {:?})\n", chosen_cs, st),
                                     hal::DfsAct::Fallback(why) => {

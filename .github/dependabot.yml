@@ -10,6 +10,11 @@ updates:
     labels: ["dependencies", "github-actions"]
     commit-message: { prefix: "chore(deps)", include: "scope" }
     open-pull-requests-limit: 5
+    # One PR for all action bumps. github/codeql-action's init / analyze / upload-sarif must move together: bumped in
+    # three PRs (2026-11-24) they mixed versions whenever one merged without the others, and codeql.yml went red.
+    groups:
+      github-actions:
+        patterns: ["*"]
 
   - package-ecosystem: "cargo"
     directories:
