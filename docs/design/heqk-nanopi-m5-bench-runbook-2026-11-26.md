@@ -165,10 +165,47 @@ m5-metal-loop.sh --image heqk-m5.img --log <that log>
    4. waits for --expect markers / --fail markers → PASS/FAIL report next to the log
 ```
 
-**M5-0 contract** (first heqk milestone, default markers): `== booti` (U-Boot handed off), then heqk prints a banner
-containing `heqk` and its entry `EL2`, takes RAM from the FDT `/memory` node, and toggles the SYS LED. Prerequisites in
-heqk (data pack §9): a board-profile build (`rk3576` feature), a DW-APB console, link/load addresses above 0x4020_0000,
-and an Image header whose `image_size` covers the payload.
+The firmware's baked-in boot command (`tools/diagnostics/m5-netboot/bootcommand.txt`, set by `m5-firmware-build.sh`;
+the M5 U-Boot has **no saved environment**) does DHCP → TFTP `heqk-m5/boot.scr.uimg` → `source`, and falls back to
+`bootflow scan -lb` when no bench server answers.
+
+### 7a. Day-one payload: the bring-up probe (`os/kernel/m5probe`)
+
+A 31 KiB position-independent `booti` payload: a bench tool, never part of heqk or a product image. It reuses the ONE
+`boot-abi` FDT reader and reports, with `[m5probe]` lines:
+- the exception level, MPIDR/MIDR (A53/A72), CNTFRQ and its own load address
+- the FDT model, `/memory` (as U-Boot fixed it up), `/reserved-memory`, CPUs, and the PSCI conduit
+- PSCI_VERSION, called for real
+- the RK3576 reboot-mode register left by the previous boot
+- `RESULT: PASS|FAIL`
+
+It then waits for single keys on the console, which are day-one checks 6–8 without Linux:
+
+| Key | Test |
+|---|---|
+| `r` | PSCI SYSTEM_RESET |
+| `o` | PSCI SYSTEM_OFF (then test the RTC/relay power-on) |
+| `m` | reboot-to-maskrom: `0xEF08A53C` → `0x2602_4040`, then reset → expect USB `2207:350e` |
+| `w` | DW-WDT armed ~2.8 s and not kicked → must reset; it reports whether the counter even runs (tclk) |
+| `l` | SYS LED (GPIO2_B3), which also heartbeats at 1 Hz while idle |
+
+Build: `tools/diagnostics/m5-probe-build.sh` (→ `~/heqk-m5-bench/probe/m5probe.img`). Run on metal:
+`m5-metal-loop.sh --image ~/heqk-m5-bench/probe/m5probe.img --log …`; its default markers are the probe's contract.
+Type keys with `printf w > /dev/hq-m5-console`.
+
+**Rehearsed on the host (2026-11-26, PASS):** `tools/diagnostics/m5-qemu-rehearsal.py` builds the same pinned U-Boot for
+`qemu_arm64` with the **same** boot command, serves the **same** `boot.cmd` and the probe over QEMU user-net TFTP, and
+checks six things: DHCP, script fetched + sourced, DTB override, probe at EL2, `RESULT: PASS`, and PSCI reset. It caught a
+real `boot.cmd` bug before metal: an unset `fdt_addr_r` produced an empty `booti` FDT argument. Re-run it after any change
+to `boot.cmd`, `bootcommand.txt` or the probe.
+
+### 7b. M5-0 contract (first heqk milestone)
+
+`== booti` (U-Boot handed off), then heqk prints a banner containing `heqk` and its entry `EL2`, takes RAM from the FDT
+`/memory` node, and toggles the SYS LED. Pass these as `--expect` to `m5-metal-loop.sh`. Prerequisites in heqk (data
+pack §9): a board-profile build (`rk3576` feature), a DW-APB console, position independence or link/load addresses
+above 0x4020_0000 (m5probe's self-relocating entry is the worked example), and an Image header whose `image_size` covers
+the payload.
 
 ## 8. Reboot control: who can reset what
 

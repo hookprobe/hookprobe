@@ -93,6 +93,10 @@ rm -rf u-boot && mkdir u-boot && tar -xzf "dl/u-boot-$UBOOT_TAG.tar.gz" -C u-boo
 make -C u-boot CROSS_COMPILE="$CROSS" nanopi-m5-rk3576_defconfig >u-boot.log 2>&1
 # not needed on the bench and they pull gnutls/uuid dev headers
 u-boot/scripts/config --file u-boot/.config -d TOOLS_MKEFICAPSULE -d TOOLS_MKFWUMDATA
+# The M5 U-Boot has no saved environment (ENV_IS_NOWHERE), so the bench netboot is baked in:
+# DHCP -> TFTP heqk-m5/boot.scr.uimg -> source; falls back to the stock `bootflow scan -lb`.
+BOOTCMD="$(tr -d '\n' < "$HERE/../diagnostics/m5-netboot/bootcommand.txt")"
+u-boot/scripts/config --file u-boot/.config -e USE_BOOTCOMMAND -d BOOTSTD_BOOTCOMMAND --set-str BOOTCOMMAND "$BOOTCMD"
 make -C u-boot CROSS_COMPILE="$CROSS" olddefconfig >>u-boot.log 2>&1
 make -C u-boot CROSS_COMPILE="$CROSS" BL31="$BL31" ROCKCHIP_TPL="$WORK/dl/$DDR_BLOB" -j"$(nproc)" >>u-boot.log 2>&1 \
   || { tail -40 u-boot.log; exit 1; }

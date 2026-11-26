@@ -1,0 +1,17 @@
+[package]
+name = "m5probe"
+version = "0.0.26"
+license = "AGPL-3.0-only"
+edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0063 G4)
+description = "NanoPi M5 (RK3576) bench bring-up probe: booti payload that reports the boot hand-off and exercises the recovery paths. Bench tool, never in a product image."
+
+[dependencies]
+# The ONE bounded FDT reader (HBoot's platform discovery): /memory, /reserved-memory, /cpus, /psci.
+boot-abi = { path = "../boot-abi" }
+
+[[bin]]
+name = "m5probe"
+path = "src/main.rs"
+test = false
+bench = false

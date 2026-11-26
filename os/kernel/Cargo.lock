@@ -435,6 +435,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7743783ea728ef5c31194c6590797eed286449b4a4e87d626d8a51f0a94e732"
 
 [[package]]
+name = "m5probe"
+version = "0.0.26"
+dependencies = [
+ "boot-abi",
+]
+
+[[package]]
 name = "managed"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
