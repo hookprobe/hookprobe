@@ -1,0 +1,21 @@
+# dnsmasq for the NanoPi M5 bench netboot: DHCP + TFTP on ONE dedicated bench interface only.
+# Copy to ~/heqk-m5-bench/dnsmasq-m5.conf, fill the three <...> values, and run it
+# (DHCP 67 and TFTP 69 are privileged ports, so run it with sudo):
+#   sudo dnsmasq --conf-file=$HOME/heqk-m5-bench/dnsmasq-m5.conf --no-daemon
+# Never point this at a production LAN: it answers only the M5's GMAC0 MAC (dhcp-ignore below).
+
+port=0                                  # no DNS
+interface=<BENCH_IFACE>                 # host NIC cabled to the M5's GMAC0 (WAN port)
+bind-interfaces
+except-interface=lo
+
+dhcp-range=172.31.250.100,172.31.250.150,255.255.255.0,10m
+dhcp-host=<M5_GMAC0_MAC>,m5-bench,172.31.250.10
+dhcp-ignore=tag:!known                  # serve the M5 and nobody else
+dhcp-option=option:router               # no default route handed out
+dhcp-boot=heqk-m5/boot.scr.uimg
+
+enable-tftp
+tftp-root=<HOME>/heqk-m5-bench/tftp
+tftp-secure
+log-dhcp
