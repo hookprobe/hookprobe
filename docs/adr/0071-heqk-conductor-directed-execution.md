@@ -301,3 +301,100 @@ This is the "audit record of exactly what evidence left the device" that x86 pla
    - the Technical Disclosure Commons copy (ADR 0067 D12);
    - counsel review before shipping (D13);
    - approval of C1 onward.
+
+---
+
+## Amendment (2026-11-26, proposed): heqk-native only; the Conductor becomes a governed native AI runtime that scales out across heqk nodes
+
+**Status:** proposed. Two operator decisions are recorded; everything else in this amendment awaits review.
+
+**Operator decisions recorded (2026-11-26):**
+- **No external model, no Claude Code.** "Either heqk way or no way." Tier P5 (external API) is removed.
+  Running Claude Code or OpenCode on another host and driving heqk over MCP is rejected ("too much of a hassle
+  with no real benefit"). The Alternatives entry "Claude Code natively on heqk" stays rejected.
+- **Aggregate compute across heqk nodes** is the direction for raising the local-AI ceiling.
+
+**Evidence:** `docs/research/heqk-fleet-compute-aggregation-2026-11-26.md` (physics, V1 review, measured
+results elsewhere).
+
+### What changes, decision by decision
+
+| Decision | Change |
+|---|---|
+| D1 | Unchanged as a principle. All compute is now heqk nodes; "never trusted" still applies to every node that is not the requesting device (P1–P3). |
+| D2 | Unchanged. The worker signature over `(capability_id, request_hash, output_hash, final_seq)` becomes the basis of verified redundancy (A3). |
+| D3 | Replaced by the provider table in A1. |
+| D4 | Narrowed to P1–P3 heqk nodes. The root-owned foreign-worker red-team case (C2, C3) remains the gate for P1–P3. |
+| D5 | The P4 and P5 columns are removed. The P3 column applies to heqk cloud nodes. Cross-owner pooling (P2) moves only aggregated or public-class data. |
+| D6, D7, D9 | Unchanged. D7 matters more: a small local model depends on the gates. |
+| D8 | Promoted from one provider among six to the product's only engine. |
+| Context, "compute that heqk does not have" | Reversed: the device's own compute plus other heqk nodes has to be enough. |
+| Consequences, "a DGX, a gaming PC, a cloud GPU or an API" | Superseded. Compute comes from heqk nodes only. |
+
+### A1. Providers (replaces the D3 table)
+
+| Tier | Provider | Data it may receive | State |
+|---|---|---|---|
+| P0 | The native engine on the device, on a compute-role core (ADR 0060 amendment) | as the device | built (host and emulated A76); device needs ADR 0060 S2, KR-1/ADR 0072, R3–R6 |
+| P1 | The owner's paired heqk nodes on the LAN, alone or as a cluster | owner policy | pairing built (C1 prep) |
+| P2 | HookProbe peers under `fleet_mesh` (ADR 0004), off by default | aggregated or public-class only across owners; owner policy within one owner's fleet | not built; transport unbuilt (ADR 0004) |
+| P3 | A heqk node in the cloud (OCI A1 tier) | public-class only | depends on the heqk cloud port |
+
+Removed: P4 (confidential VM with GPU: a GPU is not heqk) and P5 (external API). Standalone stays the
+default: with no peers, the device is a full SOC.
+
+### A2. Aggregation model: move requests, not tensors
+
+The Alternatives entry "split a model's layers across the network" stays rejected **over a WAN**. Permitted
+patterns (research note §1):
+- **A. request parallelism**, **B. specialists across nodes** (the router sends each request to one node),
+  **C. sharded memory and retrieval**, **D. verified best-of-N**, **E. federated training of small
+  specialists**: any tier P1–P3.
+- **F. one model sharded across nodes** (pipeline or tensor): only inside one P1 LAN cluster, and only for
+  work that can wait (batch, overnight, labelling). Never on the interactive path.
+
+### A3. Verified redundancy from bit-exact compute
+
+The D8 engine is integer-only and bit-exact, so two honest nodes return identical output bytes for the same
+model digest and request. Verification is by exact comparison:
+- **k-of-n replication:** accept only when k signed output hashes agree;
+- **audit sampling:** re-execute a random fraction on another node;
+- two signed, contradictory results for one request are evidence; the node is suspended and the ledger
+  records it;
+- k and the audit rate are policy, per data class and tier.
+
+**Invariant:** determinism is a hard requirement of the engine ABI. **Gate `[P-fleet-exact]`:** the same job
+on two nodes with different core counts and timings returns identical hashes.
+
+### A4. Node-local priority
+
+A node's first duty is to protect its owner:
+- fleet jobs run only on compute-role cores, never on data-plane cores;
+- they are preemptible, lowest priority, and stop under the ADR 0023 resource-shed signals;
+- their memory comes from a separate budget, never from the MG reserve;
+- **gate:** the 33-row separation matrix holds with a fleet job running.
+
+### A5. Training
+
+Federated training of small specialists (pattern E) is the proposed home for "Neuro's learning". It adopts the
+V1 lessons as requirements: device-signed updates, robust aggregation (median or trimmed mean), secure
+aggregation, TRNG-seeded DP noise with per-device accounting, the aggregator a heqk node or quorum. Large-model
+fine-tuning stays in Neuro's development pipeline and ships as signed HNX packages. **Needs Neuro's agreement.**
+
+### A6. Roadmap changes
+
+| Stage | Change |
+|---|---|
+| C1, C2 | Unchanged. |
+| C3a | Becomes a heqk cloud node (P3), after the cloud port. |
+| C3b | Removed (P4). |
+| C4 | Loses P5. Verifier and Copilot in Mission Control stay. The outbound TLS client leaves the Conductor's critical path. |
+| C5 | Moves up: P0 on CM5 after ADR 0060 S2 and ADR 0072. The first measured tok/s decides the agent's scope. |
+| **C6 (new)** | Fleet aggregation, P2: patterns A–E, `[P-fleet-exact]`, the separation matrix under load. Gated on ADR 0004 `fleet_mesh`. |
+
+### A7. Open questions added
+
+1. **Neuro:** the federated-training split (A5); which specialists suit pattern B.
+2. **Operator:** whether P2 pooling across different owners is in scope at all, or only within one owner's
+   (or one MSSP customer's) fleet.
+3. **HomePods:** the ADR 0060 amendment (worker cores) that P0 depends on.

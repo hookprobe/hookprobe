@@ -193,3 +193,73 @@ The BKL is gone when the PoP mix shows zero acquisitions on the measured critica
 - New validation markers: `[P-smp-stage2]`, `[P-smp-roles]`, `[P-smp-matrix]`, `[P-bkl]`.
 - The first security review gate is stage-2 coverage on every core.
 - `ARCHITECTURE.md:142-175` is rewritten as the SMP concurrency contract once D3 lands.
+
+---
+
+## Amendment (2026-11-26, proposed): worker cores first, general SMP later
+
+**Status:** proposed; awaits operator review. It changes the order of this ADR, not its end state.
+
+**Why:** the operator set SMP as the next priority (2026-11-26), ahead of the Conductor agent and the storage
+track. Two facts changed since this ADR was written against `fd6fb038`:
+1. **S3 is resolved on metal.** The CM5 has 4 cores at MPIDR `0x000 / 0x100 / 0x200 / 0x300`,
+   `enable-method = "psci"`, and PSCI 1.1 `CPU_ON` over SMC to TF-A (`docs/design/heqk-t0-cm5-inventory-mb23.md:47, 67, 87`).
+2. **The D3 conversion grew.** On main at `917f74359` there are 616 `static mut` in `kernel` (396) and
+   `arch-aarch64` (220): `cyw43.rs` 124, `kernel/src/main.rs` 63, `uplink.rs` 35, `el0srv.rs` 32, `cfgd.rs` 30.
+   Converting all of it before any second core runs (D3) is a large audit that blocks every benefit of SMP.
+
+Already correct and not to be redone: normal memory is mapped inner-shareable on QEMU and CM5
+(`arch-aarch64/src/mmu.rs:41`, `mmu_cm5.rs:20`), TLB maintenance uses `dsb ish`, and the event ring publishes
+with acquire/release (`kernel/src/events.rs:78-108`).
+
+### W1. Two kinds of core
+
+- **Core 0 runs the existing kernel** under the existing single-core contract (`ARCHITECTURE.md`, concurrency
+  invariant), unchanged. It carries the MG and CP roles and, until S3, the data plane.
+- **Cores 1..n are worker cores.** They run a separate `no_std` worker executive, in its own crate, that never
+  executes kernel code:
+  - own exception vectors and stack, GIC redistributor and per-core timer set up by itself;
+  - talks to core 0 only through single-producer, single-consumer rings using the frozen discipline of
+    `ZEROCOPY_IPC_RING.md`, plus an SGI doorbell;
+  - allocates nothing: core 0 assigns its memory before start;
+  - a fault on a worker core parks that core and is reported to core 0; it never takes the system down.
+- **The crate boundary is the proof.** The worker crate cannot name kernel statics, so "no shared mutable
+  state with core 0 except the rings" is enforced by the compiler, not by review. This realises D4 and the D8
+  invariant "DP-core BKL attempts = 0" structurally, before the BKL exists.
+
+D3 (the one-pass conversion) and the BKL (D8) now apply when **kernel code** first runs on more than one core
+(W3 stage S4), not before.
+
+### W2. Start path per tier (scopes D2)
+
+| Tier | Who starts secondaries | Stage-2 | Marker |
+|---|---|---|---|
+| CM5 | HBoot at EL2, PSCI `CPU_ON` over SMC; each core installs HBoot's EL2 vectors and **the same stage-2 tables**, verified by read-back, before it may run anything at EL1 | required (SEC-2) | `[P-smp-stage2]` |
+| QEMU `virt` (no EL2) and OCI A1 (EL1 guest) | the kernel on core 0, PSCI `CPU_ON` over HVC (conduit from DTB or ACPI) | none exists on these tiers | `[P-smp-boot]` |
+
+HBoot never runs under the QEMU gate (`validate.sh` boots the kernel at EL1), so the CM5 row can only be
+proven in a metal batch.
+
+### W3. Stages (replace the bring-up order under Consequences)
+
+| Stage | Content | Gate |
+|---|---|---|
+| S0a | QEMU `-smp 4`: core 0 starts cores 1–3 over HVC into a minimal worker entry (stack, vectors, MMU on the shared kernel tables, then park) | `[P-smp-boot]` in `validate.sh`; every existing row still passes with `-smp 4` |
+| S0b | CM5: HBoot `CPU_ON` over SMC; per-core EL2 setup and stage-2, read back; cores parked at EL2 | `[P-smp-stage2]` on metal; first security review (stage-2 on every core) |
+| S1 | The worker executive: GICR and timer, SGI doorbell, rings to core 0, fault-park-report | ring stress plus memory-ordering litmus tests **on CM5 metal** (QEMU's TCG does not model the A76's weak ordering, so it cannot catch a missing barrier) |
+| S2 | First workload: a compute-role core running the Conductor P0 engine and crypto/hash offload, with FP/SIMD enabled on that core | first CM5 tok/s and AES-GCM throughput; separation matrix unchanged with the compute core busy; DRAM-bandwidth interference on the packet path measured (ADR 0071 risk) |
+| S3 | Data-plane worker cores, flow-sharded (D4, D7). Depends on S13 (RP1 NIC queues); without RSS, core 0 steers into per-worker rings | 33-row separation matrix re-proven (`[P-smp-matrix]`); throughput |
+| S4 | This ADR's general SMP: D3 conversion, per-CPU scheduler (D6), BKL (D8) with the D9 gates, when MG/CP need more than one core | D9, `[P-bkl]` |
+
+### W4. Relation to ADR 0072 (FP/SIMD grant)
+
+ADR 0072 grants FP/SIMD to one EL0 server, enabled only inside its excursion, with owner-switch scrubbing
+required before a second grant. On a compute-role worker core that runs only the granted server, there is no
+owner switch: FP/SIMD can stay enabled on that core, and core 0 stays softfloat with no V-register save. This
+is a simpler realisation of ADR 0072's single grant, not a second grant. ADR 0072's G46 review still applies.
+
+### W5. Flagged, not resolved
+
+- **ADR 0067** says "single-core fixes before SMP". The worker-core order does not change core 0, so it does
+  not skip those fixes; whether they gate S0 or only S4 is an operator call.
+- **CM5 bench access** is via metal batches (REL-05 soak deferred). S0b, S1 and S2 each need a slot.
