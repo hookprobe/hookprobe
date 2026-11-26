@@ -3,6 +3,8 @@
 **Date:** 2026-11-26 · **Status:** reference data (Green). Companion to
 `heqk-nanopi-m5-rk3576-investigation-2026-11-26.md`. Board ordered (amazon.de), expected mid-December 2026.
 
+**Also:** vendor-firmware facts (loader versions, reboot-to-maskrom 0xEF08A53C @ 0x2602_4040, LEDs, PCIe PRSNT, ramoops) are in `heqk-nanopi-m5-vendor-firmware-findings-2026-11-26.md`; the bench procedure is in `heqk-nanopi-m5-bench-runbook-2026-11-26.md`.
+
 **Sources, in order of authority:**
 1. FriendlyElec schematics `NanoPi_M5_LP5_2411_SCH.pdf` and `NanoPi_M5_LP4X_2411_SCH.PDF`, rev 2411, 24 pages
    (wiki.friendlyelec.com/wiki/images/9/97/… and …/1/10/…).
