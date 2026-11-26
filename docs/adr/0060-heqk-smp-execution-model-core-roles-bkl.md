@@ -244,7 +244,7 @@ proven in a metal batch.
 
 | Stage | Content | Gate |
 |---|---|---|
-| S0a | QEMU `-smp 4`: core 0 starts cores 1–3 over HVC into a minimal worker entry (stack, vectors, MMU on the shared kernel tables, then park) | `[P-smp-boot]` in `validate.sh`; every existing row still passes with `-smp 4` |
+| S0a | QEMU `-smp 4`: core 0 starts cores 1–3 over HVC into a minimal worker entry (stack, vectors, MMU on the shared kernel tables, then park) | `[P-smp-boot]` in `validate.sh`; every existing row still passes with `-smp 4`. **Built 2026-11-26:** `arch-aarch64/src/smp.rs`, kernel feature `smpboot`; all implemented phases GREEN at `-smp 4`; a single-core boot fails the gate |
 | S0b | CM5: HBoot `CPU_ON` over SMC; per-core EL2 setup and stage-2, read back; cores parked at EL2 | `[P-smp-stage2]` on metal; first security review (stage-2 on every core) |
 | S1 | The worker executive: GICR and timer, SGI doorbell, rings to core 0, fault-park-report | ring stress plus memory-ordering litmus tests **on CM5 metal** (QEMU's TCG does not model the A76's weak ordering, so it cannot catch a missing barrier) |
 | S2 | First workload: a compute-role core running the Conductor P0 engine and crypto/hash offload, with FP/SIMD enabled on that core | first CM5 tok/s and AES-GCM throughput; separation matrix unchanged with the compute core busy; DRAM-bandwidth interference on the packet path measured (ADR 0071 risk) |
