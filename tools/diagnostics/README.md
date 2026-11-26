@@ -6,6 +6,13 @@
 | [`cm5-relay-nano/`](cm5-relay-nano/) | Arduino Nano v3 firmware for the two bench relays (safe defaults, read-back, auto-release) |
 | [`cm5-relay.py`](cm5-relay.py) | Power-cycles the CM5 bench board and asserts nRPIBOOT through a 2-channel USB relay, so it can be reflashed without anyone touching it |
 | [`os/kernel/tools/mc-e2e-metal.sh`](../../os/kernel/tools/mc-e2e-metal.sh) | Metal acceptance run against a live CM5 |
+| [`m5-relay.py`](m5-relay.py) | NanoPi M5 bench: power-cycle and forced maskrom (MASK) through a second Nano rig (same firmware, reuses the `cm5-relay.py` protocol code) |
+| [`m5-console.sh`](m5-console.sh) | NanoPi M5 serial capture at 1 500 000 8N1 into `~/heqk-metal-logs/` |
+| [`m5-metal-loop.sh`](m5-metal-loop.sh) | NanoPi M5 unattended round, netboot: stage image in TFTP → relay cycle → U-Boot booti → serial markers → PASS/FAIL |
+| [`m5-spi-flash.sh`](m5-spi-flash.sh) | NanoPi M5 SPI-NOR loader write via maskrom + read-back verify (recovery path) |
+| [`m5-netboot/`](m5-netboot/) | dnsmasq + udev examples and the U-Boot `boot.cmd` for the M5 netboot loop |
+
+NanoPi M5 runbook: `docs/design/heqk-nanopi-m5-bench-runbook-2026-11-26.md`.
 | [`os/kernel/tools/gate-r-run.py`](../../os/kernel/tools/gate-r-run.py) | Separation-matrix (Gate R) run |
 
 Serial console: FTDI at 115200. The CM5 prints its boot timing, device identity (`[NETCP] pk=`)

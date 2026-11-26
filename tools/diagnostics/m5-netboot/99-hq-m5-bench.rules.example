@@ -1,0 +1,11 @@
+# udev rules for the NanoPi M5 bench on the host. Fill the <...> values from
+#   udevadm info -a -n /dev/ttyUSBx | grep -E 'KERNELS|serial'
+# copy to /etc/udev/rules.d/99-hq-m5-bench.rules, then: sudo udevadm control --reload && sudo udevadm trigger
+#
+# M5 console: a CP2102N/FT232R/CH343 adapter with a unique USB serial number.
+SUBSYSTEM=="tty", ATTRS{serial}=="<CONSOLE_USB_SERIAL>", SYMLINK+="hq-m5-console"
+# M5 relay Nano. A CH340 Nano has NO serial number (it would collide with the CM5 rig's Nano), so
+# bind it by the physical USB port path instead (KERNELS of the usb device, e.g. 1-3.2).
+SUBSYSTEM=="tty", KERNELS=="<RELAY_USB_PORT_PATH>:1.0", SYMLINK+="hq-relay-m5"
+# Rockchip boot ROM / usbplug / rockusb (vendor 2207): rkdeveloptool without sudo.
+SUBSYSTEM=="usb", ATTR{idVendor}=="2207", MODE="0660", GROUP="plugdev"
