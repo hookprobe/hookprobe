@@ -61,7 +61,7 @@ driver today**. NVMe is a small, well-specified driver and is on ADR 0064 D4's l
 
 | Option | Wi-Fi | Storage | Verdict |
 |---|---|---|---|
-| **A. SDIO Wi-Fi in E-key, NVMe in M-key** | SDIO module (E-key) | NVMe on PCIe | **Recommended if the M5 is used.** Keeps the SSD on PCIe. heqk already has an SDIO host + full CYW43455 FullMAC stack (`cyw43.rs`, `hal::sdio`, WPA2/SAE, AP mode metal-proven on CM5). A CYW-family (e.g., AP6256-class) M.2 E-key SDIO module would reuse it. FriendlyElec's own RTL8822CS module would need a new Realtek SoftMAC SDIO driver (worse). Wi-Fi 5 only. |
+| **A. SDIO Wi-Fi in E-key, NVMe in M-key** | SDIO module (E-key) | NVMe on PCIe | **Recommended if the M5 is used.** Keeps the SSD on PCIe. heqk already has the full CYW43455 FullMAC stack (`cyw43.rs`, `hal::sdio`, WPA2/SAE, AP mode metal-proven on CM5); only a DW-MSHC host under it is new. Candidate: **Radxa Wireless Module A2** (AP6256 = BCM43456, same BCM4345 family, ~€8); its pinout still has to be checked against sch p22. FriendlyElec's own AC200 (RTL8822CS) needs a new Realtek SoftMAC driver. Wi-Fi 5 only. |
 | B. BE200 in M-key (M→E adapter), SSD over USB 3 | BE200, PCIe 2.1 ×1 (~3.2 Gb/s usable) | USB-NVMe enclosure (xHCI + UAS/BOT) | Works electrically. Costs a clean-room iwlwifi-class driver **and** USB mass storage, and still has no 5/6 GHz AP. BT is lost unless the adapter wires USB. Not recommended. |
 | C. NVMe in M-key, USB Wi-Fi 7 dongle | USB Wi-Fi 7 | NVMe | Few USB Wi-Fi 7 chips have open drivers. Same new-driver cost. Not recommended. |
 | D. Change the board | — | — | A board with M.2 E-key **PCIe** *and* M-key NVMe (e.g., ROCK 5B, the ADR 0064 suggestion) fits a PCIe Wi-Fi 7 card and the SSD together and is the same SoC as our board. |
@@ -84,7 +84,7 @@ layer (`pci.rs`, cloud tier, firmware-assigned BARs), an IOMMU skeleton (`iommu.
 | 6 | **DWC PCIe root complex** + Rockchip glue + combo PHY, iATU config access (not plain ECAM), DWC internal MSI | M–L | **yes** (RK3588 same IP, Gen3) | first step: inherit U-Boot's link-up + config, as `pci.rs` does with edk2 |
 | 7 | **NVMe** (admin + 1 I/O queue pair, polled → MSI) | M | yes | data volume / retention tier. Also unblocks N100/x86 |
 | 8 | **GMAC (stmmac/DWMAC) + RTL8211F PHY over MDIO** ×2 | M | partly (RK3588 has GMACs, our board uses RTL8125) | gives the WAN + LAN pair the separation matrix needs |
-| 9 | DMA isolation for PCIe/EL0 drivers | ? | ? | **Open:** RK3576 SMMU presence is unverified. Without one, an EL0 PCIe driver can DMA anywhere. That is a security-auditor blocker before any EL0 PCIe Wi-Fi driver |
+| 9 | DMA isolation for PCIe/EL0 drivers | S (policy) | n/a (RK3588 has an Arm MMU-600 for PCIe, disabled in mainline DT; verify) | **Resolved: RK3576 has no SMMU.** DMA addresses stay kernel-authored (DEVICE_CLASS_TRANSPORT H4). No untrusted PCIe radio. Whether the DWC inbound iATU could act as a coarse DMA window is a research idea for the security-auditor *(unverified)* |
 | 10 | Rockchip TRNG + OTP (sealing key, SEC-2 equivalent) | S–M | yes | device identity HKDF source changes, interface unchanged |
 | 11 | xHCI (+ BT on USB if a card needs it) | M | yes | already plan M1 in the radio-drivers doc |
 | 12 | **BE200 driver** (clean-room iwlwifi/MLD-class: context-info gen3 boot, TLV firmware, TFH queues, MLD command set, regulatory) | **XL** | n/a (we chose QCN9274) | Linux driver is GPL-2.0, so clean-room only. Biggest item, and the firmware still forbids 5/6 GHz AP |
@@ -103,12 +103,25 @@ BE200 (12) only comes in as a receive-only monitor sensor, if at all.
 - **D-M5-3:** Storage: Verbatim 512 GB NVMe in the M-key slot as the DataVolume/retention tier, with boot from SD/UFS
   (the SoC cannot boot from NVMe). Recommended.
 
-## 6. Open verification items
+- **D-M5-4:** Sealing key on RK3576. Secure OTP (HUK) is secure-world only, so choose between a small SiP call in our
+  upstream-TF-A build (hands hboot a derived key once per boot) and deferring sealing to a discrete TPM (the ADR 0064 board
+  has one). The bench works without it, since non-sealed builds are fine for M5-0…M5-n.
 
-- RK3576 SMMU/IOMMU coverage of the PCIe controllers (check mainline `rk3576.dtsi` + TRM).
-- Which combo-PHY lane the M5's M-key uses, and which GMAC/PHY wiring (2411 schematics: LP4X and LP5 variants).
-- Exact form factor of the purchased "BE200HMW" card (mini-PCIe adapter assembly vs M.2 2230).
-- Mainline PCIe/NVMe stability on RK3576: a Dec 2025 report has NVMe working in U-Boot but not detected in mainline Linux on the Rock 4D.
+## 6. Verification items: resolved 2026-11-26
+
+All the hardware facts are in **`heqk-nanopi-m5-hw-datapack-2026-11-26.md`** (register map, wiring, boot chain, driver
+facts, bench kit, heqk code delta).
+
+| Item | Result |
+|---|---|
+| SMMU in front of PCIe | **None.** It is absent from both the mainline and Rockchip BSP `rk3576.dtsi`. The GIC is GIC-400 and there is no ITS. PCIe DMA cannot be confined, so no untrusted radio may be a PCIe bus master (doctrine X5). NVMe with kernel-owned queues is acceptable |
+| M-key wiring | PCIe0 on combphy0, lane 0 only, PERST# `GPIO2_B4`, slot power enable `PCIE0_PWREN_H`; combphy1 = USB 3 |
+| E-key wiring | **schematic-confirmed SDIO + UART5 only**: PCIe and USB pins are no-connect; 32 kHz LPO is wired from the RTC |
+| GMAC/PHY | 2× RTL8211F-CG, RGMII-ID, MDIO addr 1 |
+| "BE200HMW" | third-party half-mini-PCIe card, not an Intel SKU; **cannot be fitted to the M5 at all**. Do not buy |
+| PCIe/NVMe stability | U-Boot has NVMe on the M5. The ROCK 4D mainline-Linux miss resolved after re-flashing mainline U-Boot, with no root cause published, so heqk fully resets PCIe itself |
+| Documentation | RK3576 TRM V1.2 Parts 1 and 2 are publicly mirrored (unofficial); OTP/TRNG/crypto are not in it |
+| Boot media | BootROM SD boot is unreliable on RK3576, so the first stage goes in SPI-NOR (switch = FSPI) |
 
 ## Sources
 
