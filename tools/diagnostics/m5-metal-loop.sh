@@ -31,9 +31,10 @@ done
 [ -f "$IMG" ] || { echo "--image is required" >&2; exit 2; }
 [ -f "$LOG" ] || { echo "--log must be the running m5-console.sh capture" >&2; exit 2; }
 [ -f "$TFTP/heqk-m5/boot.scr.uimg" ] || { echo "no $TFTP/heqk-m5/boot.scr.uimg (see m5-netboot/boot.cmd)" >&2; exit 2; }
-# M5-0 contract (runbook §7): U-Boot reached booti, heqk printed its banner at EL2.
-[ ${#EXPECT[@]} -gt 0 ] || EXPECT=('== booti ' 'heqk' 'EL2')
-[ ${#FAIL[@]} -gt 0 ] || FAIL=('PANIC' 'panicked' 'SYNC_EXC' 'Retry count exceeded' 'Bad Linux ARM64 Image magic' 'resetting \.\.\.')
+# Default contract = the bring-up probe (os/kernel/m5probe, runbook §7a): booti reached, probe at EL2, PASS.
+# For heqk images pass --expect/--fail for the M5-0 contract (runbook §7b).
+[ ${#EXPECT[@]} -gt 0 ] || EXPECT=('== booti ' '\[m5probe\] EL2 ' '\[m5probe\] RESULT: PASS')
+[ ${#FAIL[@]} -gt 0 ] || FAIL=('\[m5probe\] RESULT: FAIL' '\[m5probe\] EXCEPTION' 'PANIC' 'panicked' 'Retry count exceeded' 'Bad Linux ARM64 Image magic' 'no FDT address' 'resetting \.\.\.')
 
 REPORT="${LOG%.log}-round-$(date +%H%M%S).txt"
 say() { echo "$*" | tee -a "$REPORT"; }

@@ -1,0 +1,1 @@
+setenv autoload no; if dhcp; then if tftpboot ${scriptaddr} heqk-m5/boot.scr.uimg; then source ${scriptaddr}; fi; fi; bootflow scan -lb
