@@ -21,6 +21,7 @@ Notation: **[V]** means verified from bytes or a decode. **[I]** means inferred 
 | Fan: PWM0 ch1 on GPIO0_C3, steps 0/45/70/110/160/255 at 50/55/60/65/70 °C; HW shutdown 120 °C, critical 115 °C | heqk thermal policy defaults (the CM5 WFE/thermal lesson) |
 | FriendlyElec ships firmware for **BCM43455/43456 SDIO** (AP6255/AP6256 class) as well as RTL8822CS, AIC8800, AX200/AX210, MT7921/22, and **no BE200 firmware** | supports the Radxa A2 (BCM43456) choice. The BE200 is not a FriendlyElec-supported radio on this board |
 | Vendor E-key: RTL8822CS on the vendor out-of-tree driver (rtw88 SDIO blacklisted) | another reason not to use the default AC200 module with heqk |
+| Vendor DDR blob = rkbin `rk3576_ddr_lp4_2112MHz_lp5_2736MHz_v1.13.bin` (build e10b4dfeaf) with **2 bytes patched: LPDDR4/4X frequency 2112 → 1866 MHz** (u16 LE at 0x11C7C, 0x0840 → 0x074A) [V by `cmp`] | our pinned blob is the vendor's blob; derate LP4X to 1866 MHz with `ddrbin_tool` if the 4 GB board is used. LPDDR5 is unchanged |
 
 ## 0. Which files differ between the two images (sha256)
 - These are byte-identical in WRT and DEB: `idbloader.img`, `boot.img`, `dtbo.img`, `misc.img`, and the M5 DTB inside resource.img.

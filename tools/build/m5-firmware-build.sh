@@ -74,12 +74,13 @@ fetch "$USBPLUG" "$URL_USBPLUG"
 fetch "rkdeveloptool-$RKDEV_REV.tar.gz" "$URL_RKDEV"
 if [ "$PIN" = 1 ]; then mv "$LOCK.new" "$LOCK"; echo "pinned -> $LOCK (review + commit)"; fi
 
-# Python for binman: pyelftools + swig (to build U-Boot's own pylibfdt). Private venv, no root.
-if [ ! -x venv/bin/python3 ]; then
-  python3 -m venv venv
-  venv/bin/pip install -q 'pyelftools==0.31' 'swig==4.3.1' 'setuptools>=70'
+# Python for binman: pyelftools + swig (to build U-Boot's own pylibfdt). Installed with
+# `pip --target` into a private directory: no root, and no python3-venv/ensurepip needed.
+if [ ! -x pydeps/bin/swig ]; then
+  python3 -m pip install -q --target "$WORK/pydeps" 'pyelftools==0.31' 'swig==4.3.1'
 fi
-export PATH="$WORK/venv/bin:$PATH"
+export PYTHONPATH="$WORK/pydeps${PYTHONPATH:+:$PYTHONPATH}"
+export PATH="$WORK/pydeps/bin:$PATH"
 
 # ---- TF-A BL31 ----
 rm -rf tf-a && mkdir tf-a && tar -xzf "dl/tf-a-$TFA_TAG.tar.gz" -C tf-a --strip-components=1

@@ -102,7 +102,11 @@ and it interrupts a USB-PD contract (see §3.1).
    DDR blob hash with rkbin's published history), commit it, and from then on build without `--pin` (fail-closed on
    mismatch). Output: `~/heqk-m5-bench/fw/` (`u-boot-rockchip-spi.bin`, `u-boot-rockchip.bin`, `mkimage`,
    `rkdeveloptool`, `MANIFEST.txt`).
-   *Not yet run: the agent was not allowed to self-pin third-party hashes. This is an operator step.*
+   **Done 2026-11-26 (operator-authorised `--pin`).** The pinned rebuild passed the hash check. The SPI image has `RKNS` at
+   0x8000, a FIT at 0x60000, TF-A `v2.15.0(release)`, U-Boot/SPL 2026.10 and DDR `v1.13-e10b4dfeaf`. The pinned rkbin DDR
+   blob is the same build FriendlyElec ships (cross-check), except for one parameter: **FriendlyElec derates LPDDR4/4X
+   from 2112 to 1866 MHz** (u16 at 0x11C7C). LPDDR5 (2736 MHz) is untouched. On a 4 GB LPDDR4X board, set the same 1866 MHz
+   with rkbin's `ddrbin_tool` before flashing. The recommended 8 GB LPDDR5 board needs nothing.
 2. udev: `tools/diagnostics/m5-netboot/99-hq-m5-bench.rules.example` → `/dev/hq-m5-console`, `/dev/hq-relay-m5`,
    Rockchip `2207:*` for `plugdev`. Then `export M5_CONSOLE=/dev/hq-m5-console M5_RELAY=/dev/hq-relay-m5`, and
    `M5_FORBID=<CM5 rig Nano path>` so the M5 tools can never drive the CM5 relays.
