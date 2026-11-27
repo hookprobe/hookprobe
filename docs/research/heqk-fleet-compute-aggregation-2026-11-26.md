@@ -137,10 +137,75 @@ moves only aggregated or public-class data (ADR 0071 D5).
 | Fleet placement (Select-N quotes at scale, churn, hierarchy: site → region) | design only | ADR 0071 D3 |
 | Determinism gate across nodes | not built | this note §4 |
 
+## 8. Validation pass (deep research, 2026-11-26)
+
+A multi-agent research pass (5 search angles, 25 primary sources, 25 claims put to 3-vote adversarial
+verification: 19 confirmed, 6 refuted) plus a targeted read of the verification papers. What it settled:
+
+**Confirmed (parallelism):**
+- Over commodity links the systems that work converge on **pipeline/layer partitioning plus request-level
+  replication**, placed by heuristics or dynamic programming (Parallax, Helix, BloomBee/Petals, EdgeShard).
+  Tensor parallelism only inside small LAN islands: distributed-llama needs 2^n nodes, at most the KV-head
+  count (8 for Qwen3-1.7B), with 2 all-reduces per block. Over 20–50 ms RTT that is ~1–3 s/token of
+  synchronisation alone.
+- **Bigger-than-one-node models run, slowly.** prima.cpp (ICLR 2026): 70B on four mixed CPU/GPU home devices
+  at 674 ms/token; its 5–17x advantage is largely against baselines that ran out of memory. TPI-LLM: a
+  sliding-window weight scheduler brings Llama 2-70B to ~3.1 GB peak per device on 8 devices (fits 4 GB
+  nodes), with no throughput claim.
+- **Exact placement does not scale:** Helix's MILP needs hours above ~40 nodes; large fleets need hierarchical
+  or heuristic placement (sub-clusters).
+- **Cross-device speculative decoding can lose:** BloomBee measured −21 % against plain decoding at 250 Mbps
+  and turns speculation off below a break-even bandwidth. Keep draft and verifier on one node or LAN island.
+- **No published system has been measured on CPU-only Cortex-A76 nodes, at 4 GB with real throughput, above
+  42 nodes, or on a real WAN.** That gap is ours to measure.
+- The closest real-world data point: 10 × CM5 16 GB (Jeff Geerling, 2025): one Pi runs Llama 3.2 3B at
+  ~6 tok/s; Llama 3.3 70B across the cluster at 0.28 tok/s (llama.cpp RPC) or 0.85 tok/s (distributed-llama,
+  8 nodes). His verdict: "not the cluster you're looking for". It confirms §1: pool **requests**, not one
+  model.
+
+**Refuted claims (do not cite):** tensor beating pipeline for single-user edge use (TPI-LLM), Galaxy's
+headline gain bounds, Helix's geo-WAN realism, and the edge-cloud speculative decoding numbers of
+arXiv 2511.21669.
+
+**Verification (§4), checked against the papers:**
+
+| System | Determinism | Cost |
+|---|---|---|
+| Verde / RepOps (Gensyn, arXiv 2502.19405) | **creates** it: fixed floating-point operation order | ~30–60 % on matmul, ~60 % for Llama-3.1-1B, 200–300 % on small models and training; security needs at least one honest worker of k |
+| Proof of Sampling (arXiv 2405.00295) | **requires** it ("f must be a deterministic function"); gets it from fixed-point / software float | analytic only |
+| TOPLOC (arXiv 2501.16007) | **tolerates** its absence: thresholds over hashed top-k activations | ~258 bytes per 32 tokens; validation ~81 ms vs zkLLM ~803 s |
+| DiFR (arXiv 2511.20621) | **tolerates** it ("bitwise reproducibility is rarely achievable in practice"); calibrated null band | open-weight models only |
+
+So the heqk position is confirmed and is not a claim of a new idea: refereed delegation and re-execution on
+deterministic functions exist. What is unusual is that heqk gets bitwise determinism **for free** from an
+integer-only engine on CPUs, where Verde pays for it on GPUs and TOPLOC/DiFR work around its absence. Any
+mismatch is a real fault, with no false-positive band. Implemented as `conductor_core::quorum` (k-of-n
+agreement, self-contained conflict evidence, keyed audit sampling), tested in
+`os/conductor/conductor-mock/tests/fleet_quorum.rs`.
+
+**Still open (not covered by verified evidence):** federated or low-communication training on 4 GB ARM nodes
+(the training source read was a single-GPU zeroth-order study, not edge federation); request routing and
+cascades across specialists; tok/s on CM5 for one node, a LAN island and a pipeline. The first two need a
+second research pass; the third needs metal (ADR 0060 S2).
+
+**Revised first steps:**
+1. P0 baseline on one CM5: tok/s against the ~17 GB/s roofline, plus an output hash (ADR 0060 S2, ADR 0072).
+2. `[P-fleet-exact]`: the same job on two nodes with different core counts returns identical hashes.
+3. Request router plus whole-model replicas, with `quorum` audits on a random fraction.
+4. LAN island (2–8 nodes, tensor or pipeline) for batch work only; weight streaming for a 7–8B model.
+5. Fleet placement: hierarchical, heuristic; never an exact solver over the whole fleet.
+
 ## Sources
 
 - distributed-llama: <https://github.com/b4rtaz/distributed-llama>; 4 × Pi 5 measurements:
   <https://www.hackster.io/lijiahaoxyz/distributed-inference-of-deepseek-using-raspberry-pis-45439a>
 - Petals (inference and fine-tuning over the internet): <https://arxiv.org/abs/2312.08361>
 - prima.cpp (home clusters): <https://arxiv.org/abs/2504.08791>
+- TPI-LLM: <https://arxiv.org/abs/2410.00531>; Galaxy: <https://arxiv.org/abs/2405.17245>; EdgeShard:
+  <https://arxiv.org/abs/2405.14371>; PRISM: <https://arxiv.org/pdf/2507.12145>
+- Parallax: <https://arxiv.org/html/2509.26182v1>; Helix: <https://arxiv.org/pdf/2406.01566>; BloomBee:
+  <https://arxiv.org/pdf/2604.21072>
+- Verde: <https://arxiv.org/abs/2502.19405>; TOPLOC: <https://arxiv.org/abs/2501.16007>; Proof of Sampling:
+  <https://arxiv.org/abs/2405.00295>; DiFR: <https://arxiv.org/abs/2511.20621>
+- 10 × CM5 cluster: <https://www.jeffgeerling.com/blog/2025/i-regret-building-3000-pi-ai-cluster/>
 - V1 sources: listed under §3.

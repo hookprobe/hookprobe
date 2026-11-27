@@ -41,7 +41,9 @@ KERNEL=$CARGO_TARGET_DIR/aarch64-unknown-none-softfloat/debug/kernel
 BUILD_LOG="$CARGO_TARGET_DIR/validate-build.log"
 LOG="${VALIDATE_KEEP_LOG:-$(mktemp)}"
 # virtio-net (v2) attached for P5b: the kernel ARPs the gateway and RXes the reply.
-QEMU="qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
+# -smp 4: ADR 0060 S0a — the main kernel starts cores 1..3 as parked worker cores ([P-smp-boot]); every other row
+# must keep passing with them up. The disk-backed runs below boot a separate build without `smpboot`, single-core.
+QEMU="qemu-system-aarch64 -M virt -cpu cortex-a72 -smp 4 -m 512M -nographic -serial mon:stdio -semihosting \
   -global virtio-mmio.force-legacy=false -netdev user,id=n0 -device virtio-net-device,netdev=n0 -kernel"
 
 # phase|marker (fixed string)|status(impl|plan)|lifecycle stage|what it proves
@@ -49,6 +51,7 @@ PHASES=(
   "P0|[P0] PASS|impl|Implementation+Verification|boot chain: EL2->EL1, PL011, exception vectors"
   "P1|[P1] PASS|impl|Implementation+Verification|preemptive scheduler + context switch"
   "P1b|[P1b] PASS|impl|Implementation+Verification|MMU stage-1 + physical frame allocator"
+  "Psmpboot|[P-smp-boot] PASS|impl|Implementation+Verification|ADR 0060 amendment S0a (worker cores first): core 0 starts cores 1..3 over PSCI CPU_ON (HVC) as WORKER cores that never run kernel code — each enters at EL1 with MMU off, takes core 0's stage-1 regime (MAIR/TCR/TTBR0/SCTLR copied at start time, block cleaned to PoC), installs its own fault vectors, answers a per-core challenge from Rust and parks in wfe; core 1 then executes brk #0x5a and the WORKER vectors contain it (status FAULT, ESR EC 0x3c recorded, core parked) while core 0 carries on; a single-core boot FAILS the gate (needs -smp >= 3). The kernel still runs only on core 0, so the ARCHITECTURE.md single-core contract holds. QEMU only (no EL2, so no stage-2): the CM5 path is HBoot + stage-2 per core (S0b, [P-smp-stage2], metal); TCG does not model A76 weak ordering, so memory-ordering proof is metal-only (S1)"
   "Pwx|[P-wx] PASS|impl|Implementation+Verification|MULTI-BLOCK W^X: build_wx_ram_range L3-maps EVERY 2 MiB block overlapping [__text_start,__text_end) as per-page RO+X code / RW+PXN data, all other RAM blocks RW+PXN — removes the old single-2-MiB-block ceiling (code past the first block used to land in a PXN block and instruction-abort: the metal-driver / bigger-catalogue / wasmi-host case). Proof builds a SYNTHETIC executable range spanning THREE 2 MiB blocks into an unused L1 slot and reads the REAL page descriptors back through the P7b walker: code RO+X in the 2nd AND last text block, data RW+NX before/after/beyond text, and a strict sweep confirming NO page is ever both writable and EL1-executable (SCTLR.WXN backstop on top)"
   "P2|[P2] PASS|impl|Implementation+Verification|capabilities: untyped/retype/CDT/revoke"
   "P2iso|[P2-iso] PASS|impl|Implementation+Verification|CORE-2 per-TCB CSpaces: distinct capability spaces + rights-narrowing cross-CSpace delegation (child holds only the delegated Frame, read-only; Endpoint absent) — the P12 authority primitive"
@@ -252,7 +255,7 @@ echo "==================================================================="
 
 # --- Stage 1: build -------------------------------------------------------
 echo -n "[build] cargo build${FEATX:+ (+$FEATX)} ... "
-if ! cargo build --features netsvc,securechannel,securechannel-selftest,wasmhost,wpa3${FEATX:+,$FEATX} >"$BUILD_LOG" 2>&1; then
+if ! cargo build --features netsvc,securechannel,securechannel-selftest,wasmhost,wpa3,smpboot${FEATX:+,$FEATX} >"$BUILD_LOG" 2>&1; then
   echo "FAIL"; echo "  --- build output (last 100 lines) ---"; tail -n 100 "$BUILD_LOG"
   echo "GAP: build broken — cannot validate. Fix compile errors first."; exit 2
 fi
