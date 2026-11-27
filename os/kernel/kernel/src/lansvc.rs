@@ -324,6 +324,9 @@ mod el0 {
             let mut out = [0u8; 32];
             self.read(OUT_OFF, &mut out);
             let mut good = st == ST_OK && n == P.len() && out == P;
+            if !good {
+                arch_aarch64::_print(format_args!("   [SUPERV] el0-lansvc probe: echo wrong (status {} len {})\n", st, n));
+            }
             let at = self.probe_at;
             for k in HOT.into_iter().chain((0..PROBE_SWEEP).map(|i| (at + i) % KNOWN_N)) {
                 if !good {
@@ -331,11 +334,20 @@ mod el0 {
                 }
                 let d = self.known_call(k)?;
                 match self.probe_gold[k] {
-                    Some(g) => good = d == g,
+                    Some(g) => {
+                        good = d == g;
+                        if !good {
+                            arch_aarch64::_print(format_args!("   [SUPERV] el0-lansvc probe: known call {} (cmd {}, input {}) answered {:#018x}, recorded {:#018x}\n",
+                                k, 1 + k / 4, ["dns-query", "dns-answer", "dhcp-discover", "pattern"][k % 4], d, g));
+                        }
+                    }
                     // first time this boot: keep it as the reference only if a second answer agrees
                     None => match self.known_call(k)? {
                         d2 if d2 == d => self.probe_gold[k] = Some(d),
-                        _ => good = false,
+                        d2 => {
+                            good = false;
+                            arch_aarch64::_print(format_args!("   [SUPERV] el0-lansvc probe: known call {} (cmd {}) not repeatable at its first record: {:#018x} then {:#018x}\n", k, 1 + k / 4, d, d2));
+                        }
                     },
                 }
             }
