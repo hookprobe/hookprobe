@@ -102,6 +102,7 @@ gate_g1() {
   HOST_TRIPLE="$(rustc +stable -vV 2>/dev/null | sed -n 's/^host: //p')"
   HOST_TRIPLE="${HOST_TRIPLE:-x86_64-unknown-linux-gnu}"
   step "host tests: heqk hal (policy / ACS / routing units)" bash -c "cd os/kernel/hal && CARGO_TARGET_DIR=$(tdir hal) cargo +stable test --release --target $HOST_TRIPLE"
+  step "host tests: heqk-worker (SMP worker rings + jobs)" bash -c "cd os/kernel/worker && CARGO_TARGET_DIR=$(tdir worker) cargo +stable test --release --target $HOST_TRIPLE"
   step "host tests: heqk-tlsprov"      bash -c "cd os/kernel/tlsprov && CARGO_TARGET_DIR=$(tdir tlsprov) cargo +stable test --release --target $HOST_TRIPLE"
   step "host tests: responder-sim"     bash -c "cd onboarding/enrollment/responder-sim && CARGO_TARGET_DIR=$(tdir responder-sim) cargo +stable test --release"
   step "host tests: superpop (G19)"    bash -c "cd onboarding/enrollment/superpop && CARGO_TARGET_DIR=$(tdir superpop) cargo +stable test --release"

@@ -32,6 +32,7 @@ name = "arch-aarch64"
 version = "0.0.26"
 dependencies = [
  "hal",
+ "heqk-worker",
  "sae",
 ]
 
@@ -360,6 +361,10 @@ dependencies = [
  "hash32",
  "stable_deref_trait",
 ]
+
+[[package]]
+name = "heqk-worker"
+version = "0.0.26"
 
 [[package]]
 name = "hybrid-array"
