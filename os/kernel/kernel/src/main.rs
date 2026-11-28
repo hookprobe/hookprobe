@@ -17475,6 +17475,7 @@ fn p_smp_worker(ports: &mut [Option<arch_aarch64::smp::Port>], core0_cpacr: u64,
     let (Some(a), Some(b)) = (it.next(), it.next()) else { fail("lost a port") };
     p_smp_simd(a, b, freq, core0_cpacr, engine_bytes);
     p_smp_timer(a, b, freq);
+    p_smp_engine(a, b, freq);
     // Refusal: a job that points at a kernel word outside the granted window.
     let kernel_addr = core::ptr::addr_of!(KERNEL_PROBE_WORD) as u64;
     match probe(a, job::Job { id: 1, op: job::op::SUM64, a: kernel_addr, b: 1 }, freq) {
@@ -17774,5 +17775,176 @@ fn p_smp_timer(a: &mut arch_aarch64::smp::Port, b: &mut arch_aarch64::smp::Port,
     kprint!(
         " [P-smp-timer] PASS each worker runs its own EL1 timer (banked PPI 30, IRQs masked, wfi + IAR): {} Hz and {} Hz over {} ms; a SPIN job with a 20 ms budget stopped with DEADLINE after {} ms ({} rounds) while the other worker kept ticking ({}->{}); busy_since published during the job; core 0's CNTP/CNTV registers unchanged\n",
         ra, rb, dt_ms, spin_ms, d.value, tb2, tb3
+    );
+}
+
+/// ADR 0060 S2b gate model (built by tools/build/worker-engine-model on the build host; see build.rs).
+#[cfg(feature = "smpboot")]
+mod engine_gate {
+    pub static PREFIX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/model.prefix"));
+    pub static BUNDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/model.bundle"));
+    pub static PK: &[u8; 32] = include_bytes!(concat!(env!("OUT_DIR"), "/model.pk"));
+    pub static PROMPT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prompt.bin"));
+    pub static GOLDEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/golden.bin"));
+    pub static CANCELLED: &[u8; 4] = include_bytes!(concat!(env!("OUT_DIR"), "/status_cancelled.bin"));
+}
+
+/// ADR 0060 S2b gate `[P-smp-engine]`: the Conductor's own engine (`conductor_p0::core_job`, unchanged) runs on a
+/// worker core inside the hard-float engine image. ENGINE_LOAD verifies the signed HNX model against the key core 0
+/// trusts, admits it and opens a session in the worker's private arena; ENGINE_INFER answers the gate's prompt.
+/// Both workers' answers must equal, byte for byte, the answer the BUILD HOST computed with scalar kernels on
+/// another CPU architecture (the property `conductor_core::quorum` relies on). Core 0 follows the job through the
+/// progress word and stops one through the cancel word: a cancelled job returns nothing of an answer, and the next
+/// job gives the same bytes again. A model signed by another key is refused.
+#[cfg(feature = "smpboot")]
+fn p_smp_engine(a: &mut arch_aarch64::smp::Port, b: &mut arch_aarch64::smp::Port, freq: u64) {
+    use arch_aarch64::smp::{worker::job, Port, WINDOW, WINDOW_WORDS};
+    fn fail(why: &str) -> ! {
+        kprint!(" [P-smp-engine] FAIL {}\n", why);
+        arch_aarch64::semihosting::exit(1);
+    }
+    fn now() -> u64 {
+        let c: u64;
+        unsafe { core::arch::asm!("isb", "mrs {}, cntpct_el0", out(reg) c, options(nomem, nostack)) };
+        c
+    }
+    const HEADER: usize = 16;
+    let win = unsafe { &mut *core::ptr::addr_of_mut!(WINDOW) };
+    let base = win.0.as_ptr() as usize;
+    let bytes = unsafe { core::slice::from_raw_parts_mut(base as *mut u8, WINDOW_WORDS * 8) };
+    // The prompt and the load blocks live in the read-only window.
+    let prompt_off = 57_344usize;
+    bytes[prompt_off..prompt_off + engine_gate::PROMPT.len()].copy_from_slice(engine_gate::PROMPT);
+    let load_off = WINDOW_WORDS * 8 - 512;
+    let (_, isar0) = a.cpacr_isar0();
+    let dotprod = (isar0 >> 44) & 0xF >= 1;
+    let mk = |pk: &[u8; 32], simd: u32| job::EngineLoad {
+        prefix: engine_gate::PREFIX.as_ptr() as u64,
+        prefix_len: engine_gate::PREFIX.len() as u64,
+        bundle: engine_gate::BUNDLE.as_ptr() as u64,
+        bundle_len: engine_gate::BUNDLE.len() as u64,
+        pk: *pk,
+        model: [0x4D; 32],
+        simd,
+        max_answer: 1600,
+    };
+    let call = |p: &mut Port, id: u32, opc: u32, x: u64, y: u64, freq: u64| -> (job::Done, u32, u64) {
+        if !p.submit(job::Job { id, op: opc, a: x, b: y }) {
+            fail("job ring full");
+        }
+        p.doorbell();
+        let t = now();
+        let mut max_progress = 0u32;
+        loop {
+            max_progress = max_progress.max(p.progress());
+            if let Some(d) = p.poll() {
+                return (d, max_progress, now().wrapping_sub(t));
+            }
+            if now().wrapping_sub(t) > freq * 240 {
+                fail("an engine job did not complete in 240 s");
+            }
+        }
+    };
+    // 1) A model signed by another key is refused (worker b), and leaves nothing usable behind.
+    let mut wrong = *engine_gate::PK;
+    wrong[0] ^= 1;
+    unsafe { core::ptr::write_volatile((base + load_off) as *mut job::EngineLoad, mk(&wrong, 0)) };
+    let (d, _, _) = call(b, 1, job::op::ENGINE_LOAD, (base + load_off) as u64, 0, freq);
+    if d.status == job::status::OK {
+        fail("a model under the wrong key was admitted");
+    }
+    let (d2, _, _) = call(b, 2, job::op::ENGINE_INFER, prompt_off as u64, engine_gate::PROMPT.len() as u64, freq);
+    if d2.status == job::status::OK {
+        fail("a job ran after a refused load");
+    }
+    // 2) Load the signed model on both workers: a with the fastest kernels this CPU has, b with scalar kernels.
+    let simd_a = if dotprod { 1 } else { 0 };
+    for (p, simd, id) in [(&mut *a, simd_a, 3u32), (&mut *b, 0, 4)] {
+        unsafe { core::ptr::write_volatile((base + load_off) as *mut job::EngineLoad, mk(engine_gate::PK, simd)) };
+        let (d, _, _) = call(p, id, job::op::ENGINE_LOAD, (base + load_off) as u64, 0, freq);
+        if d.status != job::status::OK {
+            kprint!(" smp-engine: ENGINE_LOAD on core {} -> {:#x}\n", p.idx, d.status);
+            fail("the signed model was not admitted");
+        }
+    }
+    // 3) Both answer the prompt; each answer equals the build host's.
+    let golden = engine_gate::GOLDEN;
+    let mut ms = [0u64; 2];
+    let mut toks = [0u32; 2];
+    for (k, p) in [&mut *a, &mut *b].into_iter().enumerate() {
+        let (d, prog, dt) = call(p, 10 + k as u32, job::op::ENGINE_INFER, prompt_off as u64, engine_gate::PROMPT.len() as u64, freq);
+        let r = p.result().unwrap_or_else(|| fail("no result region"));
+        let n = d.value as usize;
+        if d.status != job::status::OK || n != golden.len() || &r[HEADER..HEADER + n] != golden {
+            kprint!(" smp-engine: core {} status {:#x} len {} (host {})\n", p.idx, d.status, n, golden.len());
+            fail("a worker's answer differs from the build host's");
+        }
+        toks[k] = u32::from_le_bytes([r[0], r[1], r[2], r[3]]);
+        if prog == 0 || prog > toks[k] {
+            fail("the progress word did not follow the job");
+        }
+        ms[k] = dt * 1000 / freq;
+    }
+    // 4) Cancel: core 0 stops a job in flight; nothing of an answer comes back; the next job is whole again.
+    //    A fast core can finish the job before core 0's cancel lands (the answer is then simply OK): retry with an
+    //    earlier cancel point, and finally with cancel set before the job starts (deterministic).
+    let r = a.result().unwrap_or_else(|| fail("no result region"));
+    let cancelled = u32::from_le_bytes(*engine_gate::CANCELLED);
+    let mut at_cancel = 0u32;
+    let mut mode = "";
+    for (attempt, when) in [20u32, 5, 1, 0].into_iter().enumerate() {
+        r.fill(0);
+        a.set_cancel(when == 0);
+        if !a.submit(job::Job { id: 20 + attempt as u32, op: job::op::ENGINE_INFER, a: prompt_off as u64, b: engine_gate::PROMPT.len() as u64 }) {
+            fail("job ring full");
+        }
+        a.doorbell();
+        let t = now();
+        let mut early = None;
+        if when > 0 {
+            while a.progress() < when {
+                if let Some(d) = a.poll() {
+                    early = Some(d); // the job finished before reaching the cancel point
+                    break;
+                }
+                if now().wrapping_sub(t) > freq * 240 {
+                    fail("the job never progressed");
+                }
+            }
+            at_cancel = a.progress();
+            a.set_cancel(true);
+        }
+        let d = match early {
+            Some(d) => d,
+            None => loop {
+                if let Some(d) = a.poll() {
+                    break d;
+                }
+                if now().wrapping_sub(t) > freq * 240 {
+                    fail("the cancelled job never returned");
+                }
+            },
+        };
+        if d.status == job::status::OK && when > 0 {
+            continue; // finished before the cancel landed: try an earlier point
+        }
+        if d.status != cancelled || d.value != 0 || r[HEADER..].iter().any(|x| *x != 0) {
+            kprint!(" smp-engine: cancel -> status {:#x} value {} (want {:#x}, 0)\n", d.status, d.value, cancelled);
+            fail("a cancelled job returned an answer");
+        }
+        mode = if when == 0 { "set before the job" } else { "mid-job" };
+        break;
+    }
+    if mode.is_empty() {
+        fail("no cancel took effect");
+    }
+    a.set_cancel(false);
+    let (d, _, _) = call(a, 21, job::op::ENGINE_INFER, prompt_off as u64, engine_gate::PROMPT.len() as u64, freq);
+    if d.status != job::status::OK || &r[HEADER..HEADER + d.value as usize] != golden {
+        fail("the job after a cancel was not the same answer");
+    }
+    kprint!(
+        " [P-smp-engine] PASS the Conductor's engine (conductor_p0::core_job, unchanged) on worker cores: signed HNX model verified + admitted in each worker's private arena (wrong key refused); {}-byte answers ({} and {} tokens) on core {} ({} kernels) and core {} (scalar) BYTE-IDENTICAL to the build host's x86 answer; progress followed; cancel ({} at token {}) returned no answer and the next job was identical again; {} ms and {} ms per answer (TCG, not a metal figure)\n",
+        golden.len(), toks[0], toks[1], a.idx, if dotprod { "NEON+DotProd" } else { "scalar" }, b.idx, mode, at_cancel, ms[0], ms[1]
     );
 }

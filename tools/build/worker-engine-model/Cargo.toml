@@ -1,0 +1,30 @@
+# ADR 0060 S2b — build-host tool for the [P-smp-engine] QEMU gate. Not shipped, never on a device.
+#
+# Builds the Conductor's tiny seeded Qwen3 test model as a signed HNX bundle (the same construction as
+# os/conductor/conductor-mock/tests/p0_worker.rs), runs `conductor_p0::core_job` on THIS host with scalar kernels,
+# and writes model + prompt + public key + the host's answer ("golden") for the kernel build to embed. The gate
+# then requires a worker core (aarch64, NEON) to produce the same bytes: cross-machine bit-exactness, the property
+# `conductor_core::quorum` relies on.
+#
+# Detached workspace; lives outside os/kernel because os/kernel/.cargo/config.toml forces the bare-metal target.
+[package]
+name = "worker-engine-model"
+version = "0.0.26"
+license = "AGPL-3.0-only"
+edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0063 G4)
+
+[workspace]
+
+[dependencies]
+conductor-core = { path = "../../../os/conductor/conductor-core", features = ["signer"] }
+conductor-p0 = { path = "../../../os/conductor/conductor-p0" }
+neuro-contract = { path = "../../../os/conductor/neuro-contract" }
+neuro-gguf = { path = "../../../os/conductor/neuro-gguf" }
+neuro-hnx = { path = "../../../os/conductor/neuro-hnx" }
+neuro-kernels = { path = "../../../os/conductor/neuro-kernels" }
+neuro-lm = { path = "../../../os/conductor/neuro-lm" }
+tok-build = { path = "../../../os/conductor/tok-build" }
+
+[profile.release]
+opt-level = 3
