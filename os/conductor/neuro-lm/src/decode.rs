@@ -222,12 +222,19 @@ impl<'m> ClosedRun<'m> {
         Ok(Self { machine, opts, st: Stats::default(), n_prompt: prompt.len(), pos: 0, hlen: prompt.len(), next: 0, n: 0, prefilled: false, done: false })
     }
 
-    /// As [`ClosedRun::new`] when the prompt is already the first `n_prompt` entries of `history`.
-    pub fn in_place(n_prompt: usize, machine: Machine<'m>, opts: Options, history: &[u32]) -> Result<Self, LmError> {
-        if n_prompt == 0 || history.len() < n_prompt.saturating_add(opts.max_new) {
+    /// As [`ClosedRun::new`] when the prompt is already the first `n_prompt` entries of `history`, and the KV
+    /// cache already holds its first `skip` positions (the same tokens, fed by an earlier job). At least the
+    /// last prompt token is always fed again: its logits choose the first token.
+    pub fn in_place(n_prompt: usize, skip: usize, machine: Machine<'m>, opts: Options, history: &[u32]) -> Result<Self, LmError> {
+        if n_prompt == 0 || skip >= n_prompt || history.len() < n_prompt.saturating_add(opts.max_new) {
             return Err(LmError::Work);
         }
-        Ok(Self { machine, opts, st: Stats::default(), n_prompt, pos: 0, hlen: n_prompt, next: 0, n: 0, prefilled: false, done: false })
+        Ok(Self { machine, opts, st: Stats::default(), n_prompt, pos: skip, hlen: n_prompt, next: 0, n: 0, prefilled: false, done: false })
+    }
+
+    /// Positions the KV cache holds for this run: `history[..fed()]` is what was fed.
+    pub fn fed(&self) -> usize {
+        self.pos
     }
 
     /// Tokens of the answer written to `out` so far.

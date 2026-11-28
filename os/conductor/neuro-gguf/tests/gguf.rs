@@ -625,6 +625,7 @@ mod container {
         wc: Vec<(i32, i32)>,
         we: Vec<i32>,
         ids: Vec<u32>,
+        prev: Vec<u32>,
     }
 
     fn owned(z: &p0::Sizes) -> Owned {
@@ -638,11 +639,12 @@ mod container {
             wc: vec![(0, 0); z.work_pairs],
             we: vec![0; z.work_i32],
             ids: vec![0; z.ids],
+            prev: vec![0; z.prev],
         }
     }
 
     fn mem<'a>(o: &'a mut Owned) -> Mem<'a> {
-        Mem { layers: layer_table(o.layers.len()), rope: &mut o.rope, kv_vals: &mut o.kv_vals, kv_shifts: &mut o.kv_shifts, work_i64: &mut o.wa, work_i8: &mut o.wb, work_pairs: &mut o.wc, work_i32: &mut o.we, ids: &mut o.ids, list: &mut [], out: &mut [] }
+        Mem { layers: layer_table(o.layers.len()), rope: &mut o.rope, kv_vals: &mut o.kv_vals, kv_shifts: &mut o.kv_shifts, work_i64: &mut o.wa, work_i8: &mut o.wb, work_pairs: &mut o.wc, work_i32: &mut o.we, ids: &mut o.ids, prev: &mut o.prev, list: &mut [], out: &mut [] }
     }
 
     /// A layer table of the borrow's lifetime. (A `&mut [Layer<'static>]` cannot be lent as `&mut [Layer<'a>]`:
@@ -710,17 +712,93 @@ mod container {
             assert_eq!(s.answer(), &want[..]);
             assert_eq!(passes, prefills + want.len());
             assert_eq!(s.advance(), Ok(Progress::Done));
-            // A second job on the same session and memory gives the same answer; a cancelled one stops.
+            // A second job with the same prompt: the KV cache already holds all of it but the last token, which
+            // is fed again for its logits. One prompt pass, and the same answer.
+            assert_eq!(s.reused(), 0, "the first job had nothing to reuse");
             s.start_ids(&prompt).unwrap();
-            for _ in 0..prefills + 1 {
-                s.advance().unwrap();
+            assert_eq!(s.reused(), prompt.len() - 1);
+            assert_eq!(s.advance(), Ok(Progress::Prefill { fed: 5, total: 5 }));
+            let mut again = vec![];
+            while let Progress::Token { id, last } = s.advance().unwrap() {
+                again.push(id);
+                if last {
+                    break;
+                }
             }
+            assert_eq!(again, want, "batch {batch}");
+            // A cancelled job stops and keeps what it produced.
+            s.start_ids(&prompt).unwrap();
+            s.advance().unwrap();
+            s.advance().unwrap();
             s.cancel();
             assert_eq!(s.advance(), Ok(Progress::Done));
             assert_eq!(s.answer(), &want[..1]);
             let mut text = [0u8; 64];
-            let n = s.answer_text(&mut text).unwrap();
-            assert_eq!(n, 1);
+            assert_eq!(s.answer_text(&mut text).unwrap(), 1);
+        }
+    }
+
+    #[test]
+    fn a_shared_prompt_prefix_is_not_fed_twice_and_the_answer_is_the_same() {
+        let file = qwen3_file_v("qwen3", tt::Q8_0, 64, 256);
+        let rope = turned_rope(CTX * 16);
+        let b = bundle_of(&file, &tok_blob(256), &rope_bytes(&rope));
+        let prefix = pack_as(&b, kind::LM_BUNDLE, manifest_for_bundle(&b, CTX).unwrap(), |_| {});
+        let mut region = vec![];
+        let l = load(&prefix, &b, &mut region);
+        let ad = admit(&l, &region).unwrap();
+        let z = p0::sizes(&ad.hparams, 2);
+        let run = |s: &mut Session, prompt: &[u32]| -> (Vec<u32>, usize, usize) {
+            s.start_ids(prompt).unwrap();
+            let (mut passes, mut out) = (0usize, vec![]);
+            loop {
+                match s.advance().unwrap() {
+                    Progress::Prefill { .. } => passes += 1,
+                    Progress::Token { id, last } => {
+                        out.push(id);
+                        if last {
+                            break;
+                        }
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+            (out, passes, s.reused())
+        };
+        // What a fresh session answers to each prompt.
+        let prompts: [&[u32]; 5] = [&[10, 20, 30, 40, 50], &[10, 20, 30, 41, 51, 61], &[10, 20, 30, 41], &[99, 20, 30], &[10, 20, 30, 41, 51, 61]];
+        let fresh: Vec<Vec<u32>> = prompts
+            .iter()
+            .map(|p| {
+                let mut o = owned(&z);
+                let mut s = Session::open(&ad, Simd::SCALAR, 2, mem(&mut o)).unwrap();
+                run(&mut s, p).0
+            })
+            .collect();
+        // One session, the jobs one after another: the same answers, with the shared leading tokens reused.
+        let mut o = owned(&z);
+        let mut s = Session::open(&ad, Simd::SCALAR, 2, mem(&mut o)).unwrap();
+        let want_reused = [0usize, 3, 3, 0, 0];
+        for (k, p) in prompts.iter().enumerate() {
+            let (out, passes, reused) = run(&mut s, p);
+            assert_eq!(out, fresh[k], "job {k}");
+            assert_eq!(reused, want_reused[k], "job {k}");
+            assert_eq!(passes, (p.len() - reused).div_ceil(2), "job {k}: only the tokens that were not reused are fed");
+        }
+        // The answer of a job is in the cache too: a prompt that continues it reuses those positions.
+        let mut longer = prompts[4].to_vec();
+        longer.push(fresh[4][0]);
+        assert_eq!(longer.len(), 7);
+        let (_, _, reused) = run(&mut s, &longer);
+        assert_eq!(reused, 6);
+        // Without the `prev` slice nothing is reused, and the answers are still the same.
+        let mut o = owned(&z);
+        let mut m = mem(&mut o);
+        m.prev = &mut [];
+        let mut s = Session::open(&ad, Simd::SCALAR, 2, m).unwrap();
+        for (k, p) in prompts.iter().enumerate() {
+            let (out, _, reused) = run(&mut s, p);
+            assert_eq!((out, reused), (fresh[k].clone(), 0), "job {k}");
         }
     }
 

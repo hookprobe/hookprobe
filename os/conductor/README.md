@@ -239,6 +239,20 @@ Apple M5 Pro with NEON, a test key, not a device number. What it shows that a de
   pass eight times longer. For a job that must be paced between passes, the plain mode has the tight bound.
   Whether drafts pay on a memory-bound A76 is still to be measured there.
 
+**Agreed with Neuro on this evidence (2026-11-28):**
+- **The admitted context is 2,048.** Neuro's largest measured prompts are about 700 tokens with answers of up to
+  700; this denser window is 1,115. A job whose prompt leaves less room than the answer bound is refused
+  (`start_closed`), never cut short. At 2,048 the session takes 247 MiB up front besides the weights.
+- **The prompt's text does not change** (the schema's place in it was trained and gated). What is the same in
+  every job is not fed twice: a session keeps the tokens its KV cache was computed from, and a job that starts
+  with the same tokens begins after them (`Session::reused`). Position i of the cache depends only on tokens
+  0 to i, so the answer is exactly that of a fresh session (tested on five consecutive jobs).
+
+Three of Neuro's windows, one after another in one session at context 2,048 (pruned head, no drafts): each answer
+valid under the contract, no carried text. The first job feeds 1,115 prompt tokens in 87 s; the next two find
+293 tokens already in the cache and feed 657 and 892 in 54 s and 80 s. Whole jobs: 120 s, 83 s, 113 s; an answer
+pass stays between 129 and 143 ms at the median and under 160 ms at worst.
+
 Not done: the packed layout in a session.
 
 Still host-side in this path: the packed layout is produced after load and should be the stored form. The

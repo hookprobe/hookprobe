@@ -51,6 +51,8 @@ pub struct Sizes {
     pub work_i32: usize,
     /// Token ids of the prompt and the answer: the context length.
     pub ids: usize,
+    /// The tokens the KV cache was computed from, kept between jobs (see [`Session::reused`]).
+    pub prev: usize,
 }
 
 impl Sizes {
@@ -66,6 +68,7 @@ impl Sizes {
             .saturating_add(self.work_pairs.saturating_mul(8))
             .saturating_add(self.work_i32.saturating_mul(4))
             .saturating_add(self.ids.saturating_mul(4))
+            .saturating_add(self.prev.saturating_mul(4))
     }
 }
 
@@ -74,7 +77,7 @@ pub fn sizes(h: &Hparams, batch: usize) -> Sizes {
     let d = &h.dims;
     let (kv_vals, kv_shifts) = d.kv_len();
     let (work_i64, work_i8, work_pairs, work_i32) = Work::lens(d, batch);
-    Sizes { layers: d.n_layers, rope: d.max_ctx.saturating_mul(d.head_dim / 2), kv_vals, kv_shifts, work_i64, work_i8, work_pairs, work_i32, ids: d.max_ctx }
+    Sizes { layers: d.n_layers, rope: d.max_ctx.saturating_mul(d.head_dim / 2), kv_vals, kv_shifts, work_i64, work_i8, work_pairs, work_i32, ids: d.max_ctx, prev: d.max_ctx }
 }
 
 /// The session's memory, assigned by the caller. Each slice may be longer than needed; none may be shorter.
@@ -88,6 +91,9 @@ pub struct Mem<'a> {
     pub work_pairs: &'a mut [(i32, i32)],
     pub work_i32: &'a mut [i32],
     pub ids: &'a mut [u32],
+    /// The tokens behind the KV cache, kept between jobs so a job that starts with the same tokens does not
+    /// feed them again. May be empty: then every job feeds its whole prompt.
+    pub prev: &'a mut [u32],
     /// For jobs under the answer contract: scratch for the allowed-token list (its length bounds head
     /// pruning) and the answer's tokens (its length bounds the answer). Both may be empty for plain jobs.
     pub list: &'a mut [u32],
@@ -112,6 +118,12 @@ pub struct Session<'a> {
     kv: Kv<'a>,
     work: Work<'a>,
     ids: &'a mut [u32],
+    prev: &'a mut [u32],
+    /// `prev[..prev_len]` is what the first `prev_len` positions of the KV cache were computed from.
+    prev_len: usize,
+    /// `ids` describes the KV cache (a job ran from it); false while `ids` is being rewritten.
+    ids_live: bool,
+    reused: usize,
     list: &'a mut [u32],
     out: &'a mut [u32],
     closed: Option<ClosedRun<'a>>,
@@ -135,7 +147,7 @@ impl<'a> Session<'a> {
         }
         let (g, h) = (&ad.gguf, &ad.hparams);
         let need = sizes(h, batch);
-        let Mem { layers, rope, kv_vals, kv_shifts, work_i64, work_i8, work_pairs, work_i32, ids, list, out } = mem;
+        let Mem { layers, rope, kv_vals, kv_shifts, work_i64, work_i8, work_pairs, work_i32, ids, prev, list, out } = mem;
         let layers = layers.get_mut(..need.layers).ok_or(P0Error::Mem)?;
         for (i, slot) in layers.iter_mut().enumerate() {
             *slot = layer(g, h, i).map_err(P0Error::Bind)?;
@@ -157,7 +169,7 @@ impl<'a> Session<'a> {
         let tok = Tokenizer::new(tables.tokenizer).map_err(|_| P0Error::NoTables)?;
         let stop = [tok.added_id(b"<|im_end|>"), tok.added_id(b"<|endoftext|>")];
         let ids = ids.get_mut(..need.ids).ok_or(P0Error::Mem)?;
-        Ok(Self { model, tok, kv, work, ids, list, out, closed: None, simd, batch, stop, n_prompt: 0, n: 0, fed: 0, next: None, done: true })
+        Ok(Self { model, tok, kv, work, ids, prev, prev_len: 0, ids_live: false, reused: 0, list, out, closed: None, simd, batch, stop, n_prompt: 0, n: 0, fed: 0, next: None, done: true })
     }
 
     pub fn tokenizer(&self) -> &Tokenizer<'a> {
@@ -170,12 +182,14 @@ impl<'a> Session<'a> {
 
     /// Begin a job from prompt text. `cps` and `buf` are scratch for normalisation. Returns the prompt's tokens.
     pub fn start(&mut self, prompt: &[u8], cps: &mut [u32], buf: &mut [u8]) -> Result<usize, P0Error> {
+        self.keep_prefix();
         let n = self.tok.encode_nfc(prompt, self.ids, cps, buf).map_err(|_| P0Error::Prompt)?;
         self.begin(n)
     }
 
     /// Begin a job from token ids.
     pub fn start_ids(&mut self, prompt: &[u32]) -> Result<usize, P0Error> {
+        self.keep_prefix();
         self.ids.get_mut(..prompt.len()).ok_or(P0Error::Prompt)?.copy_from_slice(prompt);
         self.begin(prompt.len())
     }
@@ -186,23 +200,58 @@ impl<'a> Session<'a> {
             self.done = true;
             return Err(P0Error::Prompt);
         }
-        (self.n_prompt, self.n, self.fed, self.next, self.done) = (n, n, 0, None, false);
+        // Position i of the KV cache depends only on tokens 0..=i, so the positions an earlier job computed
+        // from the same leading tokens stand. The last prompt token is fed again in any case: its logits choose
+        // the first token of the answer.
+        let same = self.ids.iter().zip(self.prev.get(..self.prev_len).unwrap_or(&[])).take_while(|(a, b)| a == b).count();
+        self.reused = same.min(n.saturating_sub(1));
+        // From here the cache follows this job: what stays valid of `prev` is the shared prefix.
+        self.prev_len = self.prev_len.min(self.reused);
+        (self.n_prompt, self.n, self.fed, self.next, self.done) = (n, n, self.reused, None, false);
         self.closed = None;
+        self.ids_live = true;
         Ok(n)
     }
 
+    /// Before `ids` is rewritten for a new job: remember which tokens the KV cache holds.
+    fn keep_prefix(&mut self) {
+        if !self.ids_live {
+            return;
+        }
+        self.ids_live = false;
+        let fed = self.closed.as_ref().map_or(self.fed, ClosedRun::fed);
+        let n = fed.min(self.prev.len()).min(self.ids.len());
+        if let (Some(dst), Some(src)) = (self.prev.get_mut(..n), self.ids.get(..n)) {
+            dst.copy_from_slice(src);
+            self.prev_len = n;
+        } else {
+            self.prev_len = 0;
+        }
+    }
+
+    /// Prompt tokens of the current job that were not fed again, because the KV cache already held them from
+    /// an earlier job with the same leading tokens (the system prompt, for instance). Exact: the answer is the
+    /// one a fresh session gives.
+    pub fn reused(&self) -> usize {
+        self.reused
+    }
+
     /// Begin a job whose answer must follow the contract: `machine` is the answer automaton for this request's
-    /// facts and aliases. The answer is at most `opts.max_new` tokens, and never more than `Mem::out` holds or
-    /// the context has room for.
+    /// facts and aliases. The answer is at most `opts.max_new` tokens; `Mem::out` must hold that many, and the
+    /// context must have room for them after the prompt, or the job is refused.
     pub fn start_closed(&mut self, prompt: &[u8], cps: &mut [u32], buf: &mut [u8], machine: Machine<'a>, opts: Options) -> Result<usize, P0Error> {
         let n = self.start(prompt, cps, buf)?;
-        let room = self.ids.len().saturating_sub(n).min(self.out.len());
-        let opts = Options { max_new: opts.max_new.min(room), ..opts };
-        if opts.max_new == 0 {
+        // The whole answer must fit: a job whose prompt leaves less room is refused, never cut short
+        // (agreed with Neuro: prompt + answer bound within the admitted context, or no job).
+        if opts.max_new == 0 || opts.max_new > self.out.len() {
             self.done = true;
             return Err(P0Error::Mem);
         }
-        self.closed = Some(ClosedRun::in_place(n, machine, opts, self.ids).map_err(P0Error::Engine)?);
+        if opts.max_new > self.ids.len().saturating_sub(n) {
+            self.done = true;
+            return Err(P0Error::Prompt);
+        }
+        self.closed = Some(ClosedRun::in_place(n, self.reused, machine, opts, self.ids).map_err(P0Error::Engine)?);
         Ok(n)
     }
 
