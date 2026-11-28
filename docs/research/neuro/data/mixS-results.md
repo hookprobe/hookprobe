@@ -25,6 +25,11 @@ McNemar ftSg vs ftMg on next+multi (reported): p = 0.33 (6 vs 11).
 
 ## What it means
 
+> **Note added 2026-11-28 (doc 54):** this run's training data had a generator defect. "Move on" golds named the
+> first step's target instead of the new step's (68 of 73 in gen v5, 154 of 162 in gen v6). The conclusion below
+> that multi-step training *itself* costs the first check is therefore confounded. Doc 54 re-runs doc 51 with only
+> that fixed.
+
 - **Keeping the first-check data byte-identical did not protect the first check.** ftS trained on exactly ftM's
   `next`, `alert`, `decoy` and `invisible` rows, and still lost 7 of 45 first checks (0.733 → 0.578).
 - **Together, docs 49 and 51 show the cause is the multi-step training itself.** Teaching the model to move on after a

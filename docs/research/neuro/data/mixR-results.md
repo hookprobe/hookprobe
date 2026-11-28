@@ -24,6 +24,11 @@ McNemar ftRg vs ftMg on next+multi (reported): p = 0.63 (7 vs 10).
 
 ## What it means
 
+> **Note added 2026-11-28 (doc 54):** this run's training data had a generator defect. "Move on" golds named the
+> first step's target instead of the new step's (68 of 73 in gen v5, 154 of 162 in gen v6). The conclusion below
+> that multi-step training *itself* costs the first check is therefore confounded. Doc 54 re-runs doc 51 with only
+> that fixed.
+
 - **The fix did what it targeted, at a cost elsewhere.** Multi-step accuracy doubled (0.114 → 0.229), but the first
   check fell (0.556 → 0.400). Neither change is significant on its own; the sum is slightly worse.
 - **Inv-blind v4 is harder than v3 for every model.** ftM scored 0.556 on next and 0.114 on multi, against 0.733
