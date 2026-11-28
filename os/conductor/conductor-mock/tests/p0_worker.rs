@@ -373,3 +373,93 @@ fn the_engine_op_for_a_worker_core() {
     assert_eq!(st, status::OK);
     assert_eq!(&result[HEADER..HEADER + value as usize], &out[..run.len]);
 }
+
+/// Moves a value that is used by one thread at a time into another thread.
+struct Handed<T>(T);
+// SAFETY: the value is built on the test thread and then used only by the one thread it is moved into.
+unsafe impl<T> Send for Handed<T> {}
+impl<T> Handed<T> {
+    fn take(self) -> T {
+        self.0
+    }
+}
+
+const PAINT: u64 = 0x5AA5_C33C_0FF0_9669;
+/// Stack below the caller that is left alone, so the painting and scanning code cannot overwrite itself.
+const PAINT_GAP: usize = 2048;
+
+/// Runs `f` and returns how many bytes of stack below this frame it touched (its high-water mark), by painting
+/// `span` bytes of unused stack first. A depth under `PAINT_GAP` is reported as `PAINT_GAP`.
+#[inline(never)]
+fn stack_used<R>(span: usize, f: impl FnOnce() -> R) -> (R, usize) {
+    let here = 0u8;
+    let top = (std::hint::black_box(&here) as *const u8 as usize) & !7;
+    let (lo, hi) = (top - span, top - PAINT_GAP);
+    let mut a = lo;
+    while a < hi {
+        // SAFETY: [lo, hi) lies inside this thread's own stack (the caller made it larger than `span`), below
+        // every live frame: nothing reads these words before the callee writes them.
+        unsafe { (a as *mut u64).write_volatile(PAINT) };
+        a += 8;
+    }
+    let r = f();
+    let mut a = lo;
+    // SAFETY: the same range, read back.
+    while a < hi && unsafe { (a as *const u64).read_volatile() } == PAINT {
+        a += 8;
+    }
+    assert!(a > lo, "the callee went deeper than the painted span");
+    (r, top - a)
+}
+
+#[inline(never)]
+fn burn(depth: usize) -> usize {
+    let a = std::hint::black_box([depth as u8; 1024]);
+    if depth == 0 {
+        a[0] as usize
+    } else {
+        burn(depth - 1) + std::hint::black_box(a[depth % 1024] as usize)
+    }
+}
+
+/// The engine job on a thread of its own. Returns the status, the answer and the stack the job used.
+fn job_with_stack_measured(simd: Simd) -> (u32, Vec<u8>, usize) {
+    use conductor_p0::core_job::{self, op, Link, HEADER};
+    use std::sync::atomic::{AtomicBool, AtomicU32};
+    let prompt = format!("{}F1 H1->R1:443 n=3 bytes=1200\nF2 H2->R1:22 n=1 bytes=90{}Assess this window.", neuro_contract::USER_HEAD, neuro_contract::USER_MID);
+    let handed = Handed((executor_on(MODEL, simd, Some(7)), vec![0u8; 8192], prompt.into_bytes()));
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(move || {
+            let (mut core, mut result, window) = handed.take();
+            let (progress, cancel) = (AtomicU32::new(0), AtomicBool::new(false));
+            let link = Link { window: &window, progress: &progress, cancel: &cancel };
+            let ((st, value), used) = stack_used(256 * 1024, || core_job::run(&mut core, op::ENGINE_INFER, 0, window.len() as u64, link, &mut result));
+            (st, result[HEADER..HEADER + value as usize].to_vec(), used)
+        })
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+/// The stack a worker core gets (`os/kernel/arch-aarch64/src/smp.rs`, `STACK_SIZE`), and what of it the engine
+/// job may use: the rest is for the worker executive's own frames and an exception entry.
+const WORKER_STACK: usize = 16 * 1024;
+const ENGINE_STACK_BUDGET: usize = 12 * 1024;
+
+#[test]
+fn the_engine_job_fits_a_worker_core_stack() {
+    // The measurement measures: nine frames of a little over 1 KiB each.
+    let (_, cal) = std::thread::Builder::new().stack_size(1 << 20).spawn(|| stack_used(256 * 1024, || burn(8))).unwrap().join().unwrap();
+    assert!(cal >= 9 * 1024, "the stack measurement saw only {cal} bytes of a 9 KiB recursion");
+    let (st, fast, used_fast) = job_with_stack_measured(fastest());
+    let (st2, scalar, used_scalar) = job_with_stack_measured(Simd::SCALAR);
+    assert_eq!((st, st2), (0, 0));
+    assert_eq!(fast, scalar, "the same answer on both kernel sets");
+    println!("engine job stack: {used_fast} bytes (fastest kernels), {used_scalar} bytes (scalar); worker stack {WORKER_STACK}");
+    // The bound is checked where it means something: an optimised build for the device's architecture. An
+    // unoptimised build uses several times more and is not what a device runs.
+    if cfg!(all(target_arch = "aarch64", not(debug_assertions))) {
+        assert!(used_fast.max(used_scalar) <= ENGINE_STACK_BUDGET, "the engine job used {used_fast}/{used_scalar} bytes of stack; budget {ENGINE_STACK_BUDGET} of {WORKER_STACK}");
+    }
+}
