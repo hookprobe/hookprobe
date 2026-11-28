@@ -178,7 +178,7 @@ pub fn policy_p1() -> OwnerPolicy {
 }
 
 pub fn env_with(policy: OwnerPolicy, worker_pk: [u8; 32], tier: Tier) -> Env {
-    let mut workers = [WorkerInfo::EMPTY; 6];
+    let mut workers = [WorkerInfo::EMPTY; Tier::SLOTS];
     workers[tier as usize] = WorkerInfo { present: true, public_key: worker_pk, egress_policy_id: EGRESS, available: true, idle: true };
     Env { device_pk: public_key(&DEVICE_SEED), policy, workers }
 }

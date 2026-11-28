@@ -151,6 +151,8 @@ unchanged, so the contract still holds (the drift gate passes).
 
 **HomePods.**
 - **ADR 0070 is now the WebUSB flasher.** The Conductor ADR, planned as 0070, becomes **0071** (next free).
+- *Superseded 2026-11-26 (ADR 0071 amendment): the external-API tier described in this item is removed, in the
+  ADR and in `conductor-core` (`Tier` has P1–P3 only). The item is kept as the record of 2026-11-24.*
 - **x86 de-Linux plan §4a(a): "Claude as heqk's on-device AI".** It plans an EL0 planner excursion that runs
   the tool-use loop over HTTPS, with a sealed API key, an audit record of exactly what evidence left the device,
   and a BYO endpoint. That **is the Conductor's P5 tier** (external API under an owner data-sharing policy).
