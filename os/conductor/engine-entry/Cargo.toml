@@ -1,0 +1,16 @@
+# The engine job as one call over raw regions: what a worker-core engine image links (ADR 0060 S2b).
+[package]
+name = "conductor-engine-entry"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+conductor-p0 = { path = "../conductor-p0" }
+neuro-gguf = { path = "../neuro-gguf" }
+neuro-lm = { path = "../neuro-lm" }
+neuro-kernels = { path = "../neuro-kernels" }

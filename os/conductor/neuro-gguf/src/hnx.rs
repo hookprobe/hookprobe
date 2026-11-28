@@ -105,6 +105,19 @@ pub fn admit<'r>(loader: &Loader, region: &'r [u8]) -> Result<Admitted<'r>, Admi
     if (Manifest { required_features: declared.required_features, ..truth }) != declared {
         return Err(AdmitError::ManifestMismatch);
     }
+    bind(file, bundle, max_ctx)
+}
+
+/// A bundle that was already admitted, opened again from its bytes alone: for a compute core that is handed the
+/// verified payload as a read-only region and has no container state (ADR 0060 S2). The signature, the segment
+/// hashes and the manifest are the admitting core's work ([`admit`]); this repeats only the checks that keep
+/// the engine inside the region: the layout, the model's structure, and that the tables fit the model.
+pub fn reopen_bundle(payload: &[u8], max_ctx: usize) -> Result<Admitted<'_>, AdmitError> {
+    let b = Bundle::open(payload).map_err(AdmitError::Bundle)?;
+    bind(b.gguf, Some(b), max_ctx)
+}
+
+fn bind<'r>(file: &'r [u8], bundle: Option<Bundle<'r>>, max_ctx: usize) -> Result<Admitted<'r>, AdmitError> {
     let gguf = Gguf::open(file).map_err(AdmitError::Gguf)?;
     let hparams = hparams(&gguf, max_ctx).map_err(AdmitError::Bind)?;
     if let Some(b) = &bundle {

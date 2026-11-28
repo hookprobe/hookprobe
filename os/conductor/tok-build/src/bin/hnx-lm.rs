@@ -18,6 +18,9 @@
 //!   hnx-lm job --hnx MODEL.hnx --pub PUBKEY.hex --context WINDOW.txt [--context WINDOW2.txt]...
 //!         one job per file; the file is the window context Neuro's builder (or `conductor_core::window`) wrote.
 //!
+//!   hnx-lm entry --hnx MODEL.hnx --pub PUBKEY.hex --context WINDOW.txt [--scalar]
+//!         the engine job as a worker core runs it: model region, one arena, a window; compared with the node's bytes.
+//!
 //! `job` is the whole Conductor path around the engine, on this host: the device harness builds the request from
 //! the job's evidence, the (mock) kernel signs a capability, the worker (`conductor-worker`) checks it, makes its
 //! replay mark durable and runs the engine through `conductor-p0`, signs the result, and the device's verifier
@@ -174,6 +177,11 @@ fn simd(scalar: bool) -> Simd {
 
 /// What a heqk server does before any job: open, verify, read in place, admit.
 fn admitted(args: &[String]) -> neuro_gguf::hnx::Admitted<'static> {
+    loaded(args).0
+}
+
+/// The admitted model and the verified payload it lies in (what a compute core is handed as its model region).
+fn loaded(args: &[String]) -> (neuro_gguf::hnx::Admitted<'static>, &'static [u8]) {
     let path = need(args, "--hnx");
     let host = Host { pk: ed25519_compact::PublicKey::from_slice(&hex32(&need(args, "--pub"))).unwrap_or_else(|_| die("--pub")), licences: vec![arg(args, "--allow-licence").unwrap_or_else(|| "Apache-2.0".into())] };
     let mut f = std::fs::File::open(&path).unwrap_or_else(|e| die(&format!("open {path}: {e}")));
@@ -218,7 +226,72 @@ fn admitted(args: &[String]) -> neuro_gguf::hnx::Admitted<'static> {
     // 5: the manifest must be what the file needs; then the engine binds the verified bytes.
     let region: &'static [u8] = region.leak();
     let ad = admit(&loader, region).unwrap_or_else(|e| die(&format!("admission refused: {e:?}")));
-    ad
+    let payload = loader.finish_lm(region).unwrap_or_else(|e| die(&format!("payload: {e:?}")));
+    (ad, payload)
+}
+
+/// The engine job as a worker core will run it (`conductor_engine_entry`, ADR 0060 S2b): the verified payload as
+/// a read-only region, one byte region for all of the engine's memory, the prompt in a window. Compared, byte for
+/// byte, with the same prompt on the session a node keeps.
+fn entry(args: &[String]) {
+    use conductor_engine_entry::{self as ee, Limits};
+    use conductor_p0::core_job::{op, status, Link, HEADER};
+    use conductor_p0::P0Executor;
+    use neuro_contract::{USER_HEAD, USER_MID};
+    use neuro_gguf::p0::{self, Mem, Session};
+    use std::sync::atomic::{AtomicBool, AtomicU32};
+    let path = need(args, "--context");
+    let context = String::from_utf8(std::fs::read(&path).unwrap_or_else(|e| die(&format!("read {path}: {e}")))).unwrap_or_else(|_| die("the context is not UTF-8"));
+    let prompt = format!("{USER_HEAD}{}{USER_MID}Assess this window.", context.trim_end_matches('\n')).into_bytes();
+    let (ad, payload) = loaded(args);
+    let sd = simd(args.iter().any(|a| a == "--scalar"));
+    let limits = Limits { max_ctx: u32::try_from(ad.hparams.dims.max_ctx).unwrap_or_else(|_| die("context")), max_answer: 0 };
+
+    // The worker core's form.
+    let t = Instant::now();
+    let need_bytes = ee::arena_need(payload, limits).unwrap_or_else(|s| die(&format!("arena_need refused: {s:#x}")));
+    let reopen = t.elapsed();
+    let mut arena = vec![0xEEu8; need_bytes as usize];
+    let mut result = vec![0u8; HEADER + 8192];
+    let (progress, cancel) = (AtomicU32::new(0), AtomicBool::new(false));
+    let t = Instant::now();
+    let (st, value) = ee::run(ee::Job { model: payload, arena: &mut arena, limits, simd: sd, op: op::ENGINE_INFER, a: 0, b: prompt.len() as u64, link: Link { window: &prompt, progress: &progress, cancel: &cancel }, result: &mut result });
+    let secs = t.elapsed().as_secs_f64();
+    println!("\nentry: model region {} bytes (read-only), arena {:.1} MiB (one byte region, {}), reading the model's structure again {:?}", payload.len(), need_bytes as f64 / 1048576.0, sd.name(), reopen);
+    if st != status::OK {
+        die(&format!("entry: status {st:#x}"));
+    }
+    let word = |i: usize| u32::from_le_bytes(result[i * 4..i * 4 + 4].try_into().unwrap_or([0; 4]));
+    let answer = &result[HEADER..HEADER + value as usize];
+    println!("entry: {secs:.1} s; prompt {} bytes; {} prefill passes, {} answer passes, {} answer tokens; answer {} bytes", prompt.len(), word(1), word(2), word(0), answer.len());
+
+    // The node's form: typed memory, a session that stays open.
+    let z = p0::sizes(&ad.hparams, MAX_BATCH);
+    let mem = Mem {
+        layers: vec![Layer::EMPTY; z.layers].leak(),
+        rope: vec![(0, 0); z.rope].leak(),
+        kv_vals: vec![0; z.kv_vals].leak(),
+        kv_shifts: vec![0; z.kv_shifts].leak(),
+        work_i64: vec![0; z.work_i64].leak(),
+        work_i8: vec![0; z.work_i8].leak(),
+        work_pairs: vec![(0, 0); z.work_pairs].leak(),
+        work_i32: vec![0; z.work_i32].leak(),
+        ids: vec![0; z.ids].leak(),
+        prev: vec![0; z.prev].leak(),
+        list: vec![0; 8192].leak(),
+        out: vec![0; conductor_p0::MAX_ANSWER_TOKENS].leak(),
+    };
+    let ad: &'static neuro_gguf::hnx::Admitted<'static> = Box::leak(Box::new(ad));
+    let session = Session::open(ad, sd, MAX_BATCH, mem).unwrap_or_else(|e| die(&format!("session: {e:?}")));
+    let mut node = P0Executor::new(session, [0; 32], vec![0u32; 1 << 16].leak(), vec![0u8; 1 << 16].leak(), || 0);
+    let mut out = vec![0u8; 8192];
+    let t = Instant::now();
+    let run = node.infer(&prompt, &mut out, &mut |_| true).unwrap_or_else(|c| die(&format!("node: refused {c:#x}")));
+    println!("node:  {:.1} s; answer {} bytes", t.elapsed().as_secs_f64(), run.len);
+    if answer != &out[..run.len] {
+        die("the entry and the node gave different bytes");
+    }
+    println!("the same bytes from both\nanswer: {}", String::from_utf8_lossy(answer));
 }
 
 fn run(args: &[String]) {
@@ -556,6 +629,7 @@ fn main() {
         Some("run") => run(&args),
         Some("triage") => triage(&args),
         Some("job") => job(&args),
-        _ => die("usage: hnx-lm pack|run|triage|job …; see the top of hnx-lm.rs"),
+        Some("entry") => entry(&args),
+        _ => die("usage: hnx-lm pack|run|triage|job|entry …; see the top of hnx-lm.rs"),
     }
 }
