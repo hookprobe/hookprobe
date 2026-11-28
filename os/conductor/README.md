@@ -26,8 +26,10 @@ Why it matters to the product:
 - **Speed where it can be had.** A token is limited by memory bandwidth, so the gains are bytes not read
   (a packed layout, a pruned output head, verified drafts) and calls not made (rules decide, the model
   explains). None of that needs another runtime; all of it is measured below.
-- **The same authority when the model is elsewhere.** A large model on the owner's workstation or in a cloud is
-  directed under a capability and a network lease. The device never becomes a client of someone else's stack.
+- **The same authority when the model is elsewhere.** Compute beyond the device comes from other heqk nodes
+  only (the owner's, a fleet's, a heqk node in a cloud), each directed under a capability and a network lease.
+  There is no external model and no API tier (operator decision 2026-11-26, ADR 0071 amendment), so this engine
+  is the product's only engine.
 
 What is decided and not reopened here: no tensor work in the kernel; FP/SIMD for one isolated server only
 (ADR 0072); greedy decoding under Neuro's grammar at temperature 0; the kernel's own crypto crates; no
@@ -144,7 +146,7 @@ The container now carries a language model too, so there is one way a model reac
 - **Admission cannot be lied to:** `neuro_gguf::hnx::admit` opens the verified file and recomputes the manifest
   from it (context, KV state, scratch arena, tensor bytes). A signed header that under-declares any of them is
   refused. The build side uses the same function.
-- **Build host tool:** `tok-build --bin hnx-lm`: `pack` wraps a GGUF file and signs it; `run` does what a heqk
+- **Build host tool:** `tok-build --bin hnx-lm`: `pack` wraps a GGUF file (as a bundle, below) and signs it; `run` does what a heqk
   server would: verify, reserve, read and verify in place, admit, bind, answer.
 
 | Gate | Result |
@@ -161,10 +163,28 @@ context 4,096 (KV state 472 MB, arena 25 MB); asked the capital of France, it an
 habit. 0.06 s per token in the GGUF layout and 0.03 s in the packed layout, prompt included. One changed
 weight byte: segment 429 refused and the region wiped. A changed header byte or another key: refused at open.
 
-Still host-side in this path, to move into the container or the image: the tokenizer tables and the RoPE table
-(built here from the GGUF at load; a device carries them precomputed), and the packed layout (packed here
-after load; it should be the stored form). The signature is Ed25519 with a test key; release signing and the
-hybrid scheme are the platform's.
+**The bundle (payload kind `LM_BUNDLE`, `neuro_gguf::bundle`): nothing derived on the device.** A GGUF file is
+not enough on a device with no float and no build tools: the tokenizer needs its Unicode and merge tables and
+the decoder needs the RoPE table, which takes trigonometry. The bundle carries both beside the model under the
+same signature: three sections in a fixed order (model, tokenizer tables, RoPE pairs), each starting on a
+64-byte boundary. Admission checks that the tables fit the model (RoPE rows for the context and head
+size; tokenizer tables that parse and have the model's vocabulary). The tokenizer is read where it lies; the
+RoPE table is copied into the arena admission already counts. `hnx-lm pack` builds a bundle by default.
+
+| Gate | Result |
+|---|---|
+| A signed bundle loads in place, is admitted, and the engine runs from its tables: same tokens as from the plain file with the same table | pass |
+| RoPE rows for another context; a tokenizer with another vocabulary; bytes that are not a tokenizer; an under-declared manifest | refused |
+| Layout: wrong magic, version, section count, kind or order; a non-zero reserved field; a non-canonical offset; a wrong length; bytes after the last section; non-zero padding; a RoPE table that is not whole pairs | refused |
+| A bundle labelled as a bare GGUF payload, and the reverse | refused |
+
+ftFg as a bundle on the build host: the tokenizer tables add 4.07 MB and the RoPE table 2.10 MB to 1.83 GB;
+878 segments; read and verified in place in 3.2 s; the run uses no build-host helper and answers `Paris` at
+0.05 s per token (GGUF layout) and 0.03 s (packed).
+
+Still host-side in this path: the packed layout is produced after load and should be the stored form. The
+signature is Ed25519 with a test key; release signing and the hybrid scheme are the platform's. The tables are
+covered by the signature and are not re-derived: the device cannot compute a cosine.
 
 ## neuro-lm: the language-model pieces
 
