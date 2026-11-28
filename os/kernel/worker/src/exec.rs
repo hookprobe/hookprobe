@@ -51,6 +51,17 @@ pub fn execute(j: &Job, window_base: u64, window_len: u64) -> Done {
             };
             (status::UNKNOWN_OP, 0)
         }
+        #[cfg(all(feature = "mmu-probe", target_arch = "aarch64"))]
+        op::PROBE_READ => {
+            // SAFETY: deliberately unchecked; the worker's page tables decide (a fault parks this core).
+            (status::OK, unsafe { core::ptr::read_volatile(j.a as usize as *const u64) })
+        }
+        #[cfg(all(feature = "mmu-probe", target_arch = "aarch64"))]
+        op::PROBE_WRITE => {
+            // SAFETY: as above.
+            unsafe { core::ptr::write_volatile(j.a as usize as *mut u64, j.b) };
+            (status::OK, 0)
+        }
         _ => (status::UNKNOWN_OP, 0),
     };
     done(j, st, value)

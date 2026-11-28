@@ -17336,7 +17336,7 @@ fn p_smp_boot() {
     }
     let cores = 1 + alive + contained as u32;
     if ok && contained && alive >= 1 {
-        kprint!(" [P-smp-boot] PASS cores={} (core 0 kernel + {} workers at EL1 on shared stage-1, challenge answered; 1 worker fault contained)\n", cores, alive);
+        kprint!(" [P-smp-boot] PASS cores={} (core 0 kernel + {} workers at EL1 on private stage-1 tables, challenge answered; 1 worker fault contained)\n", cores, alive);
         p_smp_worker(&mut ports);
     } else {
         kprint!(" [P-smp-boot] FAIL cores={} alive={} contained={} (needs QEMU -smp >= 3)\n", cores, alive, contained);
@@ -17470,20 +17470,33 @@ fn p_smp_worker(ports: &mut [Option<arch_aarch64::smp::Port>]) {
         Some(d) if d.status == job::status::OUT_OF_WINDOW => {}
         _ => fail("an out-of-window job was not refused"),
     }
-    // Containment: worker b faults; worker a keeps serving.
-    let bi = b.idx;
-    let _ = b.submit(job::Job { id: 2, op: job::op::FAULT, a: 0, b: 0 });
-    b.doorbell();
-    let t = now();
-    let blk = smp::block(bi);
-    while blk.status.load(Ordering::Acquire) != ST_FAULT {
-        if now().wrapping_sub(t) > freq * 2 {
-            fail("the faulting worker did not report");
-        }
+    // S1b, positive control: the UNCHECKED probe read works inside the window (mapped read-only).
+    let win_addr = base + 8 * 100;
+    match probe(a, job::Job { id: 3, op: job::op::PROBE_READ, a: win_addr, b: 0 }, freq) {
+        Some(d) if d.status == job::status::OK && d.value == win[100] => {}
+        _ => fail("an unchecked read inside the window did not return the window's value"),
     }
-    let esr = blk.esr.load(Ordering::Relaxed);
-    if (esr >> 26) != 0x3c || (esr & 0xffff) != 0x77 {
-        fail("wrong fault recorded");
+    // Wait until worker `i` reports FAULT; return (ESR, FAR).
+    fn fault_of(i: usize, freq: u64) -> (u64, u64) {
+        let blk = arch_aarch64::smp::block(i);
+        let t = now();
+        while blk.status.load(Ordering::Acquire) != ST_FAULT {
+            if now().wrapping_sub(t) > freq * 2 {
+                fail("the faulting worker did not report");
+            }
+        }
+        (blk.esr.load(Ordering::Relaxed), blk.far.load(Ordering::Relaxed))
+    }
+    // S1b, hardware boundary: an UNCHECKED read of kernel .data is stopped by the worker's own page
+    // tables (data abort, translation fault), and the fault is contained on that core.
+    let bi = b.idx;
+    let _ = b.submit(job::Job { id: 2, op: job::op::PROBE_READ, a: kernel_addr, b: 0 });
+    b.doorbell();
+    let (esr, far) = fault_of(bi, freq);
+    let dfsc = esr & 0x3f;
+    if (esr >> 26) != 0x25 || !(0x04..=0x07).contains(&dfsc) || far != kernel_addr {
+        kprint!(" smp-worker: read fault ESR {:#x} FAR {:#x} (want EC 0x25, translation, FAR {:#x})\n", esr, far, kernel_addr);
+        fail("an unchecked read of kernel data was not stopped by the worker's tables");
     }
     for n in 0..256u32 {
         match probe(a, job::Job { id: n, op: job::op::ECHO, a: n as u64, b: 0xF0F0 }, freq) {
@@ -17491,12 +17504,26 @@ fn p_smp_worker(ports: &mut [Option<arch_aarch64::smp::Port>]) {
             _ => fail("a surviving worker stopped serving after another worker faulted"),
         }
     }
+    // S1b, read-only window: an UNCHECKED write is a permission fault, and the window is unchanged.
+    let ai = a.idx;
+    let before = win[100];
+    let _ = a.submit(job::Job { id: 4, op: job::op::PROBE_WRITE, a: win_addr, b: 0xBAD });
+    a.doorbell();
+    let (wesr, wfar) = fault_of(ai, freq);
+    let wdfsc = wesr & 0x3f;
+    let after = unsafe { core::ptr::read_volatile(win_addr as *const u64) };
+    if (wesr >> 26) != 0x25 || !(0x0c..=0x0f).contains(&wdfsc) || (wesr >> 6) & 1 != 1 || wfar != win_addr || after != before {
+        kprint!(" smp-worker: write fault ESR {:#x} FAR {:#x} window {:#x}->{:#x}\n", wesr, wfar, before, after);
+        fail("an unchecked write to the read-only window was not stopped by the worker's tables");
+    }
+    let _ = KERNEL_PROBE_WORD.load(Ordering::Relaxed);
     kprint!(
-        " [P-smp-worker] PASS {} workers served {} jobs in parallel over SPSC rings + SGI doorbell, all equal to core 0's own results ({} jobs/s emulated, not a metal figure); out-of-window job refused; core {} faulted (ESR {:#x}) and was contained, core {} kept serving\n",
-        live, total, total * freq / dt, bi, esr, a.idx
+        " [P-smp-worker] PASS {} workers served {} jobs in parallel over SPSC rings + SGI doorbell, all equal to core 0's own results ({} jobs/s emulated, not a metal figure); each worker on PRIVATE page tables ({} tables total): out-of-window job refused in software, an unchecked read of kernel .data stopped by the MMU on core {} (ESR {:#x} translation fault, FAR = the kernel word) and contained while core {} kept serving, an unchecked write to the read-only window stopped by the MMU on core {} (ESR {:#x} permission fault, window unchanged)\n",
+        live, total, total * freq / dt, smp::tables_used(), bi, esr, ai, ai, wesr
     );
 }
 
-/// A kernel word outside every worker's window: `[P-smp-worker]` asks a worker to read it and expects a refusal.
+/// A kernel word in writable .data (never mapped for workers; .rodata is mapped read-only, so the word
+/// must not live there): `[P-smp-worker]` expects a software refusal, then an MMU fault.
 #[cfg(feature = "smpboot")]
-static KERNEL_PROBE_WORD: u64 = 0x5EC_2E7;
+static KERNEL_PROBE_WORD: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0x5EC_2E7);

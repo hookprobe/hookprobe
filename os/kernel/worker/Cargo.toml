@@ -9,3 +9,8 @@ description = "ADR 0060 worker-core executive: runs on cores 1..n, never runs ke
 # Deliberately NO dependencies (not even `hal`): the crate boundary is the proof that worker cores share no
 # mutable state with the kernel except the rings and the boot block handed to them (ADR 0060 amendment W1).
 [dependencies]
+
+[features]
+# QEMU gate only (kernel `smpboot`): raw read/write ops with NO window check, used to prove that the worker's
+# private page tables, not the software check, stop it reaching kernel memory or writing the read-only window.
+mmu-probe = []

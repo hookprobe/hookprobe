@@ -174,7 +174,7 @@ cloud = ["arch-aarch64/gicv3", "arch-aarch64/pci", "arch-aarch64/smccc"]
 # ADR 0060 amendment S0a + its [P-smp-boot] QEMU gate: core 0 starts cores 1..n over PSCI HVC; each comes up at
 # EL1 on the kernel's translation table, answers a challenge and parks (one deliberately faults: contained).
 # Refused with cm5 (HBoot owns secondary start there, stage S0b).
-smpboot = ["arch-aarch64/smp"]
+smpboot = ["arch-aarch64/smp", "arch-aarch64/smp-probe"]
 # Launched by HBoot (heqk-boot): link at 0x1000000, enter at EL1 with console
 # already up, consume the typed BootInfo handoff.
 hboot = ["cm5", "arch-aarch64/hboot"]
