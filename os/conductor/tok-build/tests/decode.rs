@@ -229,6 +229,70 @@ fn decode(m: &Model, tok: &Tokenizer, prompt: &[u32], ctx: &str, opts: Options, 
     (out, st)
 }
 
+/// The same answer, one forward pass per call: what a worker core drives.
+fn decode_by_passes(m: &Model, tok: &Tokenizer, prompt: &[u32], ctx: &str, opts: Options, batch: usize) -> (Vec<u32>, Stats, usize) {
+    use neuro_lm::decode::{ClosedRun, Pass};
+    let d = m.dims;
+    let (mut f, mut e) = (IdList::new(), IdList::new());
+    context_ids(ctx.as_bytes(), &mut f, &mut e).unwrap();
+    let eog = [tok.added_id(b"<|im_end|>").unwrap()];
+    let mut s = buffers(&d, batch);
+    let mut kv = Kv { vals: &mut s.vals, shifts: &mut s.shifts };
+    let mut w = Work::new(&d, batch, &mut s.a, &mut s.b, &mut s.c, &mut s.e).unwrap();
+    let mut hist = vec![0u32; prompt.len() + opts.max_new];
+    let mut list = vec![0u32; 4096];
+    let mut out = vec![0u32; opts.max_new];
+    let machine = Machine::new(Allowed { facts: &f, entities: &e, closed: true });
+    let mut run = ClosedRun::new(prompt, machine, opts, &mut hist).unwrap();
+    let (mut calls, mut fed, mut seen) = (0usize, 0usize, 0usize);
+    loop {
+        calls += 1;
+        match run.advance(m, Simd::SCALAR, tok, &eog, &mut kv, &mut w, &mut hist, &mut list, &mut out).unwrap() {
+            Pass::Prefill { fed: now, total } => {
+                assert!(now > fed && now <= total && total == prompt.len() && seen == 0, "the prompt goes in first, in order");
+                fed = now;
+            }
+            Pass::Tokens(k) => {
+                assert!(k >= 1 && fed == prompt.len());
+                seen += k;
+                assert_eq!(run.tokens(), seen, "the caller can read the answer so far after every pass");
+            }
+            Pass::Done => break,
+        }
+    }
+    assert!(run.done());
+    let n = run.tokens();
+    out.truncate(n);
+    (out, run.stats(), calls)
+}
+
+#[test]
+fn constrained_decoding_one_pass_at_a_time_gives_the_same_answer() {
+    let tb = tokenizer();
+    let tok = Tokenizer::new(&tb).unwrap();
+    let vocab = tok.vocab();
+    let rope = neuro_build::rope_neox_table(1024, 16, 1e6);
+    let bytes = build(vocab, 100);
+    let m = model(&bytes, vocab, &rope, false);
+    let ctx = "F1 H1 -> R3 tcp/443 n=40\nF2 H1 -> R4 udp/53 n=3\nF3 dns D2 newly registered";
+    let prompt_text = format!("CONTEXT (untrusted):\n<<<\n{ctx}\n>>>\n\nQUESTION: why? {EXAMPLE}");
+    let mut ptoks = vec![0u32; 4096];
+    let np = tok.encode(prompt_text.as_bytes(), &mut ptoks).unwrap();
+    let prompt = &ptoks[..np];
+    let base = Options { prune_max: 0, draft_max: 0, max_new: 1600 };
+    for (opts, batch) in [(base, 1usize), (Options { prune_max: 4096, ..base }, 1), (Options { draft_max: 7, ..base }, 8), (Options { prune_max: 4096, draft_max: 7, ..base }, 8), (Options { max_new: 40, ..base }, 4)] {
+        let (whole, st) = decode(&m, &tok, prompt, ctx, opts, batch);
+        let (stepped, st2, calls) = decode_by_passes(&m, &tok, prompt, ctx, opts, batch);
+        assert_eq!(stepped, whole, "{opts:?} batch {batch}");
+        assert_eq!(st2, st);
+        // Each call makes at most one pass over the weights: the prompt batches, the answer's passes, then at
+        // most one call that only commits the last token, and the call that reports the end.
+        let passes = (st.prefill_passes + st.passes) as usize;
+        assert!(calls == passes + 1 || calls == passes + 2, "{calls} calls for {passes} passes");
+        assert_eq!(st.prefill_passes as usize, np.div_ceil(batch));
+    }
+}
+
 #[test]
 fn constrained_decoding_is_valid_and_exactly_the_same_with_speed_ups() {
     let tb = tokenizer();

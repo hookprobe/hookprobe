@@ -210,8 +210,11 @@ The context is the lever on memory: Neuro's cards are budgeted at 512 tokens, so
 1,024 with room for the system prompt and the answer only if that prompt is short; the right cap is to be set
 with Neuro, not assumed.
 
-Not in the session yet: decoding under the answer grammar one pass at a time (`neuro_lm::decode` runs a whole
-answer per call), and the packed layout.
+Decoding under the answer grammar is resumable too: `neuro_lm::decode::ClosedRun` makes at most one pass per
+call, with the pruned head and verified drafts, and `generate_closed` is now that run looped to the end, so
+every earlier test of it stands (`tok-build/tests/decode.rs` also drives it pass by pass: same tokens and
+counters in five option sets). Not done: `p0::Session` does not yet wrap `ClosedRun` (it decodes greedily
+without the grammar), and neither uses the packed layout.
 
 Still host-side in this path: the packed layout is produced after load and should be the stored form. The
 signature is Ed25519 with a test key; release signing and the hybrid scheme are the platform's. The tables are

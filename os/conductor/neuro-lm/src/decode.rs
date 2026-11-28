@@ -185,99 +185,159 @@ fn draft(m: &Machine, tok: &Tokenizer, eog: &[u32], history: &[u32], max: usize,
     k
 }
 
-/// Feed `prompt`, then generate an answer under the contract. `history` must hold at least
-/// `prompt.len() + opts.max_new` entries (prompt and answer, for n-gram drafts); `list` is scratch for the
-/// allowed-token list (its length bounds pruning). Writes the generated ids to `out`; returns their count.
-#[allow(clippy::too_many_arguments)]
-pub fn generate_closed(model: &Model, simd: Simd, tok: &Tokenizer, prompt: &[u32], eog: &[u32], mut machine: Machine, kv: &mut Kv, work: &mut Work, history: &mut [u32], list: &mut [u32], opts: Options, out: &mut [u32]) -> Result<(usize, Stats), LmError> {
-    let vocab = model.dims.vocab.min(tok.vocab());
-    let mut st = Stats::default();
-    if prompt.is_empty() || history.len() < prompt.len() + opts.max_new {
-        return Err(LmError::Work);
+/// What one [`ClosedRun::advance`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pass {
+    /// A batch of the prompt went through the weights.
+    Prefill { fed: usize, total: usize },
+    /// A pass that committed this many tokens of the answer (one, or more when drafts were confirmed).
+    Tokens(usize),
+    Done,
+}
+
+/// An answer under the contract, generated one forward pass at a time. The caller owns the memory and decides
+/// between passes whether to go on: this is the form a worker core drives (ADR 0060, stage S2).
+/// [`generate_closed`] is this run, looped to the end.
+pub struct ClosedRun<'m> {
+    machine: Machine<'m>,
+    opts: Options,
+    st: Stats,
+    n_prompt: usize,
+    /// Prompt tokens fed; then the position of the next token to feed.
+    pos: usize,
+    hlen: usize,
+    next: u32,
+    n: usize,
+    prefilled: bool,
+    done: bool,
+}
+
+impl<'m> ClosedRun<'m> {
+    /// `history` must hold at least `prompt.len() + opts.max_new` entries; the prompt is copied into it.
+    pub fn new(prompt: &[u32], machine: Machine<'m>, opts: Options, history: &mut [u32]) -> Result<Self, LmError> {
+        if prompt.is_empty() || history.len() < prompt.len() + opts.max_new {
+            return Err(LmError::Work);
+        }
+        history.get_mut(..prompt.len()).ok_or(LmError::Work)?.copy_from_slice(prompt);
+        Ok(Self { machine, opts, st: Stats::default(), n_prompt: prompt.len(), pos: 0, hlen: prompt.len(), next: 0, n: 0, prefilled: false, done: false })
     }
-    history.get_mut(..prompt.len()).ok_or(LmError::Work)?.copy_from_slice(prompt);
-    let mut hlen = prompt.len();
-    // Prompt in batches; the logits of its last position give the first token.
-    let b = work.batch();
-    st.prefill_passes = prompt.len().div_ceil(b) as u32;
-    model.prefill(simd, prompt, kv, work)?;
-    let last = (prompt.len() - 1) % b;
-    let first = pick(work.logits_of(last, model.dims.vocab).get(..vocab).ok_or(LmError::Work)?, &machine, tok, eog).ok_or(LmError::Token)?;
-    let mut next = first;
-    let mut pos = prompt.len();
-    let mut n = 0usize;
-    let draft_max = opts.draft_max.min(b.saturating_sub(1)).min(MAX_BATCH - 1);
-    loop {
+
+    /// Tokens of the answer written to `out` so far.
+    pub fn tokens(&self) -> usize {
+        self.n
+    }
+
+    pub fn stats(&self) -> Stats {
+        self.st
+    }
+
+    pub fn done(&self) -> bool {
+        self.done
+    }
+
+    fn commit(&mut self, t: u32, history: &mut [u32], out: &mut [u32]) -> Result<(), LmError> {
+        *out.get_mut(self.n).ok_or(LmError::Work)? = t;
+        self.n += 1;
+        self.st.tokens += 1;
+        if let Some(h) = history.get_mut(self.hlen) {
+            *h = t;
+            self.hlen += 1;
+        }
+        Ok(())
+    }
+
+    /// At most one forward pass over the weights. `history`, `list` and `out` are the buffers of
+    /// [`generate_closed`], the same on every call.
+    #[allow(clippy::too_many_arguments)]
+    pub fn advance(&mut self, model: &Model, simd: Simd, tok: &Tokenizer, eog: &[u32], kv: &mut Kv, work: &mut Work, history: &mut [u32], list: &mut [u32], out: &mut [u32]) -> Result<Pass, LmError> {
+        if self.done {
+            return Ok(Pass::Done);
+        }
+        let vocab = model.dims.vocab.min(tok.vocab());
+        let b = work.batch();
+        if !self.prefilled {
+            // The prompt in batches; the logits of its last position give the first token.
+            let end = (self.pos + b).min(self.n_prompt);
+            let mut toks = [0usize; MAX_BATCH];
+            for (d, &t) in toks.iter_mut().zip(history.get(self.pos..end).ok_or(LmError::Work)?) {
+                *d = t as usize;
+            }
+            let m = end - self.pos;
+            let last = end == self.n_prompt;
+            model.forward(simd, toks.get(..m).ok_or(LmError::Work)?, self.pos, kv, work, if last { Head::Last } else { Head::Skip })?;
+            self.st.prefill_passes += 1;
+            self.pos = end;
+            if last {
+                self.next = pick(work.logits_of(m - 1, model.dims.vocab).get(..vocab).ok_or(LmError::Work)?, &self.machine, tok, eog).ok_or(LmError::Token)?;
+                self.prefilled = true;
+            }
+            return Ok(Pass::Prefill { fed: end, total: self.n_prompt });
+        }
         // Commit `next`.
-        *out.get_mut(n).ok_or(LmError::Work)? = next;
-        n += 1;
-        st.tokens += 1;
-        if let Some(h) = history.get_mut(hlen) {
-            *h = next;
-            hlen += 1;
-        }
+        let next = self.next;
+        self.commit(next, history, out)?;
+        let mut committed = 1usize;
         if eog.contains(&next) {
-            break;
+            self.done = true;
+            return Ok(Pass::Tokens(committed));
         }
-        if !machine.feed(tok.bytes(next as usize).ok_or(LmError::Token)?) {
+        if !self.machine.feed(tok.bytes(next as usize).ok_or(LmError::Token)?) {
             return Err(LmError::Token);
         }
-        if n >= opts.max_new || n >= out.len() || pos + 1 >= model.dims.max_ctx {
-            break;
+        if self.n >= self.opts.max_new || self.n >= out.len() || self.pos + 1 >= model.dims.max_ctx {
+            self.done = true;
+            return Ok(Pass::Tokens(committed));
         }
+        let draft_max = self.opts.draft_max.min(b.saturating_sub(1)).min(MAX_BATCH - 1);
         // Drafts, verified in one batched pass.
         let mut d = [0u32; MAX_BATCH];
-        let nd = if draft_max > 0 { draft(&machine, tok, eog, history.get(..hlen).unwrap_or(&[]), draft_max.min(opts.max_new - n).min(model.dims.max_ctx - pos - 1), &mut d) } else { 0 };
+        let nd = if draft_max > 0 { draft(&self.machine, tok, eog, history.get(..self.hlen).unwrap_or(&[]), draft_max.min(self.opts.max_new - self.n).min(model.dims.max_ctx - self.pos - 1), &mut d) } else { 0 };
         if nd > 0 {
             let mut toks = [0usize; MAX_BATCH];
             toks[0] = next as usize;
             for (t, &x) in toks.iter_mut().skip(1).zip(d.iter().take(nd)) {
                 *t = x as usize;
             }
-            model.forward(simd, toks.get(..=nd).ok_or(LmError::Work)?, pos, kv, work, Head::All)?;
-            st.passes += 1;
-            st.drafted += nd as u32;
+            model.forward(simd, toks.get(..=nd).ok_or(LmError::Work)?, self.pos, kv, work, Head::All)?;
+            self.st.passes += 1;
+            self.st.drafted += nd as u32;
             // Column j predicts the token after toks[..=j].
-            let mut m = machine;
+            let mut m = self.machine;
             let mut j = 0usize;
             loop {
                 let p = pick(work.logits_of(j, model.dims.vocab).get(..vocab).ok_or(LmError::Work)?, &m, tok, eog).ok_or(LmError::Token)?;
                 if j < nd && Some(&p) == d.get(j) {
                     // Draft confirmed: commit it and continue with the next column.
-                    st.accepted += 1;
-                    *out.get_mut(n).ok_or(LmError::Work)? = p;
-                    n += 1;
-                    st.tokens += 1;
-                    if let Some(h) = history.get_mut(hlen) {
-                        *h = p;
-                        hlen += 1;
-                    }
+                    self.st.accepted += 1;
+                    self.commit(p, history, out)?;
+                    committed += 1;
                     if !m.feed(tok.bytes(p as usize).ok_or(LmError::Token)?) {
                         return Err(LmError::Token);
                     }
                     j += 1;
-                    if n >= opts.max_new || n >= out.len() {
-                        return Ok((n, st));
+                    if self.n >= self.opts.max_new || self.n >= out.len() {
+                        self.done = true;
+                        return Ok(Pass::Tokens(committed));
                     }
                     continue;
                 }
                 // First disagreement (or drafts used up): p is the next token after toks[..=j].
-                machine = m;
-                pos += j + 1;
-                next = p;
+                self.machine = m;
+                self.pos += j + 1;
+                self.next = p;
                 break;
             }
-            continue;
+            return Ok(Pass::Tokens(committed));
         }
         // One token, with a pruned head where the grammar allows few tokens.
-        let prune = opts.prune_max > 0 && !machine.in_free_text();
-        let cap = list.len().min(opts.prune_max);
-        let count = if prune { list_allowed(&machine, tok, eog, vocab, list.get_mut(..cap).ok_or(LmError::Work)?) } else { usize::MAX };
+        let prune = self.opts.prune_max > 0 && !self.machine.in_free_text();
+        let cap = list.len().min(self.opts.prune_max);
+        let count = if prune { list_allowed(&self.machine, tok, eog, vocab, list.get_mut(..cap).ok_or(LmError::Work)?) } else { usize::MAX };
         if count <= cap {
             let rows = list.get(..count).ok_or(LmError::Work)?;
-            model.forward(simd, &[next as usize], pos, kv, work, Head::Rows(rows))?;
-            st.pruned_passes += 1;
-            st.pruned_rows += count as u64;
+            model.forward(simd, &[next as usize], self.pos, kv, work, Head::Rows(rows))?;
+            self.st.pruned_passes += 1;
+            self.st.pruned_rows += count as u64;
             let lg = work.logits_of(0, model.dims.vocab);
             let mut best: Option<(u32, i64)> = None;
             for &id in rows {
@@ -286,15 +346,26 @@ pub fn generate_closed(model: &Model, simd: Simd, tok: &Tokenizer, prompt: &[u32
                     best = Some((id, v));
                 }
             }
-            next = best.ok_or(LmError::Token)?.0;
+            self.next = best.ok_or(LmError::Token)?.0;
         } else {
-            model.forward(simd, &[next as usize], pos, kv, work, Head::All)?;
-            next = pick(work.logits_of(0, model.dims.vocab).get(..vocab).ok_or(LmError::Work)?, &machine, tok, eog).ok_or(LmError::Token)?;
+            model.forward(simd, &[next as usize], self.pos, kv, work, Head::All)?;
+            self.next = pick(work.logits_of(0, model.dims.vocab).get(..vocab).ok_or(LmError::Work)?, &self.machine, tok, eog).ok_or(LmError::Token)?;
         }
-        st.passes += 1;
-        pos += 1;
+        self.st.passes += 1;
+        self.pos += 1;
+        Ok(Pass::Tokens(committed))
     }
-    Ok((n, st))
+}
+
+/// Feed `prompt`, then generate an answer under the contract. `history` must hold at least
+/// `prompt.len() + opts.max_new` entries (prompt and answer, for n-gram drafts); `list` is scratch for the
+/// allowed-token list (its length bounds pruning). Writes the generated ids to `out`; returns their count.
+/// This is [`ClosedRun`] advanced until it is done.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_closed(model: &Model, simd: Simd, tok: &Tokenizer, prompt: &[u32], eog: &[u32], machine: Machine, kv: &mut Kv, work: &mut Work, history: &mut [u32], list: &mut [u32], opts: Options, out: &mut [u32]) -> Result<(usize, Stats), LmError> {
+    let mut run = ClosedRun::new(prompt, machine, opts, history)?;
+    while run.advance(model, simd, tok, eog, kv, work, history, list, out)? != Pass::Done {}
+    Ok((run.tokens(), run.stats()))
 }
 
 // ------------------------------------------------------------------------------------------- investigation
