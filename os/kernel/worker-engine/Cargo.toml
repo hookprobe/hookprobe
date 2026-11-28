@@ -23,14 +23,13 @@ path = "src/main.rs"
 [dependencies]
 # The job vocabulary and the reference scalar functions, shared with the worker executive (no FP in that crate).
 heqk-worker = { path = "../worker" }
-# S2b: the Conductor's engine, unchanged (no_std, no alloc, no writable globals: enforced by its own
-# conductor-mock/tests/no_linux_no_python.rs). Path dependencies into os/conductor; same pinned toolchain.
+# S2c: the Conductor's engine through its own C entry, unchanged (no_std, no alloc, no writable globals: enforced
+# by its own conductor-mock/tests/no_linux_no_python.rs). Path dependencies into os/conductor; same toolchain.
+conductor-engine-entry = { path = "../../conductor/engine-entry" }
+# ENGINE_LOAD verifies and admits the signed model on the worker (until the kernel does it, R5).
 conductor-core = { path = "../../conductor/conductor-core" }
-conductor-p0 = { path = "../../conductor/conductor-p0" }
 neuro-gguf = { path = "../../conductor/neuro-gguf" }
 neuro-hnx = { path = "../../conductor/neuro-hnx" }
-neuro-kernels = { path = "../../conductor/neuro-kernels" }
-neuro-lm = { path = "../../conductor/neuro-lm" }
 
 [profile.release]
 panic = "abort"

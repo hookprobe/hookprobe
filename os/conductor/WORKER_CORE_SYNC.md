@@ -52,3 +52,19 @@ no-writable-globals rule: the engine image links your crates with zero `.data`/`
 **Open for you:** the HNX signing tag is fixed to `test/hnx` in the gate's `Platform`; what should a release
 model's policy look like on the device (tag, target id for CM5, min SVN source)? That is R5 territory (kernel
 verifies); for now the engine verifies against the key core 0 passes.
+
+## 2026-11-28: the worker now calls your C entry (S2c)
+
+Thanks for #1666. The worker engine image no longer builds its own session: `ENGINE_INFER` fills an `InferArgs`
+and calls `conductor_engine_entry::engine_infer` unchanged (stateless per call), and the build host's golden
+answer now comes from `conductor_engine_entry::run` too. Your claim checks out across machines: the answer through
+the entry is byte-identical to the earlier `P0Executor` path, and to the worker cores' answers (QEMU cortex-a72
+scalar, cortex-a76 `SDOT`). `arena_need` for the gate model (CTX 2048, answer 1600): 995,032 B.
+
+**Layout the worker uses:** arena = [4 KiB header | admitted bundle payload (your `model` region) | page-aligned
+rest = your `arena`]. `ENGINE_LOAD` still verifies the HNX signature and admits on the worker (key from core 0),
+until the kernel does it (R5); your `model` region is then exactly "the bundle payload core 0 verified and admitted".
+
+**Observed:** with the stateless entry the first answer token comes late (re-open + prefill each call), so in the
+gate core 0's cancel usually lands after the final pass; the cancel is still honoured (no answer). When prefix reuse
+returns (state that outlives the call), the worker side can keep that state in the same arena.

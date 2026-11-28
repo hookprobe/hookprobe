@@ -6,22 +6,20 @@
 //!
 //! Ops:
 //! - GEMV_I8 (S2a): int8 GEMV via NEON SMULL/SADALP or SDOT, bit-identical to the scalar reference.
-//! - ENGINE_LOAD (S2b): verify the signed HNX model against the key core 0 trusts, admit it, open a session in the
-//!   arena and keep a `conductor_p0::P0Executor` there.
-//! - ENGINE_INFER (S2b): `conductor_p0::core_job::run` — the Conductor's own job body, unchanged.
+//! - ENGINE_LOAD (S2b/S2c): verify the signed HNX model against the key core 0 trusts, accept and admit its bundle
+//!   into the start of the worker's arena, and check the Conductor's `arena_need` for the rest.
+//! - ENGINE_INFER (S2c): the Conductor's own C-ABI entry, `conductor_engine_entry::engine_infer` (#1666), over the
+//!   admitted model, the rest of the arena, the window, the result and the progress/cancel words. Stateless per
+//!   call: the same regions and prompt give the same bytes on any core.
 #![no_std]
 #![no_main]
 
-use conductor_p0::core_job::{self, Link};
-use conductor_p0::P0Executor;
+use conductor_engine_entry::{arena_need, engine_infer, InferArgs, Limits};
 use core::arch::aarch64::*;
 use core::sync::atomic::{AtomicBool, AtomicU32};
 use heqk_worker::job::{op, path, status, EngineEntry, EngineEnv, EngineLoad, GemvParams, GEMV_MAX_COLS, GEMV_MAX_ROWS};
-use neuro_gguf::hnx::{admit, Admitted};
-use neuro_gguf::p0::{self, Mem, Session};
+use neuro_gguf::hnx::admit;
 use neuro_hnx::{scheme, target, Loader, Platform};
-use neuro_kernels::Simd;
-use neuro_lm::qwen3::Layer;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -35,10 +33,14 @@ const _: EngineEntry = engine_entry;
 
 /// ENGINE_LOAD refusals (high half), with the step in the low bits.
 pub const LOAD_REFUSED: u32 = 0x0002_0000;
-const BATCH: usize = 16;
-const STATE_MAGIC: u64 = 0x4845_514B_454E_4731; // "HEQKENG1"
 /// HNX signing tag of the gate's test model (QEMU only; a release model carries its own policy).
 const TAG: &[u8] = b"test/hnx";
+/// The context the gate's model is admitted at (`tools/build/worker-engine-model`).
+const MAX_CTX: u32 = 2048;
+const MODEL_MAGIC: u64 = 0x4845_514B_4D44_4C32; // "HEQKMDL2"
+/// Header at the arena's start: magic, model length, kernel set, answer bound. The model follows, page-aligned;
+/// the engine's own memory follows the model.
+const HDR: usize = 4096;
 
 /// # Safety
 /// Called only by the worker executive on a core with FP/SIMD enabled; every address in `env` lies in a region
@@ -57,63 +59,7 @@ pub unsafe extern "C" fn engine_entry(opc: u32, a: u64, b: u64, env: *const Engi
     st
 }
 
-// ------------------------------------------------------------------------------------------------ S2b: engine
-
-/// The executor, kept at the start of the arena between jobs.
-type Exec = P0Executor<'static, fn() -> u64>;
-#[repr(C)]
-struct State {
-    magic: u64,
-    exec: Exec,
-}
-
-/// Milliseconds of this core's counter (the executor's monotonic clock).
-fn clock_ms() -> u64 {
-    let (c, f): (u64, u64);
-    unsafe {
-        core::arch::asm!("isb", "mrs {}, cntpct_el0", out(reg) c, options(nomem, nostack));
-        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack));
-    }
-    c / (f / 1000).max(1)
-}
-
-/// Carves typed, initialised slices out of the arena, in order, never freeing.
-struct Bump {
-    at: usize,
-    end: usize,
-}
-
-impl Bump {
-    fn reserve(&mut self, size: usize, align: usize) -> Option<usize> {
-        let at = self.at.checked_add(align - 1)? & !(align - 1);
-        let end = at.checked_add(size)?;
-        if end > self.end {
-            return None;
-        }
-        self.at = end;
-        Some(at)
-    }
-
-    fn take<T: Copy>(&mut self, n: usize, v: T) -> Option<&'static mut [T]> {
-        let at = self.reserve(core::mem::size_of::<T>().checked_mul(n)?, core::mem::align_of::<T>())?;
-        let p = at as *mut T;
-        for i in 0..n {
-            // SAFETY: inside the arena (checked by reserve), aligned for T, not yet handed out.
-            unsafe { p.add(i).write(v) };
-        }
-        // SAFETY: as above; the arena outlives every job (it is never unmapped for this worker).
-        Some(unsafe { core::slice::from_raw_parts_mut(p, n) })
-    }
-
-    fn place<T>(&mut self, v: T) -> Option<&'static mut T> {
-        let at = self.reserve(core::mem::size_of::<T>(), core::mem::align_of::<T>())? as *mut T;
-        // SAFETY: as in `take`.
-        unsafe {
-            at.write(v);
-            Some(&mut *at)
-        }
-    }
-}
+// ------------------------------------------------------------------------------------------------ S2b/S2c: engine
 
 /// The trust policy for the gate's model: the key core 0 handed over, the QEMU target, AGPL weights.
 struct Trust([u8; 32]);
@@ -138,25 +84,33 @@ impl Platform for Trust {
     }
 }
 
-/// ENGINE_LOAD: verify, copy, admit and open the model; keep the executor in the arena.
+fn page_up(n: usize) -> usize {
+    (n + 4095) & !4095
+}
+
+/// ENGINE_LOAD: verify the signed model, accept its bundle into the arena (after the header) and admit it; check the
+/// Conductor's `arena_need` for what is left. A refused load leaves the header's magic at 0.
 unsafe fn load(params: u64, env: &EngineEnv) -> (u32, u64) {
     let p: EngineLoad = unsafe { core::ptr::read_volatile(params as usize as *const EngineLoad) };
+    let arena = unsafe { core::slice::from_raw_parts_mut(env.arena as usize as *mut u8, env.arena_len as usize) };
+    if arena.len() < HDR {
+        return (LOAD_REFUSED | 1, 0);
+    }
+    arena[..8].fill(0);
+    if p.simd > 1 || (p.simd == 1 && !has_dotprod()) {
+        return (status::UNSUPPORTED, 0);
+    }
     // The model's bytes live in the signed kernel image (read-only for this worker).
-    let prefix: &'static [u8] = unsafe { core::slice::from_raw_parts(p.prefix as usize as *const u8, p.prefix_len as usize) };
-    let bundle: &'static [u8] = unsafe { core::slice::from_raw_parts(p.bundle as usize as *const u8, p.bundle_len as usize) };
-    let simd = match p.simd {
-        0 => Simd::SCALAR,
-        1 if has_dotprod() => unsafe { Simd::neon_dot() }, // DotProd present and FP/SIMD enabled on this core
-        _ => return (status::UNSUPPORTED, 0),
-    };
-    let mut bump = Bump { at: env.arena as usize, end: env.arena as usize + env.arena_len as usize };
-    // The state slot first, so ENGINE_INFER finds it at the arena's start.
-    let Some(slot) = bump.reserve(core::mem::size_of::<State>(), core::mem::align_of::<State>()) else { return (LOAD_REFUSED | 1, 0) };
-    // Mark "not loaded" until the end: a refused load leaves no usable state behind.
-    unsafe { core::ptr::write_volatile(slot as *mut u64, 0) };
+    let prefix: &[u8] = unsafe { core::slice::from_raw_parts(p.prefix as usize as *const u8, p.prefix_len as usize) };
+    let bundle: &[u8] = unsafe { core::slice::from_raw_parts(p.bundle as usize as *const u8, p.bundle_len as usize) };
     let trust = Trust(p.pk);
     let Ok(mut l) = Loader::open(prefix, &trust) else { return (LOAD_REFUSED | 2, 0) };
-    let Some(region) = bump.take(bundle.len(), 0u8) else { return (LOAD_REFUSED | 3, 0) };
+    let model_end = HDR + bundle.len();
+    if model_end > arena.len() {
+        return (LOAD_REFUSED | 3, 0);
+    }
+    let (head, rest) = arena.split_at_mut(HDR);
+    let region = &mut rest[..bundle.len()];
     let seg = 1usize << 16;
     for i in 0..bundle.len().div_ceil(seg) {
         let (s, e) = (i * seg, ((i + 1) * seg).min(bundle.len()));
@@ -165,50 +119,60 @@ unsafe fn load(params: u64, env: &EngineEnv) -> (u32, u64) {
             return (LOAD_REFUSED | 4, 0);
         }
     }
-    let region: &'static [u8] = region;
-    let Ok(ad) = admit(&l, region) else { return (LOAD_REFUSED | 5, 0) };
-    let Some(ad) = bump.place::<Admitted<'static>>(ad) else { return (LOAD_REFUSED | 6, 0) };
-    let ad: &'static Admitted<'static> = ad;
-    let z = p0::sizes(&ad.hparams, BATCH);
-    let max_answer = p.max_answer as usize;
-    let mem = (|| {
-        Some(Mem {
-            layers: bump.take(z.layers, Layer::EMPTY)?,
-            rope: bump.take(z.rope, (0i32, 0i32))?,
-            kv_vals: bump.take(z.kv_vals, 0i16)?,
-            kv_shifts: bump.take(z.kv_shifts, 0u8)?,
-            work_i64: bump.take(z.work_i64, 0i64)?,
-            work_i8: bump.take(z.work_i8, 0i8)?,
-            work_pairs: bump.take(z.work_pairs, (0i32, 0i32))?,
-            work_i32: bump.take(z.work_i32, 0i32)?,
-            ids: bump.take(z.ids, 0u32)?,
-            prev: bump.take(z.prev, 0u32)?,
-            list: bump.take(512, 0u32)?,
-            out: bump.take(max_answer, 0u32)?,
-        })
-    })();
-    let Some(mem) = mem else { return (LOAD_REFUSED | 7, 0) };
-    let Ok(session) = Session::open(ad, simd, BATCH, mem) else { return (LOAD_REFUSED | 8, 0) };
-    let (Some(cps), Some(buf)) = (bump.take(1 << 15, 0u32), bump.take(1 << 15, 0u8)) else { return (LOAD_REFUSED | 9, 0) };
-    let exec: Exec = P0Executor::new(session, p.model, cps, buf, clock_ms as fn() -> u64).with_max_answer(max_answer);
-    // SAFETY: `slot` was reserved for a State at the arena's start, aligned.
-    unsafe { (slot as *mut State).write(State { magic: STATE_MAGIC, exec }) };
-    (status::OK, (bump.at - env.arena as usize) as u64)
+    if admit(&l, region).is_err() {
+        return (LOAD_REFUSED | 5, 0);
+    }
+    let limits = Limits { max_ctx: MAX_CTX, max_answer: p.max_answer };
+    let Ok(need) = arena_need(region, limits) else { return (LOAD_REFUSED | 6, 0) };
+    let engine_at = page_up(model_end);
+    if engine_at as u64 + need > env.arena_len {
+        return (LOAD_REFUSED | 7, need);
+    }
+    head[8..16].copy_from_slice(&(bundle.len() as u64).to_le_bytes());
+    head[16..20].copy_from_slice(&(if p.simd == 1 { path::SDOT } else { path::SCALAR }).to_le_bytes());
+    head[20..24].copy_from_slice(&p.max_answer.to_le_bytes());
+    head[..8].copy_from_slice(&MODEL_MAGIC.to_le_bytes());
+    (status::OK, need)
 }
 
-/// ENGINE_INFER: the Conductor's job body on the loaded executor.
+/// ENGINE_INFER: the Conductor's C entry over the admitted model and the rest of the arena.
 unsafe fn infer(a: u64, b: u64, env: &EngineEnv) -> (u32, u64) {
-    let state = env.arena as usize as *mut State;
-    // SAFETY: the arena's start is the State slot ENGINE_LOAD wrote (or a 0 magic if it never succeeded).
-    if env.arena_len < core::mem::size_of::<State>() as u64 || unsafe { core::ptr::read_volatile(state as *const u64) } != STATE_MAGIC {
+    let arena = env.arena as usize as *mut u8;
+    if (env.arena_len as usize) < HDR {
         return (status::UNSUPPORTED, 0);
     }
-    let exec = unsafe { &mut (*state).exec };
-    let window = unsafe { core::slice::from_raw_parts(env.window as usize as *const u8, env.window_len as usize) };
-    let result = unsafe { core::slice::from_raw_parts_mut(env.result as usize as *mut u8, env.result_len as usize) };
-    let progress = unsafe { &*(env.progress as usize as *const AtomicU32) };
-    let cancel = unsafe { &*(env.cancel as usize as *const AtomicBool) };
-    core_job::run(exec, op::ENGINE_INFER, a, b, Link { window, progress, cancel }, result)
+    let head = unsafe { core::slice::from_raw_parts(arena, HDR) };
+    let word = |at: usize| u64::from_le_bytes(head[at..at + 8].try_into().unwrap_or([0; 8]));
+    if word(0) != MODEL_MAGIC {
+        return (status::UNSUPPORTED, 0); // no model loaded (or the load was refused)
+    }
+    let model_len = word(8) as usize;
+    let kernels = u32::from_le_bytes(head[16..20].try_into().unwrap_or([0; 4]));
+    let max_answer = u32::from_le_bytes(head[20..24].try_into().unwrap_or([0; 4]));
+    let engine_at = page_up(HDR + model_len);
+    let mut value = 0u64;
+    let args = InferArgs {
+        model: unsafe { arena.add(HDR) },
+        model_len: model_len as u64,
+        arena: unsafe { arena.add(engine_at) },
+        arena_len: env.arena_len - engine_at as u64,
+        window: env.window as usize as *const u8,
+        window_len: env.window_len,
+        result: env.result as usize as *mut u8,
+        result_len: env.result_len,
+        progress: env.progress as usize as *const AtomicU32,
+        cancel: env.cancel as usize as *const AtomicBool,
+        value: &mut value,
+        a,
+        b,
+        limits: Limits { max_ctx: MAX_CTX, max_answer },
+        op: op::ENGINE_INFER,
+        path: kernels,
+    };
+    // SAFETY: model, arena (after the model), window and result are distinct regions mapped for this worker;
+    // progress/cancel are the worker's words; with SDOT this core has DotProd and FP/SIMD on (checked at load).
+    let st = unsafe { engine_infer(&args) };
+    (st, value)
 }
 
 // ------------------------------------------------------------------------------------------------ S2a: GEMV
