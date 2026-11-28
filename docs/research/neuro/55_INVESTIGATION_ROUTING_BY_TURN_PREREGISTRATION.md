@@ -67,3 +67,11 @@ when that exists.
   writes RESULT lines itself after guard A, and card text never starts a line with `RESULT`, so the route must be
   taken from the harness's own state, not by parsing the context. The gate parses it only because the cases are text.
 - multi is 35 cases and clears is 30.
+
+## 6. Seal (2026-11-28, before any model has seen the set)
+
+- `blind_cases.jsonl` SHA-256 **`d96660dbfebe7c2e89fa3fc2748eccf97adb1bc18d7f33a154150bd71085607d`**.
+- **Mix:** next 45, multi 35, clears 30, decoy 25, invisible 15, alert 25 (175 cases); 21 Romanian (12.0%).
+- **Seal checks: PASS.** 0 collisions with inv-blind v1–v6 and the gen v4–v7 case files.
+- **Second annotator** (isolated, 44-case sample): **44/44**, so nothing needed adjudication. It flagged 8 cases as
+  genuinely ambiguous.
