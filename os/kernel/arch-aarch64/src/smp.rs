@@ -525,6 +525,8 @@ pub const SGI_DOORBELL: u32 = 1;
 /// QEMU `virt` GICv2 bases (`smpboot` is refused with `cm5`; CM5 gets its own in S0b/S1 metal).
 const GICD: usize = 0x0800_0000;
 const GICC: usize = 0x0801_0000;
+/// S1c: worker timer rate = counter frequency / this (1 kHz heartbeat).
+const TICK_PERIOD_DIV: Option<u64> = Some(1000);
 /// Words in the shared read-only data window.
 pub const WINDOW_WORDS: usize = 8192;
 
@@ -572,6 +574,10 @@ impl Port {
                 engine: ENGINE_ENTRY.load(Ordering::Relaxed),
                 cpacr: AtomicU64::new(0),
                 isar0: AtomicU64::new(0),
+                tick_period: TICK_PERIOD_DIV.map_or(0, |d| heqk_worker::timer::freq() / d),
+                ticks: AtomicU64::new(0),
+                last_tick: AtomicU64::new(0),
+                busy_since: AtomicU64::new(0),
             }) as *mut Ctx
         };
         Some(Port { idx, jobs: jp, done: dc, ctx })
@@ -608,6 +614,19 @@ impl Port {
             (
                 (*core::ptr::addr_of!((*self.ctx).cpacr)).load(Ordering::Relaxed),
                 (*core::ptr::addr_of!((*self.ctx).isar0)).load(Ordering::Relaxed),
+            )
+        }
+    }
+
+    /// S1c heartbeat: (timer ticks handled while idle, counter at the last one, counter when the current job
+    /// started or 0 when idle).
+    pub fn heartbeat(&self) -> (u64, u64, u64) {
+        // SAFETY: only atomic fields are read.
+        unsafe {
+            (
+                (*core::ptr::addr_of!((*self.ctx).ticks)).load(Ordering::Acquire),
+                (*core::ptr::addr_of!((*self.ctx).last_tick)).load(Ordering::Relaxed),
+                (*core::ptr::addr_of!((*self.ctx).busy_since)).load(Ordering::Acquire),
             )
         }
     }

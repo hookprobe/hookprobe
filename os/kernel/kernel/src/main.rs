@@ -17474,6 +17474,7 @@ fn p_smp_worker(ports: &mut [Option<arch_aarch64::smp::Port>], core0_cpacr: u64,
     let mut it = ports.iter_mut().flatten();
     let (Some(a), Some(b)) = (it.next(), it.next()) else { fail("lost a port") };
     p_smp_simd(a, b, freq, core0_cpacr, engine_bytes);
+    p_smp_timer(a, b, freq);
     // Refusal: a job that points at a kernel word outside the granted window.
     let kernel_addr = core::ptr::addr_of!(KERNEL_PROBE_WORD) as u64;
     match probe(a, job::Job { id: 1, op: job::op::SUM64, a: kernel_addr, b: 1 }, freq) {
@@ -17514,6 +17515,21 @@ fn p_smp_worker(ports: &mut [Option<arch_aarch64::smp::Port>], core0_cpacr: u64,
             _ => fail("a surviving worker stopped serving after another worker faulted"),
         }
     }
+    // S1c watchdog: the faulted worker's heartbeat is frozen (idle, not busy, no ticks) while the live one ticks.
+    let (tb0, _, _) = b.heartbeat();
+    let (ta0, _, _) = a.heartbeat();
+    let t = now();
+    while now().wrapping_sub(t) < freq / 10 {
+        core::hint::spin_loop();
+    }
+    let (tb1, _, busy_b) = b.heartbeat();
+    let (ta1, _, _) = a.heartbeat();
+    if tb1 != tb0 || ta1 <= ta0 {
+        kprint!(" smp-timer: after the fault, ticks dead {}->{} live {}->{}\n", tb0, tb1, ta0, ta1);
+        fail("the heartbeat did not tell the dead worker from the live one");
+    }
+    kprint!(" smp-timer: watchdog: core {} heartbeat frozen at {} ticks after its fault (busy_since {}), core {} still ticking ({}->{})\n",
+        bi, tb1, busy_b, a.idx, ta0, ta1);
     // S1b, read-only window: an UNCHECKED write is a permission fault, and the window is unchanged.
     let ai = a.idx;
     let before = win[100];
@@ -17664,5 +17680,99 @@ fn p_smp_simd(a: &mut arch_aarch64::smp::Port, b: &mut arch_aarch64::smp::Port, 
         if dotprod { " + SDOT" } else { "" },
         if dotprod { "checked" } else { "refused on this CPU (no DotProd)" }, sdot_unsupported,
         rate[0], rate[1]
+    );
+}
+
+/// ADR 0060 S1c gate `[P-smp-timer]`: every worker runs its own EL1 physical timer (banked PPI 30) as a heartbeat,
+/// taken like the doorbell with IRQs masked (wfi wakes, IAR polled, re-armed before EOI). Each worker ticks at its
+/// own rate; core 0's own timer registers are untouched; a deadline job (SPIN with a budget) stops on its budget
+/// while the other worker keeps ticking, and the busy worker publishes `busy_since` so a long job is not mistaken
+/// for a dead core (the dead-core case is checked after the fault test in `[P-smp-worker]`).
+#[cfg(feature = "smpboot")]
+fn p_smp_timer(a: &mut arch_aarch64::smp::Port, b: &mut arch_aarch64::smp::Port, freq: u64) {
+    use arch_aarch64::smp::worker::job;
+    fn fail(why: &str) -> ! {
+        kprint!(" [P-smp-timer] FAIL {}\n", why);
+        arch_aarch64::semihosting::exit(1);
+    }
+    fn now() -> u64 {
+        let c: u64;
+        unsafe { core::arch::asm!("isb", "mrs {}, cntpct_el0", out(reg) c, options(nomem, nostack)) };
+        c
+    }
+    fn core0_timers() -> [u64; 4] {
+        let (pc, pv, vc, vv): (u64, u64, u64, u64);
+        unsafe {
+            core::arch::asm!("mrs {}, cntp_ctl_el0", out(reg) pc, options(nomem, nostack));
+            core::arch::asm!("mrs {}, cntp_cval_el0", out(reg) pv, options(nomem, nostack));
+            core::arch::asm!("mrs {}, cntv_ctl_el0", out(reg) vc, options(nomem, nostack));
+            core::arch::asm!("mrs {}, cntv_cval_el0", out(reg) vv, options(nomem, nostack));
+        }
+        // CTL bit 2 (ISTATUS) is a live condition, not configuration: compare ENABLE and IMASK only.
+        [pc & 3, pv, vc & 3, vv]
+    }
+    let before = core0_timers();
+    // 1) Both workers tick on their own, ~1 kHz (TCG: accept a wide band).
+    let (ta0, _, _) = a.heartbeat();
+    let (tb0, _, _) = b.heartbeat();
+    let t0 = now();
+    while now().wrapping_sub(t0) < freq / 5 {
+        core::hint::spin_loop();
+    }
+    let dt_ms = now().wrapping_sub(t0) * 1000 / freq;
+    let (ta1, _, _) = a.heartbeat();
+    let (tb1, _, _) = b.heartbeat();
+    let (ra, rb) = ((ta1 - ta0) * 1000 / dt_ms.max(1), (tb1 - tb0) * 1000 / dt_ms.max(1));
+    if !(100..=2000).contains(&ra) || !(100..=2000).contains(&rb) {
+        kprint!(" smp-timer: tick rates {} Hz and {} Hz over {} ms\n", ra, rb, dt_ms);
+        fail("a worker's timer does not tick at its own ~1 kHz");
+    }
+    // 2) A deadline job on worker a: a huge SPIN with a 20 ms budget stops on its budget; worker b keeps ticking.
+    let budget = freq / 50;
+    if !a.submit(job::Job { id: 77, op: job::op::SPIN, a: 1 << 48, b: budget }) {
+        fail("job ring full");
+    }
+    a.doorbell();
+    let (tb2, _, _) = b.heartbeat();
+    let ts = now();
+    let mut saw_busy = false;
+    let d = loop {
+        let (_, _, busy) = a.heartbeat();
+        saw_busy |= busy != 0;
+        if let Some(d) = a.poll() {
+            break d;
+        }
+        if now().wrapping_sub(ts) > freq * 2 {
+            fail("the deadline job did not stop");
+        }
+    };
+    let spin_ms = now().wrapping_sub(ts) * 1000 / freq;
+    let (tb3, _, _) = b.heartbeat();
+    if d.status != job::status::DEADLINE || d.value == 0 {
+        fail("SPIN did not report DEADLINE");
+    }
+    if tb3 <= tb2 {
+        fail("worker b stopped ticking while worker a was busy");
+    }
+    if !saw_busy {
+        fail("worker a never published busy_since during its job");
+    }
+    // 3) Worker a ticks again after the job.
+    let (ta4, _, _) = a.heartbeat();
+    let t = now();
+    while now().wrapping_sub(t) < freq / 20 {
+        core::hint::spin_loop();
+    }
+    let (ta5, _, busy_after) = a.heartbeat();
+    if ta5 <= ta4 || busy_after != 0 {
+        fail("worker a did not return to idle ticking after its job");
+    }
+    // 4) Core 0's own timers were never touched.
+    if core0_timers() != before {
+        fail("core 0's timer registers changed");
+    }
+    kprint!(
+        " [P-smp-timer] PASS each worker runs its own EL1 timer (banked PPI 30, IRQs masked, wfi + IAR): {} Hz and {} Hz over {} ms; a SPIN job with a 20 ms budget stopped with DEADLINE after {} ms ({} rounds) while the other worker kept ticking ({}->{}); busy_since published during the job; core 0's CNTP/CNTV registers unchanged\n",
+        ra, rb, dt_ms, spin_ms, d.value, tb2, tb3
     );
 }

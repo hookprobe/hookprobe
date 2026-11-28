@@ -35,6 +35,9 @@ pub mod op {
     pub const PROBE_READ: u32 = 0xBAD0;
     /// `mmu-probe` feature only: write `b` to address `a`, with NO window check (MMU-boundary proof).
     pub const PROBE_WRITE: u32 = 0xBAD1;
+    /// S1c: a bounded busy job. `a` = iterations of a small integer loop, `b` = budget in counter ticks. value =
+    /// the loop's checksum when it finishes in budget; status DEADLINE (value = iterations done) when it does not.
+    pub const SPIN: u32 = 4;
     /// S2: y = W·x over int8 (i32 accumulate). `a` = address of a [`GemvParams`](super::GemvParams) block in the
     /// granted window; W and x must lie in the window too. value = [`hash_i32`](super::hash_i32) of y.
     pub const GEMV_I8: u32 = 0x10;
@@ -107,6 +110,8 @@ pub mod status {
     pub const UNSUPPORTED: u32 = 3;
     /// Parameters out of range (rows, cols, alignment).
     pub const BAD_PARAMS: u32 = 4;
+    /// The job ran out of its time budget and stopped (S1c).
+    pub const DEADLINE: u32 = 5;
 }
 
 /// `[addr, addr + len)` lies inside `[base, base + size)` without overflow, and `addr` is aligned.

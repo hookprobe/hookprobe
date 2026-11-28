@@ -38,11 +38,26 @@ pub unsafe fn enable_doorbell(gicd: usize, gicc: usize, sgi: u32) -> u8 {
     }
 }
 
-/// Sleep until an interrupt is pending, then acknowledge everything pending (EOI each).
+/// Enable a private peripheral interrupt (PPI 16..31, e.g. this core's timer) in this CPU's banked distributor
+/// registers, with the same priority as the doorbell.
+///
+/// # Safety
+/// `gicd` must be the device-mapped GICv2 distributor base; call on the worker core.
+pub unsafe fn enable_ppi(gicd: usize, intid: u32) {
+    let id = (intid & 0x1F) as usize;
+    unsafe {
+        write_volatile((gicd + GICD_IPRIORITYR + id) as *mut u8, 0xA0);
+        write_volatile((gicd + GICD_ISENABLER0) as *mut u32, 1 << id);
+        core::arch::asm!("dsb sy", "isb", options(nostack));
+    }
+}
+
+/// Sleep until an interrupt is pending, then acknowledge everything pending. `on_irq(intid)` runs between the
+/// acknowledge and the end-of-interrupt, so a level-sensitive source (the timer) can be re-armed before EOI.
 ///
 /// # Safety
 /// After [`enable_doorbell`] on this core.
-pub unsafe fn wait(gicc: usize) {
+pub unsafe fn wait(gicc: usize, mut on_irq: impl FnMut(u32)) {
     unsafe {
         core::arch::asm!("wfi", options(nomem, nostack));
         loop {
@@ -50,6 +65,7 @@ pub unsafe fn wait(gicc: usize) {
             if iar & 0x3FF >= 1020 {
                 break; // 1023 spurious: nothing (more) pending
             }
+            on_irq(iar & 0x3FF);
             write_volatile((gicc + GICC_EOIR) as *mut u32, iar);
         }
     }
