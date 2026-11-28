@@ -69,8 +69,8 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 | GF-E5 | ~980 ms post-upload reload round trips | eng | not reproduced on current main: 6/6 instrumented reloads 834–838 ms, slowest control request 21–22 ms; the one 988 ms reload was on a pre-#1432 image | #1440 (comments) |
 | GF-H1 (W3) | bench certificate SAN (192.168.200.146, unit name) | bench | done+metal | served cert checked 2026-11-21 (`openssl s_client` against 192.168.200.146:443): SAN heqk.local, r3q1.heqk.local, 10.99.0.1, 192.168.200.146, 10.200.0.6, written by the rpiboot flash of 20261120-l01-fwfiles-b1.md |
 | GF-H2 (W3) | browser flasher (ADR 0037) | op / bench | open | remaining-gaps #7 |
-| GF-H3 (W3) | G19 PoP tunnel on metal | op | blocked (PoP) | device side `[P-g19]` |
-| GF-H4 (W3) | /setup as HQCFG1 bundle metal batch | op | deferred (after the soak) | — |
+| GF-H3 (W3) | G19 PoP tunnel on metal | op | done+metal | metal-evidence/20261124-g19-cm5-live-pop.md (10/10) |
+| GF-H4 (W3) | /setup as HQCFG1 bundle metal batch | bench | done+metal (safety path: bad WAN reverts live, MC on the AP) | metal-evidence/20261128-postsoak-r0-setup-w04-j5.md §4 (20/20) |
 
 ## Autoheal harness
 
@@ -109,7 +109,7 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 | L-03 PQ TLS group from a PQ client | bench | done+metal (X25519MLKEM768 negotiated; device pq_hybrid=1) | metal-evidence/20261122-l03-pq-tls.md |
 | W-01 transition downgradable | op | accepted (shipping default) | — |
 | W-02 PMF in transition | eng | done+metal (WPA3-only); optional by design | 20261114-night.md |
-| W-04 RSNX / beacon protection / WPS capture | bench | open | — |
+| W-04 RSNX / beacon protection / WPS capture | bench | done+metal (RSNX H2E; no WPS; beacon protection not advertised, optional) | metal-evidence/20261128-postsoak-r0-setup-w04-j5.md §6 |
 | EVID-01 evidence survives OTA | eng | done+metal | 20261113-mb24-evid01.md |
 
 ## Parity gaps still not closed (`heqk-parity-gaps.md`)
@@ -118,11 +118,11 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 |---|---|---|---|
 | G0 apcore | eng | partial (steps 1–5b merged) | heqk-apcore-plan.md |
 | G12 setup QR + hand-off UI | eng (UI session) | open remainder | UI owned by the designer |
-| G19 HTP/SASE tunnel | op | done-QEMU; metal blocked on the PoP | = GF-H3 |
+| G19 HTP/SASE tunnel | op | done+metal | = GF-H3 (20261124-g19-cm5-live-pop.md) |
 | G24c crypto audit / libcrux ML-KEM | op | blocked (decision) | — |
 | G46 owner config-key enrol/rotate | op | built + metal; ship blocked on review | = SEC-05 |
 | G47 device rename | eng | done-metal | #966; CM5 2026-11-22 `metal-evidence/20261122-g47-device-label.md` (7/7) |
-| G48 first-run /setup wizard | eng | UI built; metal batch deferred | = GF-H4 |
+| G48 first-run /setup wizard | eng | UI built; backend safety path done+metal | = GF-H4; the full success path needs an untagged-DHCP bench port |
 | G24b, G28, G31, G43 | eng | done (see C5) | the parity doc's status is stale |
 
 ## Other open items
@@ -132,7 +132,10 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 | EP-E1b SDIO bus efficiency | eng | done+metal | #1432: CMD52 −95%, el0-wifi CPU 44–49% → 35–42%, throughput unchanged (~97 Mbps) |
 | EP-L0.1 firmware files out of the image | eng / bench | merged; rpiboot case 4a not run | 20261120-l01-fwfiles-b1.md |
 | MT-E1 eth1 (RTL8111H) wired client | bench | open | heqk-metal-test-plan.md |
-| MT-J5, MT-J6 GEM RX ring 512; IPv6 re-probe | bench | no dedicated record | audit §3.1 |
+| MT-J5 GEM RX ring 512 | bench | done+metal (96.1 Mbps median, res_err 0 over 221,700 frames) | metal-evidence/20261128-postsoak-r0-setup-w04-j5.md §5 |
+| MT-J6 IPv6 re-probe | bench | open (needs kea stopped on fortress: operator sudo) | audit §3.1 |
+| R0 FP/SIMD trap state at boot (ADR 0072 input) | bench | done+metal (TFP 0, FPEN 0, E2H 0, SVE 0, DotProd 1) | metal-evidence/20261128-postsoak-r0-setup-w04-j5.md §2 |
+| Radar / 802.11h after #1625 (Infineon advice) | bench | done+metal (spect 1, radar 1 read back) | metal-evidence/20261128-postsoak-r0-setup-w04-j5.md §3 |
 | P-256 timing (dudect on CM5) | bench | open (host review done) | 20261108-p256-ct.md |
 | ADR 0055 pin / 0056 D1 / 0063 ratification; ADR 0065 / 0044 status edits | op | open | ADR edits are the operator's |
 | ADR 0060–0062 multi-core / memory / PoP isolation | op | Proposed — no work without acceptance | — |
@@ -141,8 +144,8 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 
 - **C1 SEC-01:** `items.txt` still says "blocked: authenticator moves with the driver (not built)". ADR 0065 D4.3/D6 are realized on metal (el0-wpa holds the 4-way, SAE, PMKSA and keys; the in-kernel fallback is gone, #1235). The gate text needs re-scoping (operator-owned file).
 - **C2 ADR 0065 status table** still marks D4.4 bring-up / firmware download / reload as "[vision], still EL1"; 4e-1..4e-4 are merged with metal evidence.
-- **C3** the gap-fix plan and `heqk-remaining-gaps.md` still list merged work (R1–R10, E1, H1–H7, the authenticator) as to-do. Status is here now.
+- Resolved 2026-11-28: **C3** the gap-fix plan and `heqk-remaining-gaps.md` listed merged work (R1–R10, E1, H1–H7, the authenticator) as to-do. Both now carry status lines that point here; their tables stay as history.
 - **C4 REL-08b:** the gate text predates MB25–MB27 (Infineon test firmware 7.45.314 removes the trap in our setup, with a new rare type-0x7 trap; test firmware, not shippable).
-- **C5 parity doc:** G24b open (done + one step closed by decision), G28 / G31 "metal next" (PASS in 20261110-batch34-35.md), G43 "no Wi-Fi upload metal record" (live Wi-Fi apply 14/14 in 20261113-mb17.md; whether that covers the ADR 0058 `wifi` upload path still needs one check).
+- Resolved 2026-11-28: **C5 parity doc:** G24b was open (done + one step closed by decision), G28 / G31 "metal next" (PASS in 20261110-batch34-35.md), G43 "no Wi-Fi upload metal record" (live Wi-Fi apply 14/14 in 20261113-mb17.md). The rows now match this table, and so do G19 and G48. The G43 check is done: 20261113-mb17.md drives the HQCFG1 bundle `wifi` section; the standalone ADR 0058 `wifi` upload type (staged, next boot) still has no metal record, and the row says so.
 - **C6 sign-offs:** `docs/release/signoffs/README.md` lists a "certification" sign-off and omits `g46-security-review`, which `items.txt` requires.
-- **C7 pi4-assessment.md** still calls A-01 open; the audit 4.2 row still lists DNS-01 open. Both are fixed.
+- Resolved 2026-11-28: **C7** `pi4-assessment.md` called A-01 open; the audit 4.2 row listed DNS-01 open. Both now say fixed (A-01: d372ba10e, ad7d53d68, 20261114-late.md; DNS-01: #1187).

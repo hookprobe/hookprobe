@@ -9,6 +9,10 @@ and REL-05 (the 72 h soak).
 is reset between config-changing checks (`cm5-bench-baseline.sh`, #1293). The Wi-Fi driver split (ADR 0065) runs
 every reload bus operation in el0-wifi (#1267, #1277, #1296). What is left is below, in fix order.
 
+**Status (2026-11-28).** Waves 1, 2 and 2b are merged; most of Wave 3 is done. The tables below are kept as written
+(the plan). Each wave has a status line under its table. The live status is in `heqk-gate-status.md`
+(rows `GF-*` and `AH-*`).
+
 ## Wave 1 — defects found by the code review (kernel; no operator input; fix now)
 
 Severity: **H** = can crash / corrupt / wrongly refuse a security-relevant action; **M** = wrong behaviour in a
@@ -27,6 +31,10 @@ reachable case; **L** = cosmetic / diagnostic.
 | R9 | M | `el0srv.rs` DRBG reseed | A failed hourly reseed is retried on **every** later el0-wpa call (TRNG reads + an extra excursion on the keying path). | Back off: record the attempt time on failure too (retry at the next interval / a short backoff). | `[P-el0wpa]` with a failing TRNG mock: one retry per interval. |
 | R10 | L | `http.rs`, `hal/sdio.rs`, `cyw43.rs` | Doc comments detached from their items by inserted code (`render_tls`, `rxfail` vs `recover_abandoned`, `fw_reload` vs `RELOAD_PHASE_MS`). | Move the docs back. | Review. |
 
+**Wave 1 status (2026-11-28; see `heqk-gate-status.md`):** all done. R1 done+metal (#1308, #1454). R2–R5 done-QEMU
+(#1310). R6 done-QEMU (#1310); metal needs an IPv6 upstream on the bench WAN. R7 fix corrected on metal: re-sending
+the ioctl authorizes, 6/6 (#1309, #1454). R8 done+metal (#1309). R9, R10 done (#1309).
+
 ## Wave 2 — engineering gaps (no operator input; after Wave 1)
 
 | # | Gap | Plan |
@@ -37,6 +45,10 @@ reachable case; **L** = cosmetic / diagnostic.
 | E4 | **Local mc-e2e is noisy** | The local browser leg runs the current UI suite against a stale `HEQK_UI_DIST`; build the UI dist from the same commit in the local runner (CI already does). |
 | E5 | **Post-upload firmware round trips** | Occasional ~980 ms reloads (vs ~830) sit after the upload (version / pre-init control requests), on both the EL0 and EL1 paths (#1294). Low priority: measure which control request, then bound it as #1250 did. |
 
+**Wave 2 status (2026-11-28; see `heqk-gate-status.md`):** E1 done+metal (#1319); the ADR 0065 D4.4 status edit is
+still the operator's. E2 done (`heqk-gate-status.md`). E3 done+metal (#1428). E4 done (#1427). E5 not reproduced on
+current main: 6/6 reloads 834–838 ms (#1440).
+
 ## Wave 3 — needs bench hardware / a person at the bench
 
 | # | Gap | Blocker |
@@ -45,6 +57,11 @@ reachable case; **L** = cosmetic / diagnostic.
 | H2 | G-C browser flasher (ADR 0037) | same USB link + the operator-reviewed flash runbook |
 | H3 | G19 PoP tunnel metal | the PoP must be started by the operator |
 | H4 | /setup as HQCFG1 bundle metal batch (#80) | the operator scheduled it after the soak |
+
+**Wave 3 status (2026-11-28; see `heqk-gate-status.md`):** H1 done+metal (served SAN checked 2026-11-21). H2 open.
+H3 done+metal (`metal-evidence/20261124-g19-cm5-live-pop.md`, 10/10). H4 done+metal for the safety path
+(`metal-evidence/20261128-postsoak-r0-setup-w04-j5.md` §4, 20/20); the full success path needs an untagged-DHCP
+bench port.
 
 ## Wave 4 — operator-owned release gates (not engineering-blocked)
 
@@ -129,6 +146,11 @@ path. Nothing is marked done on QEMU alone where metal applies.
 
 **Order:** H1 → H2 → H3 → H4 → H5 → H6 (the acceptance gate for H1–H5) → H7 alongside. H1 and H2 are the foundation;
 H6 is what lets us claim the harness works.
+
+**Harness status (2026-11-28; see `heqk-gate-status.md`, rows `AH-*`):** H1–H7 all merged. H1 done+metal (#1320; across
+a warm reset #1419). H2 done+metal (#1327). H3 done+metal for H3a (#1328); H3b done-QEMU (#1336). H4 done+metal for
+H4a/H4b (#1339, #1351); H4c done-QEMU (#1409). H5 done+metal (#1356). H6 done+metal: 1000 CM5 injections, 0 unrecovered
+(#1365–#1378, #1446). H7 done+metal (#1418, #1420). Follow-up D1 (probes for el0-hsh and el0-wpa) done-QEMU (#1430).
 
 ## Wave 2c — second research pass (2026-11-18)
 

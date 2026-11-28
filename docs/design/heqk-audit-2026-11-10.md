@@ -306,7 +306,7 @@ Evidence only. This section marks no release gate complete. Rows not listed keep
 | Sealed config + live apply | metal-proven: house plan 33/33 (MB14, MB17), live apply 20/20 (MB19), Wi-Fi live spike 14/14 (MB17) | `20261113-mb14.md`, `20261113-mb17.md`, `20261113-mb19-mb20.md` |
 | hsh R6 = D | owner-signed envelopes used on metal by every check above (confirm, rollback, upload activate, reboot, bench triggers) | the same records |
 | `GET /api/system` | metal-proven (build, slot, trial, SVN, DataVolume usage) + the Mission Control OS card in a browser | `20261113-mb19-mb20.md` |
-| Open | DNS-01: the first blocked DNS answer per boot is held ~3 s (pre-existing; evidence and hypothesis in `20261113-mb19-mb20.md`) | — |
+| Fixed (2026-11-28 note) | DNS-01: the first blocked DNS answer per boot was held ~3 s (pre-existing; evidence and hypothesis in `20261113-mb19-mb20.md`). Fixed by a 20 ms local-reply deferral: 20/20 sinkholed answers at 23–27 ms on metal; done+metal in `heqk-gate-status.md` | #1187; `docs/security/pi4-assessment.md` DNS-01 |
 
 ## 5. Human-dependency register (B — only these need the operator)
 
