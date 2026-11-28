@@ -75,3 +75,17 @@ when that exists.
 - **Seal checks: PASS.** 0 collisions with inv-blind v1–v6 and the gen v4–v7 case files.
 - **Second annotator** (isolated, 44-case sample): **44/44**, so nothing needed adjudication. It flagged 8 cases as
   genuinely ambiguous.
+
+## 7. Result (2026-11-28, one look)
+
+**VERDICT: FAIL** (condition 2: clears 0.700, below the floor of 0.783).
+- Passed:
+  - multi 0.286 vs ftM's 0.029;
+  - next+multi 0.550 vs 0.438, McNemar p = 0.012 (10 vs 1);
+  - the router equals ftM on every case without a RESULT line;
+  - grounding clean.
+- ftT stops less often when a result clears the signal.
+- The next design is the router plus Rule P's deterministic "cleared → stop" rule, which needs typed tool outcomes
+  (doc 53 R13).
+
+ftM stays. Full tables: [`data/mixU-results.md`](data/mixU-results.md).
