@@ -6,7 +6,8 @@
 //!
 //! The model is `tok_build::tiny_qwen3_gguf`: one block, every weight the same. Its answers mean nothing; they
 //! are whatever the contract forces when every token scores the same (the lowest allowed token each time), which
-//! makes them deterministic and makes the contract the only thing that shapes them.
+//! makes the contract the only thing that shapes them. The last test uses seeded weights instead, so that the
+//! answer depends on the arithmetic, and checks that nodes agree bit for bit.
 use conductor_core::class::{DataClass, Tier};
 use conductor_core::crypto::{public_key, sign, verify};
 use conductor_core::harness::{Harness, Outcome as HOutcome};
@@ -15,7 +16,7 @@ use conductor_core::verify::Status;
 use conductor_mock::disk::{Disk, Platter};
 use conductor_mock::*;
 use conductor_p0::{code, shown_context, P0Executor};
-use conductor_worker::{Executor, Layout, ResultKey, Worker};
+use conductor_worker::{Executor, Layout, ResultKey, Run, Worker};
 use neuro_gguf::hnx::{admit, manifest_for_bundle, Admitted};
 use neuro_gguf::p0::{self, Mem, Session};
 use neuro_hnx::{build_prefix, kind, scheme, target, Header, Loader, Platform, HEADER_LEN, LEAF_LEN, MAX_SIG};
@@ -78,9 +79,12 @@ fn gguf_tokens() -> Vec<Vec<u8>> {
 }
 
 /// Build, sign, load in place and admit the tiny model as a bundle: the node's start-up.
-fn admitted() -> Admitted<'static> {
+fn admitted(seed: Option<u64>) -> Admitted<'static> {
     let toks = tokens();
-    let file = tok_build::tiny_qwen3_gguf(&gguf_tokens(), CTX as u32);
+    let file = match seed {
+        None => tok_build::tiny_qwen3_gguf(&gguf_tokens(), CTX as u32),
+        Some(s) => tok_build::tiny_qwen3_gguf_seeded(&gguf_tokens(), CTX as u32, s),
+    };
     let tok = tok_build::blob(&tok_build::Source { tokens: toks, merges: vec![], added: vec![256] }, &tok_build::unicode_ranges(), &tok_build::nfc_tables()).unwrap();
     let rope: Vec<u8> = (0..CTX * 16).flat_map(|i| if i % 3 == 0 { [0i32.to_le_bytes(), (1i32 << 30).to_le_bytes()].concat() } else { [(1i32 << 30).to_le_bytes(), 0i32.to_le_bytes()].concat() }).collect();
     let bundle: &'static [u8] = tok_build::bundle([&file, &tok, &rope, &[]]).unwrap().leak();
@@ -124,7 +128,21 @@ type Exec = P0Executor<'static, Box<dyn FnMut() -> u64>>;
 
 /// The node's compute: one session on the admitted model, serving `model`.
 fn executor(model: [u8; 32]) -> Exec {
-    let ad: &'static Admitted<'static> = Box::leak(Box::new(admitted()));
+    executor_on(model, Simd::SCALAR, None)
+}
+
+/// The fastest kernels this host has (NEON with dot product on an Apple or A76-class core).
+fn fastest() -> Simd {
+    #[cfg(target_arch = "aarch64")]
+    if std::arch::is_aarch64_feature_detected!("dotprod") {
+        // SAFETY: the feature was detected on this CPU just above.
+        return unsafe { Simd::neon_dot() };
+    }
+    Simd::SCALAR
+}
+
+fn executor_on(model: [u8; 32], simd: Simd, seed: Option<u64>) -> Exec {
+    let ad: &'static Admitted<'static> = Box::leak(Box::new(admitted(seed)));
     let z = p0::sizes(&ad.hparams, 16);
     let mem = Mem {
         layers: vec![Layer::EMPTY; z.layers].leak(),
@@ -140,7 +158,7 @@ fn executor(model: [u8; 32]) -> Exec {
         list: vec![0; 512].leak(),
         out: vec![0; MAX_ANSWER].leak(),
     };
-    let session = Session::open(ad, Simd::SCALAR, 16, mem).unwrap();
+    let session = Session::open(ad, simd, 16, mem).unwrap();
     let mut t = 0u64;
     let clock: Box<dyn FnMut() -> u64> = Box::new(move || {
         t += 3;
@@ -240,4 +258,62 @@ fn the_node_refuses_what_it_does_not_serve() {
     let dense: String = text.chars().filter(|c| !c.is_ascii_whitespace()).collect();
     assert!(dense.starts_with("{\"verdict\":\"benign\"") && dense.ends_with('}'), "{text}");
     assert!(run.compute_ms > 0 && run.ttft_ms > 0 && run.ttft_ms <= run.compute_ms);
+}
+
+/// What the fleet's verified redundancy stands on (ADR 0071 amendment A3, `conductor_core::quorum`): honest
+/// nodes give the same bytes. Three nodes run the same request on the same model with different kernels and
+/// different histories; their signed results agree exactly. A node with other weights is a conflict with
+/// evidence. The model's weights are drawn from a seed, so tokens score differently and the answer depends on
+/// the arithmetic of every pass.
+#[test]
+fn engine_nodes_agree_bit_for_bit_and_a_wrong_one_is_caught() {
+    use conductor_core::crypto::{sha256, TAG_RESULT};
+    use conductor_core::frame::{result_message, Usage};
+    use conductor_core::quorum::{Outcome, Quorum, Vote};
+    let ask = |ctx: &str| format!("{}{ctx}{}Assess this window.", neuro_contract::USER_HEAD, neuro_contract::USER_MID);
+    let request = ask("F1 H1->R1:443 n=3 bytes=1200\nF2 H1->R2:53 n=40 bytes=5200\nF3 H2->R1:22 n=1 bytes=90");
+    let other = ask("F1 H3->R4:8443 n=7 bytes=300");
+    let request_hash = sha256(&[request.as_bytes()]);
+    let answer = |e: &mut Exec, prompt: &str| -> (Vec<u8>, Run) {
+        let mut out = vec![0u8; 8192];
+        let run = e.run(conductor_core::cap::op::INFER, &MODEL, prompt.as_bytes(), &mut out).unwrap();
+        out.truncate(run.len);
+        (out, run)
+    };
+    let vote = |i: u8, out: &[u8], run: &Run| -> Vote {
+        let seed = sha256(&[b"p0-exact-node", &[i]]);
+        let cap_id = [i; 16];
+        let (output_hash, usage) = (sha256(&[out]), Usage { in_units: 0, out_units: out.len() as u32, compute_ms: run.compute_ms + u32::from(i), ttft_ms: run.ttft_ms });
+        let sig = sign(&seed, TAG_RESULT, &result_message(&cap_id, &request_hash, &output_hash, 1, &usage)).unwrap();
+        Vote { worker_pk: public_key(&seed), cap_id, output_hash, seq: 1, usage, sig }
+    };
+
+    // Node 1: scalar kernels, first job. Node 2: this host's fastest kernels. Node 3: scalar, after another job,
+    // so its cache holds a prompt start it reuses.
+    let mut n1 = executor_on(MODEL, Simd::SCALAR, Some(7));
+    let (a1, r1) = answer(&mut n1, &request);
+    let mut n2 = executor_on(MODEL, fastest(), Some(7));
+    let (a2, r2) = answer(&mut n2, &request);
+    let mut n3 = executor_on(MODEL, Simd::SCALAR, Some(7));
+    let (b3, _) = answer(&mut n3, &other);
+    let (a3, r3) = answer(&mut n3, &request);
+    assert!(n3.last_reused() > 20 && n1.last_reused() == 0, "{} {}", n3.last_reused(), n1.last_reused());
+    assert_ne!(a1, b3, "another context gives another answer: the model is not constant");
+    assert_eq!(a1, a2, "scalar and SIMD kernels");
+    assert_eq!(a1, a3, "fresh and reused cache");
+    let mut q = Quorum::new(request_hash, 3).unwrap();
+    q.offer(vote(1, &a1, &r1)).unwrap();
+    q.offer(vote(2, &a2, &r2)).unwrap();
+    assert_eq!(q.offer(vote(3, &a3, &r3)), Ok(Outcome::Agreed { output_hash: sha256(&[&a1]) }));
+
+    // A node whose weights differ (a corrupted or substituted model that still claims the digest).
+    let mut bad = executor_on(MODEL, Simd::SCALAR, Some(8));
+    let (w, rw) = answer(&mut bad, &request);
+    assert_ne!(w, a1);
+    let mut q = Quorum::new(request_hash, 3).unwrap();
+    q.offer(vote(1, &a1, &r1)).unwrap();
+    let Ok(Outcome::Conflict(c)) = q.offer(vote(4, &w, &rw)) else { panic!("expected a conflict") };
+    assert!(c.is_valid_evidence());
+    assert_eq!(q.disagrees_with(&sha256(&[&a1])).map(|v| v.cap_id).collect::<Vec<_>>(), vec![[4u8; 16]]);
+    println!("exact agreement: {} answer bytes, {} tokens, scalar = SIMD = reused cache; other weights caught", a1.len(), n1.last_stats().tokens);
 }

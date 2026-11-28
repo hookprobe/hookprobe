@@ -372,6 +372,16 @@ pub fn bundle(parts: [&[u8]; 4]) -> Option<Vec<u8>> {
 /// from the same list with [`blob`]). It computes nothing meaningful; it exercises every code path a real
 /// model does.
 pub fn tiny_qwen3_gguf(tokens: &[Vec<u8>], train_ctx: u32) -> Vec<u8> {
+    tiny_qwen3(tokens, train_ctx, None)
+}
+
+/// The same file with weights drawn from `seed` instead of all equal: still meaningless, but tokens now score
+/// differently, so an answer depends on every pass of the arithmetic. For tests of exact agreement.
+pub fn tiny_qwen3_gguf_seeded(tokens: &[Vec<u8>], train_ctx: u32, seed: u64) -> Vec<u8> {
+    tiny_qwen3(tokens, train_ctx, Some(seed))
+}
+
+fn tiny_qwen3(tokens: &[Vec<u8>], train_ctx: u32, seed: Option<u64>) -> Vec<u8> {
     fn s(v: &mut Vec<u8>, x: &[u8]) {
         v.extend_from_slice(&(x.len() as u64).to_le_bytes());
         v.extend_from_slice(x);
@@ -399,11 +409,18 @@ pub fn tiny_qwen3_gguf(tokens: &[Vec<u8>], train_ctx: u32) -> Vec<u8> {
         s(&mut toks, t);
     }
     put("tokenizer.ggml.tokens", arrt, &toks);
-    let q8 = |rows: usize| -> Vec<u8> {
+    let mut state = seed;
+    let mut q8 = |rows: usize| -> Vec<u8> {
         let mut v = vec![];
         for _ in 0..rows {
             v.extend_from_slice(&0x2000u16.to_le_bytes());
-            v.extend_from_slice(&[1u8; 32]);
+            match state.as_mut() {
+                None => v.extend_from_slice(&[1u8; 32]),
+                Some(x) => v.extend((0..32).map(|_| {
+                    *x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    (*x >> 56) as u8
+                })),
+            }
         }
         v
     };

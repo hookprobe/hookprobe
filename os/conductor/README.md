@@ -294,7 +294,18 @@ capability, the worker, a signed bundle loaded in place and admitted, the engine
 the device's verifier. The model there is a one-block test model whose weights are all equal, so the contract
 alone shapes its answer. A job that requires no citation verifies as valid; the same answer on a job with a
 required fact is held back by the verifier as incomplete; a second job reuses the cached prompt start; another
-model digest is refused before anything is decoded. This is a host test. The node's EL0 wiring, block device
+model digest is refused before anything is decoded.
+
+**Exact agreement, with the real engine.** The fleet's verified redundancy (`conductor_core::quorum`, ADR 0071
+amendment A3) compares signed output hashes for equality, so it stands on nodes giving the same bytes. The same
+file checks that on a test model with seeded weights (tokens score differently, so the answer depends on every
+pass): a node on scalar kernels, a node on this host's NEON kernels, and a node that reuses a cached prompt
+start from another job give byte-identical answers, and their signed votes reach agreement. A node with other
+weights gives another answer and is a conflict with re-verifiable evidence that names it. This is the
+host-side form of the proposed `[P-fleet-exact]` gate; across real core counts it needs the worker cores
+(ADR 0060 S2).
+
+These are host tests. The node's EL0 wiring, block device
 and kernel-held key are still kernel work (below).
 
 ## neuro-lm: the language-model pieces
