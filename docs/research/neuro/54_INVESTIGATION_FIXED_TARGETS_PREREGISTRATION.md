@@ -86,3 +86,16 @@ verdict.
   playbooks that list only owner actions. Only the move-on entities change, so this stays a one-variable re-run.
 - **The window ends at 09:00 on 2026-11-28** (operator). If it cannot finish by then, it stops, and this doc says
   where.
+
+## 7. Seal (2026-11-28, before any model has seen the set)
+
+- `blind_cases.jsonl` SHA-256 **`37a8693d16a39ee9564f5e3ed3baa75efb6da741e92c8893b477cff048ade94b`**.
+- **Mix:** next 45, multi 35, clears 30, decoy 25, invisible 15, alert 25 (175 cases); 21 Romanian (12.0%).
+- **Seal checks: PASS.** 0 collisions with inv-blind v1–v5 and the gen v4–v7 case files.
+- **Second annotator** (isolated, 44-case sample): **40/44** before adjudication.
+  - The author chose (b) for all four disagreements (`next-037`, `multi-022`, `alert-005`, `alert-009`): keep the gold
+    and add the annotator's step as a second acceptable answer.
+  - `alert-005` now accepts three tools, the only case above the brief's two-tool limit; the set's README records it.
+  - After adjudication the agreement is 44/44, and the seal checks pass on the final file (the hash above).
+- ftT finished training before the seal: checkpoint 200 of 292 (valid 0.018; 0.429 at step 1). Adapter
+  `2cfa4103…`, GGUF `40fd46d4…`.
