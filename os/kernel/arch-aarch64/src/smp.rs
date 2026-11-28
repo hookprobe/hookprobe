@@ -14,8 +14,9 @@
 //! NOT the CM5 path: there HBoot starts cores over SMC and installs stage-2 first
 //! (stage S0b, `[P-smp-stage2]`). The kernel refuses `smpboot` together with `cm5`.
 //!
-//! Known limit carried to S1: core 0's TLB maintenance is core-local (`tlbi vmalle1`), so a
-//! worker that does more than park must get broadcast invalidation or private tables.
+//! S1b: every worker runs on its own private stage-1 tables (`build_worker_tables`), built by
+//! core 0 before start and never changed, so core 0's core-local TLB maintenance (`tlbi vmalle1`)
+//! cannot leave a worker with stale translations, and kernel .data/.bss is unmapped for workers.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -55,6 +56,8 @@ pub struct BootBlock {
     pub el: AtomicU64,       // 96
     /// Core 0 -> worker: `*mut heqk_worker::exec::Ctx`, or 0 to park after start (S0a only).
     pub worker: u64, // 104
+    /// Written by the fault stub: FAR_EL1 of the faulting access.
+    pub far: AtomicU64, // 112
 }
 
 const ZERO_BLOCK: BootBlock = BootBlock {
@@ -72,13 +75,30 @@ const ZERO_BLOCK: BootBlock = BootBlock {
     esr: AtomicU64::new(0),
     el: AtomicU64::new(0),
     worker: 0,
+    far: AtomicU64::new(0),
 };
 
-#[repr(C, align(16))]
-struct Stack([u8; STACK_SIZE]);
+/// Everything one worker core may write, in one page-aligned, page-multiple area (S1b): its boot
+/// block (first, so TPIDR_EL1 points at both), its two rings, its executive context and its stack.
+/// The worker's private tables map exactly this area read-write and no other kernel data.
+#[repr(C, align(4096))]
+struct CoreShared {
+    block: BootBlock,
+    jobs: Ring<Job>,
+    done: Ring<Done>,
+    ctx: core::mem::MaybeUninit<Ctx>,
+    stack: [u8; STACK_SIZE],
+}
 
-static mut BLOCKS: [BootBlock; MAX_CORES] = [ZERO_BLOCK; MAX_CORES];
-static mut STACKS: [Stack; MAX_CORES] = [const { Stack([0; STACK_SIZE]) }; MAX_CORES];
+static mut CORES: [CoreShared; MAX_CORES] = [const {
+    CoreShared {
+        block: ZERO_BLOCK,
+        jobs: Ring::new(),
+        done: Ring::new(),
+        ctx: core::mem::MaybeUninit::uninit(),
+        stack: [0; STACK_SIZE],
+    }
+}; MAX_CORES];
 
 /// The response a worker must publish for `challenge`.
 pub const fn expected_response(challenge: u64, mpidr: u64) -> u64 {
@@ -104,6 +124,8 @@ __smp_worker_fault:
     cbz     x0, 2f
     mrs     x1, esr_el1
     str     x1, [x0, #88]
+    mrs     x1, far_el1
+    str     x1, [x0, #112]
     add     x2, x0, #64
     mov     x1, #3
     stlr    x1, [x2]
@@ -227,13 +249,14 @@ pub enum StartResult {
 /// Core 0 only; `idx` must not be started twice.
 pub unsafe fn start_core(idx: usize, mpidr: u64, challenge: u64, fault_test: bool, worker: Option<Port>) -> (StartResult, Option<Port>) {
     assert!(idx > 0 && idx < MAX_CORES);
-    let b = &mut *core::ptr::addr_of_mut!(BLOCKS[idx]);
-    let stack = core::ptr::addr_of_mut!(STACKS[idx]) as usize;
-    let (mair, tcr, ttbr0, sctlr): (u64, u64, u64, u64);
+    let b = &mut *core::ptr::addr_of_mut!(CORES[idx].block);
+    let stack = core::ptr::addr_of_mut!(CORES[idx].stack) as usize;
+    let (mair, tcr, sctlr): (u64, u64, u64);
     core::arch::asm!("mrs {}, mair_el1", out(reg) mair, options(nomem, nostack));
     core::arch::asm!("mrs {}, tcr_el1", out(reg) tcr, options(nomem, nostack));
-    core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr0, options(nomem, nostack));
     core::arch::asm!("mrs {}, sctlr_el1", out(reg) sctlr, options(nomem, nostack));
+    // S1b: the worker runs on its own tables, never core 0's (see `build_worker_tables`).
+    let Some(ttbr0) = build_worker_tables(idx) else { return (StartResult::Refused(-100), None) };
     b.stack_top = (stack + STACK_SIZE) as u64;
     b.mair = mair;
     b.tcr = tcr;
@@ -247,6 +270,7 @@ pub unsafe fn start_core(idx: usize, mpidr: u64, challenge: u64, fault_test: boo
     b.mpidr.store(0, Ordering::Relaxed);
     b.response.store(0, Ordering::Relaxed);
     b.esr.store(0, Ordering::Relaxed);
+    b.far.store(0, Ordering::Relaxed);
     clean_to_poc(b as *const BootBlock as usize, core::mem::size_of::<BootBlock>());
 
     let rc = psci_cpu_on(mpidr, __smp_secondary_entry as *const () as usize as u64, b as *const BootBlock as u64);
@@ -278,7 +302,105 @@ pub unsafe fn start_core(idx: usize, mpidr: u64, challenge: u64, fault_test: boo
 
 /// Read-only view of worker `idx`'s block (core 0 side).
 pub fn block(idx: usize) -> &'static BootBlock {
-    unsafe { &*core::ptr::addr_of!(BLOCKS[idx]) }
+    unsafe { &*core::ptr::addr_of!(CORES[idx].block) }
+}
+
+// ------------------------------------------------------------------------------------------------
+// S1b: private stage-1 tables per worker core. Built by core 0 from a pool the workers cannot
+// reach (the pool is not mapped in any worker table), never changed after start, so a worker needs
+// no TLB maintenance and core 0's core-local `tlbi` cannot leave it stale. Identity mapping, the
+// granule and VA size of core 0's TCR (4 KiB, 39-bit, walk from L1); MAIR attr0 Device, attr1 Normal.
+//
+//   kernel .text            read-only, executable at EL1   (the worker's code lives in the image)
+//   kernel .rodata          read-only, never executable    (constants the compiled code reads)
+//   CORES[idx]              read-write, never executable   (this core's block, rings, context, stack)
+//   WINDOW                  read-only, never executable    (core 0's shared data)
+//   GICD, GICC (one page each)  Device read-write          (the doorbell)
+//   everything else         unmapped: kernel .data/.bss, other cores' areas, the table pool, MMIO
+
+const PAGE: usize = 4096;
+const DESC: u64 = 0b11; // table (L1/L2) or page (L3)
+const AF: u64 = 1 << 10;
+const SH_IS: u64 = 0b11 << 8;
+const AP_RO: u64 = 0b10 << 6;
+const PXN: u64 = 1 << 53;
+const UXN: u64 = 1 << 54;
+const ATTR_DEVICE: u64 = 0 << 2;
+const ATTR_NORMAL: u64 = 1 << 2;
+const ADDR: u64 = 0x0000_FFFF_FFFF_F000;
+
+const TEXT: u64 = ATTR_NORMAL | SH_IS | AF | AP_RO | UXN;
+const RODATA: u64 = ATTR_NORMAL | SH_IS | AF | AP_RO | PXN | UXN;
+const RW_DATA: u64 = ATTR_NORMAL | SH_IS | AF | PXN | UXN;
+const DEVICE: u64 = ATTR_DEVICE | AF | PXN | UXN;
+
+#[repr(C, align(4096))]
+struct Table([u64; 512]);
+const POOL: usize = 96;
+static mut TABLES: [Table; POOL] = [const { Table([0; 512]) }; POOL];
+static TABLES_NEXT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+extern "C" {
+    static __text_start: u8;
+    static __text_end: u8;
+    static __rodata_end: u8;
+}
+
+fn alloc_table() -> Option<*mut u64> {
+    let i = TABLES_NEXT.fetch_add(1, Ordering::Relaxed);
+    if i >= POOL {
+        return None;
+    }
+    // Fresh from .bss and never reused, so already zero (all entries invalid).
+    Some(unsafe { core::ptr::addr_of_mut!(TABLES[i]) } as *mut u64)
+}
+
+unsafe fn next_level(t: *mut u64, i: usize) -> Option<*mut u64> {
+    let e = unsafe { core::ptr::read_volatile(t.add(i)) };
+    if e & DESC == DESC {
+        return Some((e & ADDR) as usize as *mut u64);
+    }
+    let n = alloc_table()?;
+    unsafe { core::ptr::write_volatile(t.add(i), n as u64 | DESC) };
+    Some(n)
+}
+
+unsafe fn map_range(l1: *mut u64, start: usize, end: usize, attrs: u64) -> bool {
+    let mut va = start & !(PAGE - 1);
+    while va < end {
+        let Some(l2) = (unsafe { next_level(l1, (va >> 30) & 511) }) else { return false };
+        let Some(l3) = (unsafe { next_level(l2, (va >> 21) & 511) }) else { return false };
+        unsafe { core::ptr::write_volatile(l3.add((va >> 12) & 511), (va as u64 & ADDR) | attrs | DESC) };
+        va += PAGE;
+    }
+    true
+}
+
+/// Build worker `idx`'s private tables; returns its TTBR0 value (ASID 0).
+fn build_worker_tables(idx: usize) -> Option<u64> {
+    let l1 = alloc_table()?;
+    unsafe {
+        let text = (core::ptr::addr_of!(__text_start) as usize, core::ptr::addr_of!(__text_end) as usize);
+        let rodata_end = core::ptr::addr_of!(__rodata_end) as usize;
+        let area = core::ptr::addr_of!(CORES[idx]) as usize;
+        let window = core::ptr::addr_of!(WINDOW) as usize;
+        let ok = map_range(l1, text.0, text.1, TEXT)
+            && map_range(l1, text.1, rodata_end, RODATA)
+            && map_range(l1, area, area + core::mem::size_of::<CoreShared>(), RW_DATA)
+            && map_range(l1, window, window + core::mem::size_of::<Window>(), RODATA)
+            && map_range(l1, GICD, GICD + PAGE, DEVICE)
+            && map_range(l1, GICC, GICC + PAGE, DEVICE);
+        if !ok {
+            return None;
+        }
+        core::arch::asm!("dsb ish", options(nostack)); // tables visible to the walker before CPU_ON
+    }
+    Some(l1 as u64)
+}
+
+/// Tables used so far (diagnostics for the gate).
+pub fn tables_used() -> usize {
+    TABLES_NEXT.load(Ordering::Relaxed).min(POOL)
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -298,12 +420,9 @@ const GICC: usize = 0x0801_0000;
 /// Words in the shared read-only data window.
 pub const WINDOW_WORDS: usize = 8192;
 
-static JOBS: [Ring<Job>; MAX_CORES] = [const { Ring::new() }; MAX_CORES];
-static DONE: [Ring<Done>; MAX_CORES] = [const { Ring::new() }; MAX_CORES];
-static mut CTXS: [core::mem::MaybeUninit<Ctx>; MAX_CORES] = [const { core::mem::MaybeUninit::uninit() }; MAX_CORES];
 
-/// Data core 0 shares with every worker, read-only for them (S1b maps it read-only in their private
-/// tables). Core 0 writes it before submitting the jobs that reference it; the ring's release store
+/// Data core 0 shares with every worker, read-only for them (mapped read-only in their private
+/// tables, S1b). Core 0 writes it before submitting the jobs that reference it; the ring's release store
 /// publishes those writes.
 #[repr(C, align(4096))]
 pub struct Window(pub [u64; WINDOW_WORDS]);
@@ -324,12 +443,14 @@ impl Port {
         if idx == 0 || idx >= MAX_CORES {
             return None;
         }
-        let (jp, jc) = JOBS[idx].split()?;
-        let (dp, dc) = DONE[idx].split()?;
+        // SAFETY: the rings are only ever reached through the endpoints split hands out once.
+        let (jobs, done) = unsafe { (&*core::ptr::addr_of!(CORES[idx].jobs), &*core::ptr::addr_of!(CORES[idx].done)) };
+        let (jp, jc) = jobs.split()?;
+        let (dp, dc) = done.split()?;
         let base = core::ptr::addr_of!(WINDOW) as u64;
-        // SAFETY: CTXS[idx] is written once here (the ring split above cannot succeed twice).
+        // SAFETY: CORES[idx].ctx is written once here (the ring split above cannot succeed twice).
         let ctx = unsafe {
-            let slot = &mut *core::ptr::addr_of_mut!(CTXS[idx]);
+            let slot = &mut *core::ptr::addr_of_mut!(CORES[idx].ctx);
             slot.write(Ctx {
                 jobs: jc,
                 done: dp,

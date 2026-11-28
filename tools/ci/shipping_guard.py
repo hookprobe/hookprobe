@@ -57,6 +57,8 @@ FORBIDDEN = {
     "fwcon-fast": "firmware console read every beat + full trap / stack dump (vendor test-firmware diagnostics, REL-08)",
     "t0inv": "ADR 0062 T0 inventory (hboot: ID registers, DTB, mailbox GET tags, gated SMCCC probe — bench only)",
     "flashstub": "ADR 0070 flash stub: whole-eMMC write gate (the USB flasher image only, never a device image)",
+    "smp-probe": "ADR 0060 S1b QEMU gate: worker probe ops (unchecked raw read/write, MMU-boundary proof)",
+    "mmu-probe": "ADR 0060 S1b QEMU gate: heqk-worker unchecked raw read/write ops (MMU-boundary proof)",
 }
 
 LINE = re.compile(r"^([A-Za-z0-9_\-]+) v\S+.*?\|([A-Za-z0-9_,\-]*)\|")

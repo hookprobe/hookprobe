@@ -17,6 +17,9 @@ SECTIONS
     __text_end = .;              /* everything past here is RW+PXN (no W^X violation) */
 
     .rodata : { *(.rodata .rodata.*) }
+
+    . = ALIGN(4096);
+    __rodata_end = .;            /* ADR 0060 S1b: worker tables map [__text_end,__rodata_end) read-only */
     .data   : { *(.data .data.*) }
 
     .bss (NOLOAD) : ALIGN(16) {

@@ -471,3 +471,17 @@ operator decides A5.
   remains: calling it from the executive's loop on a core with FP/SIMD, and granting the model region and windows.
 - **One limit to set from metal.** A capability allows at most 120 s of compute per call (`limits::MAX_COMPUTE_MS`).
   A triage job fits on the build host (60–87 s); on a CM5-class core it will not.
+
+## Update: what the engine will see on a worker core (2026-11-28, S1b)
+
+Since S1b every worker core runs on **private page tables**: kernel `.text` (read-only, executable), `.rodata`
+(read-only), the worker's own page-aligned area (block, rings, context, stack: read-write), the shared data window
+(**read-only**) and two GIC pages. Kernel `.data`/`.bss` is **unmapped**; touching it is an MMU fault that parks the
+core. For the engine on a worker core (ADR 0060 S2) this means:
+- **No mutable statics** in the engine crates (`neuro-*`, `conductor-core` paths the worker calls). A `static mut`,
+  an atomic static, or a `OnceCell`-style global lands in `.data`/`.bss` and will fault. Immutable `static` tables
+  in `.rodata` are fine. Today's crates are `no_std`, allocation-free and pass state by argument, so they fit; please
+  keep it that way (a grep-based test like `no_linux_no_python.rs` could enforce it, if you want one).
+- **Weights and arena come from core 0** as regions mapped into that worker only: the model region read-only, the
+  KV cache/arena read-write. The engine must not assume any other address is reachable.
+- **Bit-exactness** across workers is still what `quorum` relies on (previous update).

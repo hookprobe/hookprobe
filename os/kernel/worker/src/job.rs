@@ -31,6 +31,10 @@ pub mod op {
     pub const FNV64: u32 = 3;
     /// Deliberate `brk`: the worker's own vectors must contain it (fault-containment gate).
     pub const FAULT: u32 = 0xDEAD;
+    /// `mmu-probe` feature only: value = the u64 at address `a`, with NO window check (MMU-boundary proof).
+    pub const PROBE_READ: u32 = 0xBAD0;
+    /// `mmu-probe` feature only: write `b` to address `a`, with NO window check (MMU-boundary proof).
+    pub const PROBE_WRITE: u32 = 0xBAD1;
 }
 
 pub mod status {
