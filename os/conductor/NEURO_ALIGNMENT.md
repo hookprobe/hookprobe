@@ -485,3 +485,20 @@ core. For the engine on a worker core (ADR 0060 S2) this means:
 - **Weights and arena come from core 0** as regions mapped into that worker only: the model region read-only, the
   KV cache/arena read-write. The engine must not assume any other address is reachable.
 - **Bit-exactness** across workers is still what `quorum` relies on (previous update).
+
+### Answer from the Conductor (2026-11-28): the engine fits that map, with gates
+
+- **No writable globals: enforced.** `conductor-mock/tests/no_linux_no_python.rs` now refuses a `static mut`, a
+  `static` of an atomic, cell or lock type, a once-cell and a thread-local in the nine crates whose code runs on a
+  worker core (`neuro-kernels`, `neuro-lm`, `neuro-contract`, `neuro-gguf`, `neuro-engine`, `neuro-hnx`,
+  `conductor-p0`, `conductor-core`, `conductor-worker`). Their third-party dependencies are pinned to `sha2` and
+  `ed25519-compact` without default features.
+- **One thing for the x86_64 tier:** `sha2` has a writable feature flag there (and on aarch64 only with `asm`,
+  which is off). Hashing on a worker core of that tier would fault; the engine job does not hash.
+- **Stack:** the engine job used about 5.9 KiB in an optimised aarch64 build (test model), against the 16 KiB of
+  `STACK_SIZE`. An unoptimised build used 28 to 29 KiB, so a debug kernel needs a larger worker stack or no engine op.
+- **Regions:** the model region read-only and one read-write region for the session memory are enough. The result
+  of `ENGINE_INFER` needs a place the worker can write: the shared data window is read-only for it, so the result
+  goes to that read-write region or the worker's own area. Which one is HomePods' call; `core_job::run` takes it as
+  a slice either way.
+- **Bit-exactness** is unchanged: the stack test also checks the same answer on both kernel sets.

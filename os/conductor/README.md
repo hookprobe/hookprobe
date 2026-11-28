@@ -310,6 +310,36 @@ crate is `no_std` with no allocation, no float and no `unsafe` (it is in the no-
 build was not run on this host, which has no bare-metal target installed. What remains is kernel side: calling it from the executive's
 loop on a core with FP/SIMD enabled, and granting the model region and the windows.
 
+**The engine fits a worker core's memory map (S1b, #1654).** Since S1b a worker core runs on private page tables:
+kernel `.text` and `.rodata` read-only, its own area (rings, context, a 16 KiB stack) read-write, the shared data
+window read-only, and kernel `.data`/`.bss` unmapped. What the engine job touches, and where it has to live:
+
+| What | Access | Region on a worker core |
+|---|---|---|
+| Engine code and its constant tables | read, execute | kernel `.text` / `.rodata` |
+| The signed bundle (weights, tokenizer tables, RoPE pairs) | read | model region, granted read-only by core 0 |
+| The prompt (`a`, `b` of the job) | read | the shared data window (read-only is enough) |
+| Session memory (`p0::Mem`: KV state, work buffers, token lists; sized by `p0::sizes` before start) | read, write | a region core 0 grants read-write to that worker only |
+| The result (16-byte header, then the answer) | write | **not** the shared data window, which a worker cannot write: the same granted read-write region, or the worker's own area |
+| Progress and cancel words | write / read | the worker's own area (core 0 reaches it) |
+| Stack | read, write | the worker's own 16 KiB |
+| Any global | none | the engine has none |
+
+| Gate | Result |
+|---|---|
+| No writable global in the nine crates whose code runs on a worker core: no `static mut`, no `static` with an atomic, cell or lock type, no once-cell, no thread-local (`no_linux_no_python.rs`) | pass |
+| Those crates depend only on each other and on two reviewed crates at pinned versions and features (`sha2` 0.10.9, `ed25519-compact` 2.3.1, no default features); `sha2-asm` is not in the lock file | pass |
+| The engine job's stack, measured by painting the stack before the call, optimised aarch64 build: about 5.9 KiB with either kernel set, against a 12 KiB budget of the worker's 16 KiB; the same answer on both | pass |
+
+Three things for the kernel side to know:
+- The stack bound holds for an optimised build. An unoptimised build of the same job used 28 to 29 KiB here, so a
+  debug kernel would overflow a 16 KiB worker stack. Measured on the test model; Rust has no variable-length stack
+  arrays, but the real model's figure belongs to the first S2 run.
+- `sha2` keeps one writable flag where it detects CPU features at run time (`cpufeatures`: a static `AtomicU8`).
+  On aarch64 that is only with its `asm` feature, which is off here. On x86_64 it is always there, so on that tier
+  hashing must stay on core 0 or the crate needs `force-soft`. The engine job itself does not hash.
+- The result cannot go to the shared data window as S1b maps it; see the table.
+
 **Exact agreement, with the real engine.** The fleet's verified redundancy (`conductor_core::quorum`, ADR 0071
 amendment A3) compares signed output hashes for equality, so it stands on nodes giving the same bytes. The same
 file checks that on a test model with seeded weights (tokens score differently, so the answer depends on every
