@@ -323,9 +323,13 @@ counter, bytes / 4) and `e2e_neuro.py`'s rule that the context ends with the `RE
 - **A drift gate** reads Neuro's two sources and fails on a change to any mirrored constant or format string.
 
 **Not covered, and what it waits for:**
-1. **DNS and behaviour events.** Neuro's builder takes them; this function has no input for them. The E2E fixture
-   has neither.
-2. **Who calls it, and with what.** The function needs the window's flows, its detections and the baseline pairs.
+1. **DNS and behaviour events.** Built on 2026-11-28 (`cards::build_window`): DNS groups (NXDOMAIN share, distinct
+   names and label entropy, quoted instruction-like names, novelty against the baseline suffixes, DNS detections)
+   and behaviour records, equal to Neuro's builder on its 64 synthetic contexts (`card_contract_synth.json`), on
+   104 committed contexts and on 6,000 generated windows. One case has no single answer in the Python (two
+   instruction-like names in one group: the choice follows the hash seed); the mirror takes the lowest name.
+2. **Who calls it, and with what.** Decided on 2026-11-28 (Neuro doc 53, R12, operator): the cards are built in the
+   Conductor's harness by this function. The function needs the window's flows, its detections and the baseline pairs.
    On the device those come from the kernel's flow table and the L1 alert; `e2e_neuro.py` also maps connection
    states to `rst` and attaches the alert as a detection. That mapping is the job issuer's and is not built.
 3. **`CONTEXT` lines.** Still not carried by the job format (see the update on the investigation turn). The `REST` line is now
