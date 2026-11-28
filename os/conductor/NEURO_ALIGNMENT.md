@@ -384,9 +384,9 @@ The item left open above is built on the host side (`conductor-core`, tested aga
   harness writes cards then `RESULT` lines today; when `REST` exists it goes after them.
 
 **Not built, and what it waits for:**
-1. **`CONTEXT` and `REST` lines.** Neuro's contexts carry `CONTEXT …` lines and end with `REST n more cards`.
-   The job format has only evidence cards, so the harness writes neither. This is the card writer's side
-   (who builds the cards on the device, and from what) and affects the explainer turn in the same way.
+1. **`CONTEXT` lines.** Neuro's generated contexts carry `CONTEXT …` lines (a device's role, an owner's note).
+   Its card builder writes none, and the job format has no place for them. The `REST` line is carried since
+   2026-11-28: a job can hold a window's context, see the last update.
 2. **The tools themselves.** The kernel answers a `RunTool`: reputation, flows, DNS and exposure lookups are
    kernel-side work (KR-3 and Neuro's exposure table). Here the mock answers.
 3. **The worker's side.** A worker must decode an investigation request under the lazy tool-call grammar

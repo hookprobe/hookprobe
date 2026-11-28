@@ -40,6 +40,7 @@ pub mod place;
 pub mod quorum;
 pub mod tools;
 pub mod verify;
+pub mod window;
 pub mod wire;
 pub mod worker;
 
