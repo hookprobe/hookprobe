@@ -272,6 +272,18 @@ pass at about 1,200 tokens of context takes 97 to 111 ms at the median (attentio
 larger part). The answer to the second window is byte for byte the answer of the unpacked layout in a fresh
 session.
 
+**Attention reads the cache in the order it lies in memory (2026-11-28).** `hp::attend` built each of a head's
+128 outputs by walking every cached position, so the V vectors of a head were crossed 128 times at a stride.
+It now adds one position after another into the output, reads each V vector once, and skips positions whose
+weight is 0. The sums are integer sums, so the numbers are the same: `attention_gives_the_reference_numbers_exactly`
+(`neuro-lm/tests/qwen3.rs`) holds the first form as a reference and compares 33 cases bit for bit, including
+the largest values the types allow. One head over 1,200 positions: 167 µs before, 55 µs after (build host).
+
+ftFg, the three windows above, same host, same bundle, old and new binaries: **the same answer bytes on all
+three**. From an empty cache 63.3 s, 68.2 s and 51.5 s, against 85.4 s, 92.6 s and 68.8 s: about a quarter
+less. With the cache kept between jobs: 63.8 s, 59.5 s and 43.5 s. The kernel is plain Rust with no `unsafe`
+and no new kernel set, so core 0's soft-float build gets the better order too. Host numbers, not device numbers.
+
 Still open in this path: the
 signature is Ed25519 with a test key; release signing and the hybrid scheme are the platform's. The tables are
 covered by the signature and are not re-derived: the device cannot compute a cosine.
