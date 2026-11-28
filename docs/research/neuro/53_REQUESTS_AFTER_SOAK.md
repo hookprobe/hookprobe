@@ -12,7 +12,7 @@ investigation turn (#1615).
 | **R10** | S1's alert carries its top-3 feature deviations (`dev=`) | HomePods (ABI), operator | the generic-alert triage gap (docs 45–48) |
 | **R11** | A window with no evidence card never becomes an explainer job | HomePods (job issuer) | nothing; removes a failure by construction |
 | **R12** | Where the evidence cards are built on the device | operator | every on-device explanation |
-| **R13** | Read tools return a typed outcome next to their text | HomePods / the tools' owner | Rule P (doc 52) |
+| **R13** | Read tools return a typed outcome next to their text | HomePods / the tools' owner | doc 56's design (router + stop rule; PASS) |
 
 ---
 
@@ -89,6 +89,31 @@ card kinds the fixture vectors do not cover (DNS, behaviour records, verbatim de
 
 **Smallest interface:** each read tool returns one outcome byte next to its text, judged against the playbook's
 `confirms` and `clears` (for example, listed on a feed or not; new outbound peers or not). The text stays as it is.
+
+**Update after doc 56 (2026-11-28).** R13 now has evidence of its own.
+- **Doc 56 PASSED** on inv-blind v8 (sealed, one look; [`data/mixV-results.md`](data/mixV-results.md)). The design
+  is Rule P's first rule only: any result typed `clears` → stop; otherwise ftT after a result and ftM before one.
+  Against ftM alone:
+  - multi 0.457 vs 0.114;
+  - next+multi 0.637 vs 0.487 (McNemar p = 0.0018);
+  - clears 0.967 vs 0.833.
+- **The outcomes were simulated:** an isolated labeller read each result sentence alone. So this is an upper bound
+  until tools type their own results.
+- **What changes in the interface:**
+  - Only `clears` drives a decision. Rules 2–3 of Rule P, and the playbook ids they need (R10), are **not** needed
+    for this step.
+  - `clears` means a **specific benign explanation**: the device vendor's own cloud, a known update host, the owner's
+    own job or scanner. "Not listed", "nothing found", and shared hosting, CDN or sinkhole ranges are `none`. That
+    rule is in the labeller brief, [`data/inv-outcome-brief-v1.md`](data/inv-outcome-brief-v1.md).
+  - Fail closed: a missing or unknown outcome is `none`. The outcome comes from the tool only, never from a model or a
+    worker.
+- **What it costs (Conductor):**
+  - two model bundles, about 1.9 GB each, with one arena serving both, one at a time;
+  - a full prompt pass on the first ftT turn, because switching adapters drops the cache.
+- **Still untested:** an investigation where one tool clears and another supports. As written, it stops. The
+  Conductor will count such cases as telemetry if R13 goes ahead.
+- **Needed:** only if the operator adopts doc 56's design. The decision is HomePods' (the tool result format) and the
+  operator's.
 
 ---
 
