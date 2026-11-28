@@ -81,6 +81,12 @@ pub struct JobSpec {
     pub intent: Buf<MAX_INTENT>,
     pub evidence: [Evidence; MAX_EVIDENCE],
     pub n_evidence: usize,
+    /// A window's context as `neuro_contract::cards::build_window` wrote it (`F<n> …` lines, then `REST …`),
+    /// in place of evidence cards. Empty when the job carries cards.
+    pub context: Buf<MAX_CONTEXT>,
+    /// The data class of the context (raw byte, so an empty job is all-zero). It holds addresses, so it is
+    /// at least the class the owner gives those.
+    pub context_class: u8,
 }
 
 impl JobSpec {
@@ -99,11 +105,28 @@ impl JobSpec {
         intent: Buf::new(),
         evidence: [Evidence::EMPTY; MAX_EVIDENCE],
         n_evidence: 0,
+        context: Buf::new(),
+        context_class: 0,
     };
 
     /// An investigation turn (Neuro's request with its five tools) instead of an explainer turn.
     pub fn is_investigation(&self) -> bool {
         self.tools_granted & crate::tools::bit::INV_ALL != 0
+    }
+
+    /// The job's evidence is a window's context, not cards.
+    pub fn has_context(&self) -> bool {
+        !self.context.is_empty()
+    }
+
+    /// The context without its closing `REST` line, and that line (empty if there is none).
+    pub fn context_parts(&self) -> (&[u8], &[u8]) {
+        let c = self.context.as_slice();
+        let start = c.iter().rposition(|b| *b == b'\n').map_or(0, |i| i.saturating_add(1));
+        match c.get(start..) {
+            Some(last) if last.starts_with(b"REST ") => (c.get(..start.saturating_sub(1)).unwrap_or(&[]), last),
+            _ => (c, &[]),
+        }
     }
 
     pub fn l0_verdict(&self) -> Option<Verdict> {
@@ -129,6 +152,30 @@ pub enum JobError {
     Option,
 }
 
+/// A context is fact lines `F<digits> <text>`, numbered from 1 in order, optionally closed by one `REST <text>`
+/// line. No other line kind, no empty line: nothing in it can pose as a result, a question or a second context.
+fn context_shape(ctx: &[u8]) -> bool {
+    let mut expect = 1u32;
+    let mut closed = false;
+    for line in ctx.split(|b| *b == b'\n') {
+        if closed {
+            return false;
+        }
+        if line.starts_with(b"REST ") {
+            closed = true;
+            continue;
+        }
+        let Some(rest) = line.strip_prefix(b"F") else { return false };
+        let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+        let num = rest.get(..digits).and_then(|d| core::str::from_utf8(d).ok()).and_then(|d| d.parse::<u32>().ok());
+        if num != Some(expect) || rest.get(digits) != Some(&b' ') || rest.len() <= digits.saturating_add(1) || rest.first() == Some(&b'0') {
+            return false;
+        }
+        expect = expect.saturating_add(1);
+    }
+    true
+}
+
 /// Inert text: valid UTF-8; no control characters except newline; no DEL; no bidirectional overrides or
 /// isolates (they let text render differently from what it is). Shared by job cards, tool results and the
 /// model's summary.
@@ -151,7 +198,9 @@ impl JobSpec {
     ///
     /// Layout: job_id[16] model[32] tools u8 l0 u8 steps u8 cache_scope u8 offload u8 energy u8
     /// affinity[16] slo_ttft u32 slo_tpot u32 out_total u32 compute_total u32 per_call u32 deadline u64
-    /// intent_len u16 intent n_ev u8 { id u16 class u8 required u8 len u16 text }*
+    /// intent_len u16 intent n_ev u8 { id u16 class u8 required u8 len u16 text }* ctx_class u8 ctx_len u16 ctx
+    /// A job carries cards or a context (`ctx_len` > 0), never both. A context is a list of `F<n> …` lines,
+    /// optionally closed by one `REST …` line; Conductor's own tools need cards and cannot be granted with it.
     /// Reset in place (no 9 KiB temporary).
     pub fn reset(&mut self) {
         self.job_id = [0; 16];
@@ -173,6 +222,8 @@ impl JobSpec {
             e.card.clear();
         }
         self.n_evidence = 0;
+        self.context.clear();
+        self.context_class = 0;
     }
 
     pub fn decode_into(&mut self, b: &[u8]) -> Result<(), JobError> {
@@ -251,6 +302,22 @@ impl JobSpec {
             slot.required = required;
             slot.card.set(text).ok_or(JobError::Length)?;
             self.n_evidence = i.checked_add(1).ok_or(e)?;
+        }
+        let class = r.u8().ok_or(e)?;
+        let n = usize::from(r.u16().ok_or(e)?);
+        let ctx = r.take(n).ok_or(e)?;
+        if !ctx.is_empty() {
+            DataClass::from_u8(class).ok_or(JobError::Class)?;
+            if self.n_evidence != 0 || self.tools_granted & crate::tools::bit::ALL != 0 {
+                return Err(JobError::Option);
+            }
+            if !inert_text(ctx) || !context_shape(ctx) {
+                return Err(JobError::Text);
+            }
+            self.context.set(ctx).ok_or(JobError::Length)?;
+            self.context_class = class;
+        } else if class != 0 {
+            return Err(JobError::Option);
         }
         if !r.done() {
             return Err(JobError::Length);

@@ -109,6 +109,8 @@ pub struct JobBuilder {
     pub deadline: u64,
     pub intent: String,
     pub evidence: Vec<Ev>,
+    /// A window's context in place of cards (`JobSpec::context`).
+    pub context: Option<(DataClass, String)>,
 }
 
 impl Default for JobBuilder {
@@ -133,6 +135,7 @@ impl Default for JobBuilder {
                 Ev { id: 1, class: DataClass::Public, required: true, text: "CVE-2024-3400: PAN-OS GlobalProtect command injection".into() },
                 Ev { id: 2, class: DataClass::AggregateReviewed, required: false, text: "42 connections to 203.0.113.9:443 in 10 min".into() },
             ],
+            context: None,
         }
     }
 }
@@ -157,6 +160,14 @@ impl JobBuilder {
             b.push(e.required as u8);
             b.extend_from_slice(&(e.text.len() as u16).to_le_bytes());
             b.extend_from_slice(e.text.as_bytes());
+        }
+        match &self.context {
+            Some((class, text)) => {
+                b.push(*class as u8);
+                b.extend_from_slice(&(text.len() as u16).to_le_bytes());
+                b.extend_from_slice(text.as_bytes());
+            }
+            None => b.extend_from_slice(&[0, 0, 0]),
         }
         b
     }

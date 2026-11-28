@@ -384,13 +384,45 @@ The item left open above is built on the host side (`conductor-core`, tested aga
   harness writes cards then `RESULT` lines today; when `REST` exists it goes after them.
 
 **Not built, and what it waits for:**
-1. **`CONTEXT` and `REST` lines.** Neuro's contexts carry `CONTEXT …` lines and end with `REST n more cards`.
-   The job format has only evidence cards, so the harness writes neither. This is the card writer's side
-   (who builds the cards on the device, and from what) and affects the explainer turn in the same way.
+1. **`CONTEXT` lines.** Neuro's generated contexts carry `CONTEXT …` lines (a device's role, an owner's note).
+   Its card builder writes none, and the job format has no place for them. The `REST` line is carried since
+   2026-11-28: a job can hold a window's context, see the last update.
 2. **The tools themselves.** The kernel answers a `RunTool`: reputation, flows, DNS and exposure lookups are
    kernel-side work (KR-3 and Neuro's exposure table). Here the mock answers.
 3. **The worker's side.** A worker must decode an investigation request under the lazy tool-call grammar
    (`inv::ToolMachine`). The request frame does not yet say which of the two turns it is.
 4. **The bare-metal build** of `el0-harness` with this change was not run on this host (no
    `aarch64-unknown-none-softfloat` toolchain here), so its size table in `README.md` is unchanged and unchecked.
+
+## Update: the cards are built in the harness (2026-11-28)
+
+The operator decided where the device's evidence cards are built (Neuro doc 53, R12): in the Conductor's
+harness, by `neuro_contract::cards::build_window`. This is that path, on the host side.
+
+- **The kernel hands over events, never prose.** `conductor_core::window` defines the window's wire format
+  (a string table, then flows, DNS queries, detections, behaviour records and the baseline) and `window::build`
+  turns it into the context with the card builder, in caller-provided memory. A window that does not fit, a
+  truncated one, or a text that could forge a line is refused.
+- **A job carries the context in place of cards** (`JobSpec::context`, with one data class). Its shape is
+  checked when the job is loaded: fact lines `F1`, `F2`, … in order, closed by at most one `REST` line. No other
+  line kind is accepted, so nothing in it can pose as a result, a question or a second context.
+- **The provider is shown exactly that context**, after guard A. In an investigation the results of earlier
+  checks go before the `REST` line: cards, `RESULT` lines, `REST` last, as agreed with Neuro.
+- **Answers stay closed over it.** Fact ids and aliases come from the shown context; a fact cited twice is
+  rejected. Nothing is "required": the context is one piece of evidence, shown whole or not at all.
+- **A window with no fact card is not sent to a model** (`Refused(NoEvidence)`), in either turn.
+- **Conductor's own two tools** name evidence cards and cannot be granted with a context.
+
+Tested in `conductor-mock/tests/window.rs`: 86 windows of the card vectors go through the wire format and give
+Neuro's context byte for byte at every budget (104 contexts); 40 of them go on through the harness and reach the
+worker as built.
+
+**Not built, and what it waits for:**
+1. **The kernel side.** Collecting a window's flows, DNS queries and baseline from the kernel's tables, mapping
+   connection states to `rst`, attaching the L1 alert as a detection, and choosing which windows become jobs
+   (Neuro's R11: no fact card, no job). These are the job issuer's, with HomePods.
+2. **The server's buffers.** `window::build` takes its memory from the caller. The sizes a real device window
+   needs, and what they add to the harness server's `.bss`, are not measured.
+3. **The data class of a context.** It holds addresses; the issuer states one class for the whole context. Finer
+   handling (a context with addresses withheld for a tier that may not see them) is not built.
 
