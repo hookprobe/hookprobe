@@ -296,6 +296,20 @@ alone shapes its answer. A job that requires no citation verifies as valid; the 
 required fact is held back by the verifier as incomplete; a second job reuses the cached prompt start; another
 model digest is refused before anything is decoded.
 
+**The engine as a worker-core job (`conductor_p0::core_job`, ADR 0060 stage S2).** HomePods' worker executive
+(`os/kernel/worker`, draft #1644) gives a worker core a closed job vocabulary, `Job { id, op, a, b }` in and
+`Done { id, status, value }` out, and leaves the compute engine to be added as a new op. This is that op's body,
+written against slices, with no address arithmetic and no `unsafe`: `ENGINE_INFER` takes the prompt at offset
+`a`, length `b` of the read window core 0 granted, writes a 16-byte header of counters and then the answer to
+the result window, and returns the answer's length. Core 0 does not wait inside the job: it reads a progress
+word (answer tokens so far) and may set a cancel word, both looked at after every pass over the weights. A
+cancelled job returns nothing of its answer, and the core serves the next job normally. A range outside the
+window, bytes that are not a prompt and an answer that does not fit are refused with a status. The test checks
+all of that and that the answer equals, byte for byte, the one the capability path gives on other kernels. The
+crate is `no_std` with no allocation, no float and no `unsafe` (it is in the no-Linux gate); its bare-metal
+build was not run on this host, which has no bare-metal target installed. What remains is kernel side: calling it from the executive's
+loop on a core with FP/SIMD enabled, and granting the model region and the windows.
+
 **Exact agreement, with the real engine.** The fleet's verified redundancy (`conductor_core::quorum`, ADR 0071
 amendment A3) compares signed output hashes for equality, so it stands on nodes giving the same bytes. The same
 file checks that on a test model with seeded weights (tokens score differently, so the answer depends on every

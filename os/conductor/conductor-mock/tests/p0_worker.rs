@@ -317,3 +317,59 @@ fn engine_nodes_agree_bit_for_bit_and_a_wrong_one_is_caught() {
     assert_eq!(q.disagrees_with(&sha256(&[&a1])).map(|v| v.cap_id).collect::<Vec<_>>(), vec![[4u8; 16]]);
     println!("exact agreement: {} answer bytes, {} tokens, scalar = SIMD = reused cache; other weights caught", a1.len(), n1.last_stats().tokens);
 }
+
+/// The engine as a worker-core job (`conductor_p0::core_job`, ADR 0060 S2): the prompt lies in the window core 0
+/// granted, the answer goes to the result window behind a header of counters, and core 0 follows and stops the
+/// job through two shared words. The answer is the one the capability path gives for the same prompt.
+#[test]
+fn the_engine_op_for_a_worker_core() {
+    use conductor_p0::core_job::{self, op, refused_with, status, Link, CANCELLED, HEADER};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    let prompt = format!("{}F1 H1->R1:443 n=3 bytes=1200\nF2 H2->R1:22 n=1 bytes=90{}Assess this window.", neuro_contract::USER_HEAD, neuro_contract::USER_MID);
+    // The granted window: other bytes around the prompt.
+    let mut window = vec![0xA5u8; 64];
+    let at = window.len() as u64;
+    window.extend_from_slice(prompt.as_bytes());
+    window.extend_from_slice(&[0x5A; 32]);
+    let len = prompt.len() as u64;
+    let (progress, cancel) = (AtomicU32::new(7), AtomicBool::new(false));
+    let mut core = executor_on(MODEL, fastest(), Some(7));
+    let mut result = vec![0u8; 8192];
+
+    let link = Link { window: &window, progress: &progress, cancel: &cancel };
+    let (st, value) = core_job::run(&mut core, op::ENGINE_INFER, at, len, link, &mut result);
+    assert_eq!(st, status::OK);
+    let answer = &result[HEADER..HEADER + value as usize];
+    let word = |i: usize| u32::from_le_bytes(result[i * 4..i * 4 + 4].try_into().unwrap());
+    let stats = core.last_stats();
+    assert_eq!((word(0), word(1), word(2), word(3)), (stats.tokens, stats.prefill_passes, stats.passes, 0));
+    assert_eq!(progress.load(Ordering::Acquire), stats.tokens, "core 0 saw the last pass");
+    // The same bytes as a node answering the same prompt through the capability path, on other kernels.
+    let mut node = executor_on(MODEL, Simd::SCALAR, Some(7));
+    let mut out = vec![0u8; 8192];
+    let run = node.run(conductor_core::cap::op::INFER, &MODEL, prompt.as_bytes(), &mut out).unwrap();
+    assert_eq!(answer, &out[..run.len]);
+
+    // What core 0 may get wrong, and what the engine refuses.
+    let mut call = |op: u32, a: u64, b: u64, result: &mut [u8], _: &AtomicBool| core_job::run(&mut core, op, a, b, link, result);
+    assert_eq!(call(0x7777, at, len, &mut result, &cancel), (status::UNKNOWN_OP, 0));
+    assert_eq!(call(op::ENGINE_INFER, at, window.len() as u64, &mut result, &cancel), (status::OUT_OF_WINDOW, 0), "runs past the window");
+    assert_eq!(call(op::ENGINE_INFER, u64::MAX, 2, &mut result, &cancel), (status::OUT_OF_WINDOW, 0), "overflows");
+    assert_eq!(call(op::ENGINE_INFER, at, len, &mut [0u8; HEADER - 1], &cancel), (status::OUT_OF_WINDOW, 0), "no room for the header");
+    let (st, value) = call(op::ENGINE_INFER, 0, 64, &mut result, &cancel);
+    assert!(refused_with(st, code::PROMPT) && value == 0, "bytes that are not a prompt: {st:#x}");
+    let (st, value) = call(op::ENGINE_INFER, at, len, &mut [0u8; HEADER + 8], &cancel);
+    assert!(refused_with(st, code::OUTPUT) && value == 0, "an answer that does not fit is not cut: {st:#x}");
+
+    // Core 0 stops the job: it ends after the pass in flight and returns nothing of an answer.
+    cancel.store(true, Ordering::Release);
+    result.fill(0);
+    let (st, value) = call(op::ENGINE_INFER, at, len, &mut result, &cancel);
+    assert_eq!((st, value), (CANCELLED, 0));
+    assert!(result[HEADER..].iter().all(|b| *b == 0), "no partial answer in the result window");
+    // And the core serves the next job as if nothing had happened: the same bytes again.
+    cancel.store(false, Ordering::Release);
+    let (st, value) = call(op::ENGINE_INFER, at, len, &mut result, &cancel);
+    assert_eq!(st, status::OK);
+    assert_eq!(&result[HEADER..HEADER + value as usize], &out[..run.len]);
+}

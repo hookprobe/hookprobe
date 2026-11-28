@@ -35,7 +35,11 @@ pub mod code {
     pub const ENGINE: u16 = 0x0204;
     /// The answer does not fit the output the capability allows.
     pub const OUTPUT: u16 = 0x0205;
+    /// The caller stopped the job between two passes. No part of an answer is returned.
+    pub const CANCELLED: u16 = 0x0206;
 }
+
+pub mod core_job;
 
 /// Neuro's bound on an answer (its evaluations ran with `max_tokens` 700).
 pub const MAX_ANSWER_TOKENS: usize = 700;
@@ -99,6 +103,19 @@ impl<C: FnMut() -> u64> Executor for P0Executor<'_, C> {
         if op != cap::op::INFER || *model != self.model {
             return Err(code::UNSUPPORTED);
         }
+        self.infer(prompt, out, &mut |_| true)
+    }
+
+    fn quote(&self, q: &QuoteRequest) -> (bool, u32, u32, u8) {
+        let meets = (q.slo_ttft_ms == 0 || self.quote_ttft_ms <= q.slo_ttft_ms) && (q.slo_tpot_ms == 0 || self.quote_tpot_ms <= q.slo_tpot_ms);
+        (meets, self.quote_ttft_ms, self.quote_tpot_ms, profile::CPU_ONLY)
+    }
+}
+
+impl<C: FnMut() -> u64> P0Executor<'_, C> {
+    /// One answer to `prompt` under the contract. `keep_going` is asked after every pass over the weights, with
+    /// the answer tokens so far; `false` stops the job, and nothing of the answer is returned.
+    pub fn infer(&mut self, prompt: &[u8], out: &mut [u8], keep_going: &mut dyn FnMut(usize) -> bool) -> Result<Run, u16> {
         // The contract for this request: the ids of the context the device showed.
         let shown = shown_context(prompt).ok_or(code::PROMPT)?;
         let (mut facts, mut ents) = (IdList::new(), IdList::new());
@@ -109,6 +126,7 @@ impl<C: FnMut() -> u64> Executor for P0Executor<'_, C> {
         let machine = Machine::new(Allowed { facts: &facts, entities: &ents, closed: true });
         let t0 = (self.clock)();
         let mut first: Option<u64> = None;
+        let mut stopped = false;
         let clock = &mut self.clock;
         let (_, stats) = self
             .session
@@ -116,7 +134,8 @@ impl<C: FnMut() -> u64> Executor for P0Executor<'_, C> {
                 if tokens > 0 && first.is_none() {
                     first = Some(clock());
                 }
-                true
+                stopped = !keep_going(tokens);
+                !stopped
             })
             .map_err(|e| match e {
                 P0Error::Prompt => code::CONTEXT,
@@ -124,13 +143,11 @@ impl<C: FnMut() -> u64> Executor for P0Executor<'_, C> {
             })?;
         let t1 = (self.clock)();
         self.last = stats;
+        if stopped {
+            return Err(code::CANCELLED);
+        }
         let len = self.session.answer_text(out).map_err(|_| code::OUTPUT)?;
         let ms = |a: u64, b: u64| u32::try_from(b.saturating_sub(a)).unwrap_or(u32::MAX);
         Ok(Run { len, compute_ms: ms(t0, t1), ttft_ms: ms(t0, first.unwrap_or(t1)) })
-    }
-
-    fn quote(&self, q: &QuoteRequest) -> (bool, u32, u32, u8) {
-        let meets = (q.slo_ttft_ms == 0 || self.quote_ttft_ms <= q.slo_ttft_ms) && (q.slo_tpot_ms == 0 || self.quote_tpot_ms <= q.slo_tpot_ms);
-        (meets, self.quote_ttft_ms, self.quote_tpot_ms, profile::CPU_ONLY)
     }
 }
