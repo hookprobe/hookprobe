@@ -93,6 +93,10 @@ pub fn walk_answers(dns: &[u8], out: &mut Walk) -> Option<()> {
         return None;
     }
     let an = u16::from_be_bytes([dns[6], dns[7]]) as usize;
+    // `out` is reused across calls (a resident server keeps it in .bss) and callers copy whole 256-byte names:
+    // clear what this walk fills so no byte of an earlier answer survives into this one.
+    out.qname = [0; 256];
+    out.ncname = 0;
     let (qnl, o) = read_name(dns, 12, &mut out.qname, true)?;
     out.qnl = qnl;
     out.qend = o + 4;
@@ -112,6 +116,7 @@ pub fn walk_answers(dns: &[u8], out: &mut Walk) -> Option<()> {
         }
         if ty == 5 && out.ncname < MAX_CNAMES {
             let k = out.ncname;
+            out.cnames[k] = [0; 256];
             if let Some((tl, _)) = read_name(dns, rd, &mut out.cnames[k], true) {
                 out.cnl[k] = tl;
                 out.ncname += 1;
