@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Evidence cards: the text a window of flows and detections becomes before a model sees it.
+//! Evidence cards: the text a window of flows, DNS queries, detections and behaviour records becomes before a
+//! model sees it.
 //!
 //! Upstream truth is Neuro's `tools/neuro-research/semantic_compression.py` (`rep_cards`, `fill`, `Interner`,
 //! `kind_of`, `Tok.count` in its estimate mode) and the rule of `e2e_neuro.py` that a context always ends with
-//! the `REST` line. [`build_context`] gives the same bytes for the same window. `tests/cards.rs` checks it
+//! the `REST` line. [`build_window`] gives the same bytes for the same window. `tests/cards.rs` checks it
 //! against vectors made by Neuro's own functions and reads the constants back from Neuro's sources.
 //!
-//! What is mirrored: flow events and detection events. Neuro's builder also takes DNS and behaviour events;
-//! this function has no input for them, so a window that needs them cannot be built here yet.
+//! What is mirrored: every event kind Neuro's builder takes (flow, DNS, detection, behaviour). Where the cards
+//! are built on the device was decided on 2026-11-28 (Neuro doc 53, R12): in the Conductor's harness, by this
+//! function.
 //!
 //! How the arithmetic differs. Python computes with floats; this module has none. Every comparison and every
 //! printed number is computed exactly from integers (milliseconds, bytes, counts), which gives Python's result
@@ -15,12 +17,18 @@
 //! - a coefficient of variation of exactly 0.1, or exactly on a `%.2f` rounding boundary (Python's gaps are
 //!   differences of floats and carry their error);
 //! - a budget met exactly by the estimate in `fill` (Python sums floats);
+//! - a mean label entropy within about 2^-50 of the 3.3 threshold or of a `%.1f` rounding boundary (entropy is
+//!   a logarithm; it is computed here in fixed point to 2^-55);
 //! - two cards whose scores are equal as fractions but are reached by different float additions (possible only
 //!   with a severity-5 detection, weight 0.2).
 //!   Two float results are reproduced exactly, because real traffic meets them: the mean gap, computed here as the
 //!   double Python holds, bit for bit, in integers (it is printed with `round()`, and the 5 s floor compares it
 //!   rounded to ms, `round(mu, 3) >= 5`, so a device polling every 5.000 s is periodic); and the `out=…GB`
 //!   figure, where a half-way value is rounded the way the nearest double falls.
+//!
+//! One choice of Python's has no single answer and is fixed here: when a DNS group holds two instruction-like
+//! names, Python quotes the first of a `set` of strings, whose order changes with the process's hash seed. This
+//! module quotes the lowest name, every time.
 //!
 //! Memory is the caller's: the flows are sorted in place, and [`Scratch`] holds the cards, fan-outs and aliases.
 //! A window that does not fit is an error ([`ContractError::Space`]), never a shortened context.
@@ -51,17 +59,19 @@ pub const LINE_MAX: usize = 512;
 /// Detections per window (a bit mask tracks which a card has claimed).
 pub const MAX_DETECTIONS: usize = 64;
 
-const SCALE: u32 = 1000;
+/// Scores are Python's floats times this, exactly: it divides by 5 (weight 0.2), by 2 (0.5), by 500 (hosts / 500)
+/// and by 1024 (a behaviour score in 1/256, divided by 4).
+const SCALE: u32 = 128_000;
 
-/// `SEV_WEIGHT`, times 1000.
+/// `SEV_WEIGHT`, times [`SCALE`].
 fn sev_weight(sev: u32) -> u32 {
     match sev {
-        1 => 8000,
-        2 => 6000,
-        3 => 3000,
-        4 => 1000,
-        5 => 200,
-        _ => 1000,
+        1 => 8 * SCALE,
+        2 => 6 * SCALE,
+        3 => 3 * SCALE,
+        4 => SCALE,
+        5 => SCALE / 5,
+        _ => SCALE,
     }
 }
 
@@ -99,15 +109,104 @@ pub struct Detection<'a> {
     pub rule_msg: &'a str,
 }
 
+/// One DNS query of the window.
+#[derive(Clone, Copy, Debug)]
+pub struct Dns<'a> {
+    pub src: &'a str,
+    pub qname: &'a str,
+    /// The answer code was `NXDOMAIN`.
+    pub nxdomain: bool,
+    seq: u32,
+}
+
+impl<'a> Dns<'a> {
+    pub const fn new(src: &'a str, qname: &'a str, nxdomain: bool) -> Self {
+        Self { src, qname, nxdomain, seq: 0 }
+    }
+}
+
+/// One device-hour the temporal engine marked as deviating (Neuro doc 20). Evidence, never an alert.
+#[derive(Clone, Copy, Debug)]
+pub struct Behaviour<'a> {
+    pub src: &'a str,
+    pub hour: u32,
+    pub driver: &'a str,
+    /// The deviation score in 1/256. Below 256 (a score under 1.0) there is no card.
+    pub score_q8: u32,
+}
+
+/// Everything one window holds. `flows` and `dns` are reordered.
+pub struct Window<'w, 'a> {
+    pub flows: &'w mut [Flow<'a>],
+    pub dns: &'w mut [Dns<'a>],
+    pub detections: &'w [Detection<'a>],
+    pub behaviour: &'w [Behaviour<'a>],
+    /// (source, destination) pairs the device has seen before.
+    pub baseline_pairs: &'w [(&'w str, &'w str)],
+    /// DNS suffixes the device has seen before.
+    pub baseline_suffixes: &'w [&'w str],
+}
+
+/// `_suffix`: the last two labels of a name (trailing dots ignored), or the name itself if it has one label.
+pub fn suffix(q: &str) -> &str {
+    let t = q.trim_end_matches('.');
+    let mut dots = t.rmatch_indices('.');
+    match (dots.next(), dots.next()) {
+        (Some(_), Some((second, _))) => t.get(second.saturating_add(1)..).unwrap_or(t),
+        (Some(_), None) => t,
+        _ => q,
+    }
+}
+
+const LOG_FRAC: u32 = 56;
+
+/// `log2(k)` in 2^-56 units, by repeated squaring of the mantissa. Integers only; the error is below 2^-55.
+fn log2_fixed(k: u32) -> u64 {
+    if k < 2 {
+        return 0;
+    }
+    let e = 31u32.saturating_sub(k.leading_zeros());
+    let mut x = u128::from(k) << 62u32.saturating_sub(e);
+    let mut frac = 0u64;
+    for _ in 0..LOG_FRAC {
+        x = (x.saturating_mul(x)) >> 62;
+        frac <<= 1;
+        if x >= 1u128 << 63 {
+            frac |= 1;
+            x >>= 1;
+        }
+    }
+    (u64::from(e) << LOG_FRAC) | frac
+}
+
+/// `_entropy`: the Shannon entropy in bits of a label's characters, in 2^-56 units.
+fn entropy_fixed(label: &[u8]) -> u64 {
+    let mut counts = [0u32; 256];
+    for b in label {
+        if let Some(c) = counts.get_mut(usize::from(*b)) {
+            *c = c.saturating_add(1);
+        }
+    }
+    let n = u32::try_from(label.len()).unwrap_or(u32::MAX);
+    if n == 0 {
+        return 0;
+    }
+    // H = log2 n - (sum of c log2 c) / n
+    let weighted: u128 = counts.iter().map(|c| u128::from(*c).saturating_mul(u128::from(log2_fixed(*c)))).sum();
+    log2_fixed(n).saturating_sub(u64::try_from(weighted / u128::from(n)).unwrap_or(u64::MAX))
+}
+
 /// One ranked card, before it is written.
 #[derive(Clone, Copy, Debug)]
 pub struct Card {
     score: u32,
-    /// 0 fan-out, 1 pair, 2 a detection no card claimed; with `k1`, `k2` this is Python's insertion order.
+    /// 0 fan-out, 1 pair, 2 DNS group, 3 behaviour, 4 a detection no card claimed; with `k1`, `k2` this is
+    /// Python's insertion order.
     phase: u8,
     k1: u32,
     k2: u32,
-    /// Fan-out: index into the fan-outs. Pair: index of one of its flows. Detection: its index.
+    /// Fan-out: index into the fan-outs. Pair: index of one of its flows. DNS: index of one of its queries.
+    /// Behaviour and detection: its index.
     at: u32,
     n: u32,
     nports: u32,
@@ -121,17 +220,27 @@ pub struct Card {
     /// Index + 1 of the detection in the card's note; 0 for none.
     det: u8,
     len: u32,
+    /// DNS: NXDOMAIN answers, distinct names, mean label entropy in tenths, index of the instruction-like name.
+    nx: u32,
+    distinct: u32,
+    ent_tenths: u32,
+    odd: u32,
 }
 
 impl Card {
     pub const EMPTY: Self =
-        Self { score: 0, phase: 0, k1: 0, k2: 0, at: 0, n: 0, nports: 0, ports: [0; 3], flags: 0, period_s: 0, cv: 0, out_tenths: 0, rst_pct: 0, novel: false, det: 0, len: 0 };
+        Self { score: 0, phase: 0, k1: 0, k2: 0, at: 0, n: 0, nports: 0, ports: [0; 3], flags: 0, period_s: 0, cv: 0, out_tenths: 0, rst_pct: 0, novel: false, det: 0, len: 0, nx: 0, distinct: 0, ent_tenths: 0, odd: 0 };
 }
 
 const F_PORTS: u8 = 1;
 const F_PERIODIC: u8 = 2;
 const F_OUT: u8 = 4;
 const F_RST: u8 = 8;
+const F_NX: u8 = 16;
+const F_DISTINCT: u8 = 32;
+const F_QNAME: u8 = 64;
+/// `quote_untrusted`'s cap.
+const QUOTE_CAP: usize = 64;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Fan<'a> {
@@ -152,10 +261,11 @@ impl Fan<'_> {
 pub struct Alias<'a> {
     ent: &'a str,
     num: u32,
+    kind: u8,
 }
 
 impl Alias<'_> {
-    pub const EMPTY: Self = Self { ent: "", num: 0 };
+    pub const EMPTY: Self = Self { ent: "", num: 0, kind: 0 };
 }
 
 /// Working memory. `cards` bounds the cards of a window, `fans` its fan-outs, `aliases` its distinct entities.
@@ -170,8 +280,9 @@ pub struct Built {
     /// Cards the window has, and how many of them are in the context.
     pub cards: u32,
     pub kept: u32,
-    /// Ordinary pairs counted in the `REST` line.
+    /// Ordinary pairs and DNS groups counted in the `REST` line.
     pub ordinary_pairs: u32,
+    pub ordinary_dns: u32,
 }
 
 /// `kind_of`: `H` for an RFC 1918 address, by its text.
@@ -295,35 +406,47 @@ impl Line {
     }
 }
 
-/// `Interner.materialize`: an entity is written `H1=<entity>` the first time and `H1` after that.
+/// `Interner.materialize`: an entity is written `H1=<entity>` the first time and `H1` after that. Hosts (`H`),
+/// remotes (`R`) and DNS suffixes (`D`) are numbered separately; an entity keeps the letter of its first use.
 struct Aliases<'s, 'a> {
     tab: &'s mut [Alias<'a>],
     n: usize,
-    hosts: u32,
-    remotes: u32,
+    counts: [u32; 3],
     /// Write the entity itself and keep no table (for text that is only scanned).
     plain: bool,
 }
 
+const LETTERS: [&str; 3] = ["H", "R", "D"];
+const K_SUFFIX: u8 = 2;
+
 impl<'a> Aliases<'_, 'a> {
+    fn new<'s>(tab: &'s mut [Alias<'a>], plain: bool) -> Aliases<'s, 'a> {
+        Aliases { tab, n: 0, counts: [0; 3], plain }
+    }
+    /// An address: `H` inside the site, `R` outside.
     fn write(&mut self, ent: &'a str, l: &mut Line) -> Result<(), ContractError> {
+        self.write_kind(ent, u8::from(!is_site(ent)), l)
+    }
+    fn write_kind(&mut self, ent: &'a str, kind: u8, l: &mut Line) -> Result<(), ContractError> {
         if ent.is_empty() {
             return l.s("-");
         }
         if self.plain {
             return l.s(ent);
         }
-        let host = is_site(ent);
-        let known = self.tab.get(..self.n).unwrap_or(&[]).iter().find(|a| a.ent == ent).map(|a| a.num);
-        l.s(if host { "H" } else { "R" })?;
+        let known = self.tab.get(..self.n).unwrap_or(&[]).iter().find(|a| a.ent == ent).map(|a| (a.kind, a.num));
         match known {
-            Some(num) => l.dec(u64::from(num)),
+            Some((k, num)) => {
+                l.s(LETTERS.get(usize::from(k)).copied().unwrap_or("R"))?;
+                l.dec(u64::from(num))
+            }
             None => {
-                let c = if host { &mut self.hosts } else { &mut self.remotes };
+                let c = self.counts.get_mut(usize::from(kind)).ok_or(ContractError::Invalid)?;
                 *c = c.saturating_add(1);
                 let num = *c;
-                *self.tab.get_mut(self.n).ok_or(ContractError::Space)? = Alias { ent, num };
+                *self.tab.get_mut(self.n).ok_or(ContractError::Space)? = Alias { ent, num, kind };
                 self.n = self.n.saturating_add(1);
+                l.s(LETTERS.get(usize::from(kind)).copied().unwrap_or("R"))?;
                 l.dec(u64::from(num))?;
                 l.s("=")?;
                 l.s(ent)
@@ -346,7 +469,17 @@ fn det_note(d: &Detection, l: &mut Line) -> Result<(), ContractError> {
     l.s("]")
 }
 
-fn write_line<'a>(i: usize, c: &Card, flows: &[Flow<'a>], dets: &[Detection<'a>], fans: &[Fan<'a>], al: &mut Aliases<'_, 'a>, l: &mut Line) -> Result<(), ContractError> {
+/// What the cards refer to.
+struct Src<'w, 'a> {
+    flows: &'w [Flow<'a>],
+    dns: &'w [Dns<'a>],
+    dets: &'w [Detection<'a>],
+    behav: &'w [Behaviour<'a>],
+    fans: &'w [Fan<'a>],
+}
+
+fn write_line<'a>(i: usize, c: &Card, src: &Src<'_, 'a>, al: &mut Aliases<'_, 'a>, l: &mut Line) -> Result<(), ContractError> {
+    let (flows, dets, fans) = (src.flows, src.dets, src.fans);
     l.n = 0;
     l.s("F")?;
     l.dec(u64::try_from(i).unwrap_or(u64::MAX).saturating_add(1))?;
@@ -436,6 +569,79 @@ fn write_line<'a>(i: usize, c: &Card, flows: &[Flow<'a>], dets: &[Detection<'a>]
                 det_note(d, l)?;
             }
         }
+        2 => {
+            let q = src.dns.get(c.at as usize).ok_or(ContractError::Invalid)?;
+            al.write(q.src, l)?;
+            l.s(" dns ")?;
+            al.write_kind(suffix(q.qname), K_SUFFIX, l)?;
+            l.s(" n=")?;
+            l.dec(u64::from(c.n))?;
+            l.s(" ")?;
+            let mut first = true;
+            let mut sep = |l: &mut Line| -> Result<(), ContractError> {
+                if !first {
+                    l.s(" ")?;
+                }
+                first = false;
+                Ok(())
+            };
+            if c.flags & F_NX != 0 {
+                sep(l)?;
+                l.s("nxdomain=")?;
+                l.dec(u64::from(c.nx))?;
+                l.s("/")?;
+                l.dec(u64::from(c.n))?;
+            }
+            if c.flags & F_DISTINCT != 0 {
+                sep(l)?;
+                l.s("distinct=")?;
+                l.dec(u64::from(c.distinct))?;
+                l.s(" label_entropy=")?;
+                l.dec(u64::from(c.ent_tenths / 10))?;
+                l.s(".")?;
+                l.dec(u64::from(c.ent_tenths % 10))?;
+            }
+            if c.flags & F_QNAME != 0 {
+                // `quote_untrusted`: at most 64 characters and a `~` if cut, as a JSON string, then the marker
+                // (always present here: the name was chosen because it is instruction-like).
+                let name = src.dns.get(c.odd as usize).ok_or(ContractError::Invalid)?.qname;
+                sep(l)?;
+                l.s("qname=\"")?;
+                for b in name.bytes().take(QUOTE_CAP) {
+                    if b == b'"' || b == b'\\' {
+                        l.s("\\")?;
+                    }
+                    l.put(&[b])?;
+                }
+                if name.len() > QUOTE_CAP {
+                    l.s("~")?;
+                }
+                l.s("\" !instr-like")?;
+            }
+            if c.novel {
+                l.s(" novel")?;
+            }
+            if let Some(d) = det {
+                l.s(" ")?;
+                det_note(d, l)?;
+            }
+        }
+        3 => {
+            let b = src.behav.get(c.at as usize).ok_or(ContractError::Invalid)?;
+            al.write(b.src, l)?;
+            l.s(" behaviour hour=")?;
+            if b.hour < 10 {
+                l.s("0")?;
+            }
+            l.dec(u64::from(b.hour))?;
+            l.s(" driver=")?;
+            l.s(b.driver)?;
+            l.s(" score=")?;
+            l.dec(u64::from(c.ent_tenths / 10))?;
+            l.s(".")?;
+            l.dec(u64::from(c.ent_tenths % 10))?;
+            l.s(" (deviation from its own history; evidence, not an alert)")?;
+        }
         _ => {
             let d = dets.get(c.at as usize).ok_or(ContractError::Invalid)?;
             al.write(d.src, l)?;
@@ -502,7 +708,7 @@ impl Cats {
 }
 
 /// The `REST` line for `dropped` omitted cards whose detections are in `cats`.
-fn rest_line(dropped: usize, cats: &Cats, ordinary_pairs: u32, l: &mut Line) -> Result<(), ContractError> {
+fn rest_line(dropped: usize, cats: &Cats, ordinary_pairs: u32, ordinary_dns: u32, l: &mut Line) -> Result<(), ContractError> {
     l.n = 0;
     l.s("REST ")?;
     l.dec(u64::try_from(dropped).unwrap_or(u64::MAX))?;
@@ -535,7 +741,9 @@ fn rest_line(dropped: usize, cats: &Cats, ordinary_pairs: u32, l: &mut Line) -> 
     }
     l.s("; plus ")?;
     l.dec(u64::from(ordinary_pairs))?;
-    l.s(" ordinary flow pairs and 0 ordinary dns groups with no detections")
+    l.s(" ordinary flow pairs and ")?;
+    l.dec(u64::from(ordinary_dns))?;
+    l.s(" ordinary dns groups with no detections")
 }
 
 /// `Tok.count` in estimate mode: 0 for no text, else at least 1.
@@ -594,6 +802,7 @@ fn det_ref(i: Option<usize>) -> u8 {
 
 /// Build the context of one window: ranked cards within `budget`, then the `REST` line, joined by newlines.
 /// `flows` is reordered. `baseline` holds the (source, destination) pairs the device has seen before.
+/// A window of flows and detections only; [`build_window`] takes DNS queries and behaviour records too.
 pub fn build_context<'a>(
     flows: &mut [Flow<'a>],
     dets: &[Detection<'a>],
@@ -602,8 +811,28 @@ pub fn build_context<'a>(
     scratch: &mut Scratch<'_, 'a>,
     out: &mut (impl Sink + ?Sized),
 ) -> Result<Built, ContractError> {
-    if dets.len() > MAX_DETECTIONS || u32::try_from(flows.len()).is_err() {
+    build_window(Window { flows, dns: &mut [], detections: dets, behaviour: &[], baseline_pairs: baseline, baseline_suffixes: &[] }, budget, scratch, out)
+}
+
+/// Build the context of one window: ranked cards within `budget`, then the `REST` line, joined by newlines.
+pub fn build_window<'a>(w: Window<'_, 'a>, budget: u32, scratch: &mut Scratch<'_, 'a>, out: &mut (impl Sink + ?Sized)) -> Result<Built, ContractError> {
+    let Window { flows, dns, detections: dets, behaviour: behav, baseline_pairs: baseline, baseline_suffixes } = w;
+    if dets.len() > MAX_DETECTIONS || u32::try_from(flows.len()).is_err() || u32::try_from(dns.len()).is_err() || u32::try_from(behav.len()).is_err() {
         return Err(ContractError::Space);
+    }
+    for q in dns.iter() {
+        printable(q.src, 45)?;
+        printable(q.qname, 253)?;
+        if q.src.is_empty() || q.qname.is_empty() {
+            return Err(ContractError::Invalid);
+        }
+    }
+    for b in behav {
+        printable(b.src, 45)?;
+        printable(b.driver, 32)?;
+        if b.src.is_empty() || b.hour > 23 {
+            return Err(ContractError::Invalid);
+        }
     }
     for f in flows.iter() {
         printable(f.src, 45)?;
@@ -675,7 +904,7 @@ pub fn build_context<'a>(
         mark_ids(dets, mask, &mut used);
         let dw = best.and_then(|b| dets.get(b)).map_or(0, |d| sev_weight(d.severity));
         // 4.0 + dw + min(3.0, hosts / 500.0)
-        let score = (4 * SCALE).saturating_add(dw).saturating_add(f.hosts.saturating_mul(2).min(3 * SCALE));
+        let score = (4 * SCALE).saturating_add(dw).saturating_add(f.hosts.saturating_mul(SCALE / 500).min(3 * SCALE));
         push_card(cards, &mut n_cards, Card { score, phase: 0, k1: f.k1, k2: f.k2, at: u32::try_from(fi).unwrap_or(u32::MAX), det: det_ref(best), ..Card::EMPTY })?;
     }
 
@@ -786,6 +1015,96 @@ pub fn build_context<'a>(
         push_card(cards, &mut n_cards, c)?;
     }
 
+    // DNS groups: one source and one suffix, in the order each first appears.
+    for (i, q) in dns.iter_mut().enumerate() {
+        q.seq = u32::try_from(i).unwrap_or(u32::MAX);
+    }
+    dns.sort_unstable_by(|a, b| (a.src, suffix(a.qname), a.qname, a.seq).cmp(&(b.src, suffix(b.qname), b.qname, b.seq)));
+    let dns: &[Dns<'a>] = dns;
+    let mut ordinary_dns = 0u32;
+    let mut i = 0usize;
+    while let Some(head) = dns.get(i).copied() {
+        let suf = suffix(head.qname);
+        let (mut j, mut nx, mut distinct, mut first_seq) = (i, 0u32, 0u32, u32::MAX);
+        let (mut ent_sum, mut odd, mut last) = (0u128, None::<usize>, None::<&str>);
+        while let Some(q) = dns.get(j).filter(|q| q.src == head.src && suffix(q.qname) == suf) {
+            nx = nx.saturating_add(u32::from(q.nxdomain));
+            first_seq = first_seq.min(q.seq);
+            if last != Some(q.qname) {
+                last = Some(q.qname);
+                distinct = distinct.saturating_add(1);
+                ent_sum = ent_sum.saturating_add(u128::from(entropy_fixed(q.qname.split('.').next().unwrap_or("").as_bytes())));
+                // Python takes the first instruction-like name of a `set`, whose order changes from run to run.
+                // Here it is the lowest such name.
+                if odd.is_none() && crate::guard::instruction_like(q.qname) {
+                    odd = Some(j);
+                }
+            }
+            j = j.saturating_add(1);
+        }
+        let n = u32::try_from(j.saturating_sub(i)).unwrap_or(u32::MAX);
+        let mut c = Card { phase: 2, k1: first_seq, at: u32::try_from(i).unwrap_or(u32::MAX), n, nx, distinct, ..Card::EMPTY };
+        i = j;
+        let mut w = 0u32;
+        if n >= 20 && nx.saturating_mul(2) > n {
+            c.flags |= F_NX;
+            w = w.saturating_add(3 * SCALE);
+        }
+        // mean entropy > 3.3, and "%.1f" of it
+        let one = 1u128 << LOG_FRAC;
+        let names = u128::from(distinct.max(1));
+        if distinct >= 20 && ent_sum.saturating_mul(10) > names.saturating_mul(33).saturating_mul(one) {
+            c.flags |= F_DISTINCT;
+            c.ent_tenths = u32::try_from((ent_sum.saturating_mul(20).saturating_add(names.saturating_mul(one))) / (names.saturating_mul(one).saturating_mul(2))).unwrap_or(u32::MAX);
+            w = w.saturating_add(2 * SCALE);
+        }
+        if let Some(o) = odd {
+            c.flags |= F_QNAME;
+            c.odd = u32::try_from(o).unwrap_or(u32::MAX);
+            w = w.saturating_add(3 * SCALE);
+        }
+        c.novel = !baseline_suffixes.contains(&suf);
+        // A DNS card claims only destination-less detections on port 0 or 53, and shows one only if the note
+        // it would print contains "dns".
+        let (best, mask) = best_hit(dets, |d| d.src == head.src && d.dst.is_empty() && (d.port == 0 || d.port == 53));
+        let shown = best.and_then(|b| dets.get(b)).filter(|d| {
+            let tail = d.rule_msg.rsplit('(').next().unwrap_or("").trim_end_matches(')');
+            d.category.contains("dns") || d.mitre.contains("dns") || tail.contains("dns")
+        });
+        let mut dns_mask = 0u64;
+        for (k, d) in dets.iter().enumerate() {
+            if mask >> k & 1 == 1 && d.category.starts_with("dns") {
+                dns_mask |= 1u64.checked_shl(u32::try_from(k).unwrap_or(64)).unwrap_or(0);
+            }
+        }
+        mark_ids(dets, dns_mask, &mut used);
+        if shown.is_some() {
+            c.det = det_ref(best);
+        }
+        w = w.saturating_add(shown.map_or(0, |d| sev_weight(d.severity))).saturating_add(if c.novel { SCALE / 2 } else { 0 });
+        if c.flags == 0 && shown.is_none() {
+            ordinary_dns = ordinary_dns.saturating_add(1);
+            continue;
+        }
+        c.score = w;
+        push_card(cards, &mut n_cards, c)?;
+    }
+
+    // Behaviour records, in order: a card from a score of 1.0, ranked below detections.
+    for (bi, b) in behav.iter().enumerate() {
+        if b.score_q8 < 256 {
+            continue;
+        }
+        // "%.1f" of score / 256; a half-way value is exact in binary, so it rounds half to even.
+        let v = u64::from(b.score_q8).saturating_mul(10);
+        let (q, r) = (v / 256, v % 256);
+        let tenths = q.saturating_add(u64::from(r > 128 || (r == 128 && q % 2 == 1)));
+        // 1.0 + min(3.0, score / 4)
+        let score = SCALE.saturating_add(b.score_q8.saturating_mul(SCALE / 1024).min(3 * SCALE));
+        let k = u32::try_from(bi).unwrap_or(u32::MAX);
+        push_card(cards, &mut n_cards, Card { score, phase: 3, k1: k, at: k, ent_tenths: u32::try_from(tenths).unwrap_or(u32::MAX), ..Card::EMPTY })?;
+    }
+
     // Detections no card claimed, visited as `dets.items()` is: source by source in order of each source's
     // first detection, then in order. The visiting order decides which of two detections with one id is kept.
     for (si, head) in dets.iter().enumerate() {
@@ -799,19 +1118,20 @@ pub fn build_context<'a>(
             mark_ids(dets, 1u64.checked_shl(u32::try_from(di).unwrap_or(64)).unwrap_or(0), &mut used);
             let score = sev_weight(d.severity).saturating_add(if d.category == "ioc_match" { 2 * SCALE } else { 0 });
             let (k1, k2) = (u32::try_from(si).unwrap_or(u32::MAX), u32::try_from(di).unwrap_or(u32::MAX));
-            push_card(cards, &mut n_cards, Card { score, phase: 2, k1, k2, at: k2, ..Card::EMPTY })?;
+            push_card(cards, &mut n_cards, Card { score, phase: 4, k1, k2, at: k2, ..Card::EMPTY })?;
         }
     }
     let cards = cards.get_mut(..n_cards).ok_or(ContractError::Space)?;
     cards.sort_unstable_by_key(|c| (core::cmp::Reverse(c.score), c.phase, c.k1, c.k2));
 
     // Line lengths, with the aliases as they will be written.
+    let src = Src { flows, dns, dets, behav, fans };
     let mut line = Line::new();
     {
-        let mut al = Aliases { tab: &mut *scratch.aliases, n: 0, hosts: 0, remotes: 0, plain: false };
+        let mut al = Aliases::new(&mut *scratch.aliases, false);
         for (k, c) in cards.iter_mut().enumerate() {
             let snapshot = *c;
-            write_line(k, &snapshot, flows, dets, fans, &mut al, &mut line)?;
+            write_line(k, &snapshot, &src, &mut al, &mut line)?;
             c.len = u32::try_from(line.n).unwrap_or(u32::MAX);
         }
     }
@@ -836,12 +1156,12 @@ pub fn build_context<'a>(
     // The joined text is counted and lines are removed until it fits. A `REST` line stands for what was dropped.
     let rest_for = |kept: usize, line: &mut Line| -> Result<(), ContractError> {
         let mut cats = Cats::new();
-        let mut plain = Aliases { tab: &mut [], n: 0, hosts: 0, remotes: 0, plain: true };
+        let mut plain = Aliases::new(&mut [], true);
         for (k, c) in cards.iter().enumerate().skip(kept) {
-            write_line(k, c, flows, dets, fans, &mut plain, line)?;
+            write_line(k, c, &src, &mut plain, line)?;
             cats.scan(line.bytes())?;
         }
-        rest_line(n_cards.saturating_sub(kept), &cats, ordinary, line)
+        rest_line(n_cards.saturating_sub(kept), &cats, ordinary, ordinary_dns, line)
     };
     let size = |kept: usize, line: &mut Line| -> Result<usize, ContractError> {
         let mut b: usize = cards.iter().take(kept).map(|c| c.len as usize).sum::<usize>().saturating_add(kept.saturating_sub(1));
@@ -863,9 +1183,9 @@ pub fn build_context<'a>(
     let lines_from_fill = if empty { 0 } else { kept.saturating_add(usize::from(kept < n_cards)) };
     let mut wrote = false;
     if !empty {
-        let mut al = Aliases { tab: &mut *scratch.aliases, n: 0, hosts: 0, remotes: 0, plain: false };
+        let mut al = Aliases::new(&mut *scratch.aliases, false);
         for (k, c) in cards.iter().enumerate().take(kept) {
-            write_line(k, c, flows, dets, fans, &mut al, &mut line)?;
+            write_line(k, c, &src, &mut al, &mut line)?;
             emit(out, &mut wrote, line.bytes())?;
         }
         if kept < n_cards {
@@ -875,8 +1195,8 @@ pub fn build_context<'a>(
     }
     let last_is_rest = !empty && kept < n_cards;
     if lines_from_fill == n_cards && !last_is_rest {
-        rest_line(0, &Cats::new(), ordinary, &mut line)?;
+        rest_line(0, &Cats::new(), ordinary, ordinary_dns, &mut line)?;
         emit(out, &mut wrote, line.bytes())?;
     }
-    Ok(Built { cards: u32::try_from(n_cards).unwrap_or(u32::MAX), kept: if empty { 0 } else { u32::try_from(kept).unwrap_or(u32::MAX) }, ordinary_pairs: ordinary })
+    Ok(Built { cards: u32::try_from(n_cards).unwrap_or(u32::MAX), kept: if empty { 0 } else { u32::try_from(kept).unwrap_or(u32::MAX) }, ordinary_pairs: ordinary, ordinary_dns })
 }

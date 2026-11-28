@@ -29,7 +29,7 @@ use crate::limits::*;
 use crate::place::{place_excluding, Env, PlaceRefusal};
 use crate::tools::{authorize, authorize_inv, ToolCall, ToolRefusal};
 use neuro_contract::inv;
-use crate::verify::{verify_grounded, Grounding, Verification};
+use crate::verify::{verify_context, verify_grounded, Grounding, Verification};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Event<'a> {
@@ -249,13 +249,9 @@ impl Harness {
                     remote_enabled: false,
                     tiers: 0,
                     fingerprints_p1: false,
-                    fingerprints_p4: false,
                     addresses_p1: false,
-                    addresses_p4: false,
-                    aggregate_p5: false,
-                    p4_chain_proven: false,
                 },
-                workers: [crate::place::WorkerInfo::EMPTY; 6],
+                workers: [crate::place::WorkerInfo::EMPTY; crate::class::Tier::SLOTS],
             },
             state: State::Done,
             tier_raw: 0,
@@ -477,7 +473,12 @@ impl Harness {
     }
 
     fn start(&mut self, out: &mut Actions) {
-        let required = self.job.evidence().iter().filter(|e| e.required).fold(0u8, |m, e| m | e.class.bit());
+        // A window's context is one piece of evidence with one class: required, and shown whole or not at all.
+        let ctx_class = DataClass::from_u8(self.job.context_class).filter(|_| self.job.has_context());
+        let required = match ctx_class {
+            Some(c) => c.bit(),
+            None => self.job.evidence().iter().filter(|e| e.required).fold(0u8, |m, e| m | e.class.bit()),
+        };
         match place_excluding(required, self.job.energy_policy, &self.env, self.declined) {
             Err(r) => self.finish(out, Outcome::Refused(r)),
             Ok(t) => {
@@ -494,7 +495,15 @@ impl Harness {
                     }
                 }
                 self.prompt_classes = mask;
-                if !self.included.iter().any(|x| *x) {
+                let shown = match ctx_class {
+                    // No fact card in the window (only the REST line): there is nothing to ask a model about.
+                    Some(c) => {
+                        self.prompt_classes = c.bit();
+                        allowed(c, t, &self.env.policy) && !self.job.context_parts().0.is_empty()
+                    }
+                    None => self.included.iter().any(|x| *x),
+                };
+                if !shown {
                     // Before any session: nothing is opened, signed or sent.
                     self.tier_raw = 0;
                     return self.finish(out, Outcome::Refused(PlaceRefusal::NoEvidence));
@@ -584,8 +593,7 @@ impl Harness {
         // context in `inv_eval.py`.
         let shown = &mut self.transcript;
         shown.clear();
-        guard::guard_a(self.cards.as_slice(), &mut BufSink(shown)).ok()?;
-        guard::guard_a(self.results_raw.as_slice(), &mut BufSink(shown)).ok()?;
+        write_shown(self.cards.as_slice(), self.results_raw.as_slice(), self.job.context_parts().1, shown)?;
         self.facts = IdList::new();
         self.ents = IdList::new();
         context_ids(shown.as_slice(), &mut self.facts, &mut self.ents).ok()?;
@@ -597,6 +605,10 @@ impl Harness {
 
     fn build_cards(&mut self) -> Option<()> {
         self.cards.clear();
+        if self.job.has_context() {
+            // The fact lines as `neuro_contract::cards` wrote them. The REST line goes last, after any results.
+            return self.cards.push(self.job.context_parts().0);
+        }
         let mut line = [0u8; 8 + MAX_CARD];
         let mut first = true;
         for (i, e) in self.job.evidence().iter().enumerate() {
@@ -615,9 +627,10 @@ impl Harness {
 
     fn build_explainer_prompt(&mut self) -> Option<()> {
         // The ids first: the schema in the system prompt lists them. `prompt` is the scratch space here.
+        let rest = self.job.context_parts().1;
         let p = &mut self.prompt;
         p.clear();
-        guard::guard_a(self.cards.as_slice(), &mut BufSink(p)).ok()?;
+        write_shown(self.cards.as_slice(), &[], rest, p)?;
         self.facts = IdList::new();
         self.ents = IdList::new();
         context_ids(p.as_slice(), &mut self.facts, &mut self.ents).ok()?;
@@ -636,7 +649,7 @@ impl Harness {
         }
         p.push(CHAT_USER.as_bytes())?;
         p.push(USER_HEAD.as_bytes())?;
-        guard::guard_a(self.cards.as_slice(), &mut BufSink(p)).ok()?;
+        write_shown(self.cards.as_slice(), &[], rest, p)?;
         p.push(USER_MID.as_bytes())?;
         p.push(self.job.intent.as_slice())?;
         if !self.transcript.is_empty() {
@@ -824,7 +837,7 @@ impl Harness {
                     ungrounded_cves: grounding::ungrounded_cves(s, &ctx),
                     services_without_port: grounding::services_without_port(s, &ctx),
                 };
-                let v = verify_grounded(&a, &self.job, &self.included, found);
+                let v = if self.job.has_context() { verify_context(&a, &self.job, found) } else { verify_grounded(&a, &self.job, &self.included, found) };
                 self.finish(out, Outcome::Verified(v));
             }
             Ok(ModelOutput::Tool(call)) => match authorize(&call, &self.job, &self.included) {
@@ -975,6 +988,19 @@ impl Default for Harness {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The context a provider is shown, after guard A: the fact lines, then the results of earlier checks (each
+/// starts with its own line break), then the window's `REST` line. This is the order of Neuro's contexts: cards,
+/// `RESULT` lines, `REST` last.
+fn write_shown<const N: usize>(cards: &[u8], results: &[u8], rest: &[u8], out: &mut Buf<N>) -> Option<()> {
+    guard::guard_a(cards, &mut BufSink(out)).ok()?;
+    guard::guard_a(results, &mut BufSink(out)).ok()?;
+    if !rest.is_empty() {
+        out.push(b"\n")?;
+        guard::guard_a(rest, &mut BufSink(out)).ok()?;
+    }
+    Some(())
 }
 
 /// One evidence card as a fact line: `F<id> <card>`.

@@ -70,6 +70,18 @@ pub fn verify(a: &Answer, job: &JobSpec, included: &[bool; MAX_EVIDENCE]) -> Ver
     verify_grounded(a, job, included, Grounding::default())
 }
 
+/// A job whose evidence is a window's context (`JobSpec::context`). The strict parser has already refused any
+/// fact id or alias that is not in the context the provider was shown, so what is left to check here is that no
+/// fact is cited twice. Nothing is "required": the context is one piece of evidence, shown whole.
+pub fn verify_context(a: &Answer, job: &JobSpec, g: Grounding) -> Verification {
+    let cites = a.cites();
+    let dup = cites.iter().enumerate().any(|(i, c)| cites.get(..i).is_some_and(|before| before.contains(c)));
+    if dup {
+        return Verification { status: Status::Rejected, finding: Finding::DuplicateCitation, shown_verdict: None, l0_decided: false, model_verdict: a.verdict };
+    }
+    conclude(a, job, false, g)
+}
+
 pub fn verify_grounded(a: &Answer, job: &JobSpec, included: &[bool; MAX_EVIDENCE], g: Grounding) -> Verification {
     let mk = |status, finding, shown, l0_decided| Verification {
         status,
@@ -91,6 +103,19 @@ pub fn verify_grounded(a: &Answer, job: &JobSpec, included: &[bool; MAX_EVIDENCE
             None => return mk(Status::Rejected, Finding::UnknownCitation, None, false),
         }
     }
+    let missing = job.evidence().iter().enumerate().any(|(i, e)| e.required && !cited.get(i).copied().unwrap_or(false));
+    conclude(a, job, missing, g)
+}
+
+/// What follows the evidential check, the same for cards and for a context.
+fn conclude(a: &Answer, job: &JobSpec, missing: bool, g: Grounding) -> Verification {
+    let mk = |status, finding, shown, l0_decided| Verification {
+        status,
+        finding,
+        shown_verdict: shown,
+        l0_decided,
+        model_verdict: a.verdict,
+    };
     if a.summary_len == 0 {
         return mk(Status::Rejected, Finding::EmptySummary, None, false);
     }
@@ -107,7 +132,6 @@ pub fn verify_grounded(a: &Answer, job: &JobSpec, included: &[bool; MAX_EVIDENCE
             return mk(Status::Conflict, Finding::ContradictsL0, Some(l0), true);
         }
     }
-    let missing = job.evidence().iter().enumerate().any(|(i, e)| e.required && !cited.get(i).copied().unwrap_or(false));
     if missing {
         return mk(Status::Incomplete, Finding::MissingRequired, job.l0_verdict(), job.l0_verdict().is_some());
     }

@@ -15,6 +15,10 @@
 // credentials into the image and never ships (ADR 0045).
 #[cfg(all(feature = "prod", any(feature = "apmode", feature = "stajoin")))]
 compile_error!("`apmode`/`stajoin` cannot be combined with `prod`: `prod` is the GEM sensor loop, the AP product is `apmc` + `appersist`");
+// ADR 0060 amendment W2: on CM5 HBoot starts secondary cores at EL2 with stage-2 first (S0b); the kernel must never
+// start them itself there, or the SEC-2 carve-out would be missing on those cores.
+#[cfg(all(feature = "smpboot", feature = "cm5"))]
+compile_error!("`smpboot` (kernel-started cores over PSCI HVC) cannot be combined with `cm5`: HBoot starts CM5 cores (ADR 0060 S0b)");
 #[allow(dead_code)]
 const fn wpa_psk_ok(p: Option<&str>) -> bool {
     match p {
@@ -7556,6 +7560,11 @@ pub extern "C" fn kmain() -> ! {
         arch_aarch64::semihosting::exit(1);
     }
     kprint!(" [P1b] PASS mmu+frames (with free list)\n");
+
+    // --- ADR 0060 amendment S0a: secondary cores as parked worker cores (QEMU -smp) ---
+    // Runs here, on the kernel's own translation table and before any EL0 task swaps TTBR0.
+    #[cfg(feature = "smpboot")]
+    p_smp_boot();
 
     // --- P2: capability system (untyped -> retype -> CDT -> recursive revoke) ---
     if !p2_caps_test() {
@@ -17264,4 +17273,396 @@ fn pppoe_selftest() {
         kprint!(" [P-cfgd-pppoe] {} — live-apply follow-up, the PPPoE dial as a bounded state machine stepped by the AP loop (PADI -> PADO -> PADR -> PADS -> LCP -> auth -> IPCP, every step returns at once): a responsive AC opens on the first attempt={} a stage past its budget re-dials with a fresh discovery and opens={} a silent AC: {} attempts then the dial gives up (NoPado), bounded={} a half-open session is PADT'd before the re-dial (LCP never answers)={} Q5: a rejected password ends the dial at once, no re-dial={} the overall budget bounds the dial={}\n",
             if ok { "PASS" } else { "FAIL" }, open, redial, DIAL_ATTEMPTS, gave_up, padt, auth, budget);
     }
+}
+
+/// ADR 0060 amendment S0a gate `[P-smp-boot]`: core 0 starts every other core over PSCI CPU_ON
+/// (HVC). Each worker comes up at EL1 on the kernel's stage-1 tables, answers a per-core
+/// challenge from Rust and parks; core 1 then executes `brk` and must be contained by the
+/// worker vectors (status FAULT, ESR EC 0x3c) while core 0 carries on. Workers run no kernel
+/// code, so the single-core contract (ARCHITECTURE.md) still holds for the kernel.
+#[cfg(feature = "smpboot")]
+fn p_smp_boot() {
+    use arch_aarch64::smp::{self, Port, StartResult, ST_ALIVE, ST_FAULT};
+    let mut alive = 0u32;
+    let mut contained = false;
+    let mut ok = true;
+    // S2: load the hard-float engine image before any worker starts (its tables are built at start).
+    let core0_cpacr = cpacr_el1();
+    let engine_bytes = match load_worker_engine() {
+        Ok(n) => n,
+        Err(e) => {
+            kprint!(" [P-smp-boot] FAIL worker engine image refused: {}\n", e);
+            arch_aarch64::semihosting::exit(1);
+        }
+    };
+    // Cores 2.. get the S1 worker executive; core 1 stays the S0a fault-containment probe.
+    let mut ports: [Option<Port>; smp::MAX_CORES] = core::array::from_fn(|_| None);
+    for idx in 1..smp::MAX_CORES {
+        let mpidr = idx as u64; // QEMU virt: Aff0 = cpu index (<= 8 cores per cluster)
+        let challenge = 0x5EED_0000_0000_0000 | (idx as u64) << 16 | 0x1234;
+        let fault_test = idx == 1;
+        let port = if fault_test { None } else { Port::prepare(idx) };
+        let (r, back) = unsafe { smp::start_core(idx, mpidr, challenge, fault_test, port) };
+        match r {
+            StartResult::Refused(-2) => break, // INVALID_PARAMETERS: no such core, discovery done
+            StartResult::Refused(rc) => {
+                kprint!(" smp: core {} CPU_ON refused rc={}\n", idx, rc);
+                ok = false;
+                break;
+            }
+            StartResult::Timeout => {
+                kprint!(" smp: core {} started but never reported\n", idx);
+                ok = false;
+            }
+            StartResult::Up => {
+                let b = smp::block(idx);
+                let st = b.status.load(core::sync::atomic::Ordering::Acquire);
+                let m = b.mpidr.load(core::sync::atomic::Ordering::Relaxed);
+                let resp_ok = b.response.load(core::sync::atomic::Ordering::Relaxed) == smp::expected_response(challenge, m);
+                let el = b.el.load(core::sync::atomic::Ordering::Relaxed);
+                if !resp_ok || el != 1 || m != mpidr {
+                    kprint!(" smp: core {} bad report (mpidr {:#x} el {} response_ok {})\n", idx, m, el, resp_ok);
+                    ok = false;
+                } else if fault_test {
+                    let esr = b.esr.load(core::sync::atomic::Ordering::Relaxed);
+                    if st == ST_FAULT && (esr >> 26) == 0x3c && (esr & 0xffff) == 0x5a {
+                        contained = true;
+                        kprint!(" smp: core {} brk contained on the worker (ESR {:#x}), parked\n", idx, esr);
+                    } else {
+                        kprint!(" smp: core {} fault NOT contained (status {} ESR {:#x})\n", idx, st, esr);
+                        ok = false;
+                    }
+                } else if st == ST_ALIVE {
+                    alive += 1;
+                    if let Some(slot) = ports.get_mut(idx) {
+                        *slot = back;
+                    }
+                } else {
+                    ok = false;
+                }
+            }
+        }
+    }
+    let cores = 1 + alive + contained as u32;
+    if ok && contained && alive >= 1 {
+        kprint!(" [P-smp-boot] PASS cores={} (core 0 kernel + {} workers at EL1 on private stage-1 tables, challenge answered; 1 worker fault contained)\n", cores, alive);
+        p_smp_worker(&mut ports, core0_cpacr, engine_bytes);
+    } else {
+        kprint!(" [P-smp-boot] FAIL cores={} alive={} contained={} (needs QEMU -smp >= 3)\n", cores, alive, contained);
+        arch_aarch64::semihosting::exit(1);
+    }
+}
+
+/// ADR 0060 amendment S1 gate `[P-smp-worker]`: the worker executive (crate `heqk-worker`, no kernel
+/// code reachable) serves jobs from core 0 over SPSC rings with a GICv2 SGI doorbell, on every
+/// worker at once. Results are checked against core 0's own computation; a job pointing outside the
+/// granted window is refused; then one worker is made to fault and the others keep serving.
+#[cfg(feature = "smpboot")]
+fn p_smp_worker(ports: &mut [Option<arch_aarch64::smp::Port>], core0_cpacr: u64, engine_bytes: usize) {
+    use arch_aarch64::smp::{self, worker::job, ST_FAULT, WINDOW, WINDOW_WORDS};
+    use core::sync::atomic::Ordering;
+    fn fail(why: &str) -> ! {
+        kprint!(" [P-smp-worker] FAIL {}\n", why);
+        arch_aarch64::semihosting::exit(1);
+    }
+    fn now() -> u64 {
+        let c: u64;
+        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) c, options(nomem, nostack)) };
+        c
+    }
+    let freq: u64 = {
+        let f: u64;
+        unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
+        f
+    };
+    // Distributor on (idempotent), then every worker must publish its CPU-interface mask.
+    arch_aarch64::Gic.init();
+    let live: usize = ports.iter().filter(|p| p.is_some()).count();
+    if live < 2 {
+        fail("needs >= 2 worker cores (QEMU -smp >= 4)");
+    }
+    let t0 = now();
+    while ports.iter().flatten().any(|p| p.cpu_mask() == 0) {
+        if now().wrapping_sub(t0) > freq * 2 {
+            fail("a worker never brought its doorbell up");
+        }
+        core::hint::spin_loop();
+    }
+    // Deterministic window contents (xorshift64*), written before any job references them.
+    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+    let win = unsafe { &mut *core::ptr::addr_of_mut!(WINDOW) };
+    for w in win.0.iter_mut() {
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        *w = x.wrapping_mul(0x2545_F491_4F6C_DD1D);
+    }
+    let win: &[u64; WINDOW_WORDS] = &win.0;
+    let base = win.as_ptr() as u64;
+    let bytes = unsafe { core::slice::from_raw_parts(base as *const u8, WINDOW_WORDS * 8) };
+    // The job a given (worker, n) gets, and the answer core 0 expects.
+    let make = |w: usize, n: u32| -> (job::Job, u32, u64) {
+        let r = (n as u64).wrapping_mul(0x9E37_79B9) ^ ((w as u64) << 40);
+        match n % 4 {
+            0 => (job::Job { id: n, op: job::op::ECHO, a: r, b: !r }, job::status::OK, r ^ !r),
+            1 | 2 => {
+                let off = (r % (WINDOW_WORDS as u64 - 64)) as usize;
+                let len = 1 + (r >> 20) as usize % 64;
+                let want = job::sum64(&win[off..off + len]);
+                (job::Job { id: n, op: job::op::SUM64, a: base + off as u64 * 8, b: len as u64 }, job::status::OK, want)
+            }
+            _ => {
+                let off = (r % (WINDOW_WORDS as u64 * 8 - 512)) as usize;
+                let len = (r >> 24) as usize % 512;
+                let want = job::fnv64(&bytes[off..off + len]);
+                (job::Job { id: n, op: job::op::FNV64, a: base + off as u64, b: len as u64 }, job::status::OK, want)
+            }
+        }
+    };
+    // All workers at once: keep each ring topped up, ring the doorbells, drain and check in order.
+    const PER_WORKER: u32 = 20_000;
+    let mut sent = [0u32; smp::MAX_CORES];
+    let mut got = [0u32; smp::MAX_CORES];
+    let t_run = now();
+    loop {
+        let mut busy = false;
+        for (i, slot) in ports.iter_mut().enumerate() {
+            let Some(p) = slot else { continue };
+            let mut pushed = false;
+            while sent[i] < PER_WORKER && p.submit(make(i, sent[i]).0) {
+                sent[i] += 1;
+                pushed = true;
+            }
+            if pushed {
+                p.doorbell();
+            }
+            while let Some(d) = p.poll() {
+                let (_, st, want) = make(i, got[i]);
+                if d.id != got[i] || d.status != st || d.value != want {
+                    kprint!(" smp-worker: core {} job {} got (id {} st {} {:#x}) want (st {} {:#x})\n",
+                        i, got[i], d.id, d.status, d.value, st, want);
+                    fail("wrong result");
+                }
+                got[i] += 1;
+            }
+            busy |= got[i] < PER_WORKER;
+        }
+        if !busy {
+            break;
+        }
+        if now().wrapping_sub(t_run) > freq * 120 {
+            fail("timeout serving jobs");
+        }
+    }
+    let dt = now().wrapping_sub(t_run).max(1);
+    let total = PER_WORKER as u64 * live as u64;
+    fn probe(p: &mut arch_aarch64::smp::Port, j: job::Job, freq: u64) -> Option<job::Done> {
+        if !p.submit(j) {
+            return None;
+        }
+        p.doorbell();
+        let t = now();
+        loop {
+            if let Some(d) = p.poll() {
+                return Some(d);
+            }
+            if now().wrapping_sub(t) > freq {
+                return None;
+            }
+        }
+    }
+    let mut it = ports.iter_mut().flatten();
+    let (Some(a), Some(b)) = (it.next(), it.next()) else { fail("lost a port") };
+    p_smp_simd(a, b, freq, core0_cpacr, engine_bytes);
+    // Refusal: a job that points at a kernel word outside the granted window.
+    let kernel_addr = core::ptr::addr_of!(KERNEL_PROBE_WORD) as u64;
+    match probe(a, job::Job { id: 1, op: job::op::SUM64, a: kernel_addr, b: 1 }, freq) {
+        Some(d) if d.status == job::status::OUT_OF_WINDOW => {}
+        _ => fail("an out-of-window job was not refused"),
+    }
+    // S1b, positive control: the UNCHECKED probe read works inside the window (mapped read-only).
+    let win_addr = base + 8 * 100;
+    match probe(a, job::Job { id: 3, op: job::op::PROBE_READ, a: win_addr, b: 0 }, freq) {
+        Some(d) if d.status == job::status::OK && d.value == win[100] => {}
+        _ => fail("an unchecked read inside the window did not return the window's value"),
+    }
+    // Wait until worker `i` reports FAULT; return (ESR, FAR).
+    fn fault_of(i: usize, freq: u64) -> (u64, u64) {
+        let blk = arch_aarch64::smp::block(i);
+        let t = now();
+        while blk.status.load(Ordering::Acquire) != ST_FAULT {
+            if now().wrapping_sub(t) > freq * 2 {
+                fail("the faulting worker did not report");
+            }
+        }
+        (blk.esr.load(Ordering::Relaxed), blk.far.load(Ordering::Relaxed))
+    }
+    // S1b, hardware boundary: an UNCHECKED read of kernel .data is stopped by the worker's own page
+    // tables (data abort, translation fault), and the fault is contained on that core.
+    let bi = b.idx;
+    let _ = b.submit(job::Job { id: 2, op: job::op::PROBE_READ, a: kernel_addr, b: 0 });
+    b.doorbell();
+    let (esr, far) = fault_of(bi, freq);
+    let dfsc = esr & 0x3f;
+    if (esr >> 26) != 0x25 || !(0x04..=0x07).contains(&dfsc) || far != kernel_addr {
+        kprint!(" smp-worker: read fault ESR {:#x} FAR {:#x} (want EC 0x25, translation, FAR {:#x})\n", esr, far, kernel_addr);
+        fail("an unchecked read of kernel data was not stopped by the worker's tables");
+    }
+    for n in 0..256u32 {
+        match probe(a, job::Job { id: n, op: job::op::ECHO, a: n as u64, b: 0xF0F0 }, freq) {
+            Some(d) if d.id == n && d.value == (n as u64 ^ 0xF0F0) => {}
+            _ => fail("a surviving worker stopped serving after another worker faulted"),
+        }
+    }
+    // S1b, read-only window: an UNCHECKED write is a permission fault, and the window is unchanged.
+    let ai = a.idx;
+    let before = win[100];
+    let _ = a.submit(job::Job { id: 4, op: job::op::PROBE_WRITE, a: win_addr, b: 0xBAD });
+    a.doorbell();
+    let (wesr, wfar) = fault_of(ai, freq);
+    let wdfsc = wesr & 0x3f;
+    let after = unsafe { core::ptr::read_volatile(win_addr as *const u64) };
+    if (wesr >> 26) != 0x25 || !(0x0c..=0x0f).contains(&wdfsc) || (wesr >> 6) & 1 != 1 || wfar != win_addr || after != before {
+        kprint!(" smp-worker: write fault ESR {:#x} FAR {:#x} window {:#x}->{:#x}\n", wesr, wfar, before, after);
+        fail("an unchecked write to the read-only window was not stopped by the worker's tables");
+    }
+    let _ = KERNEL_PROBE_WORD.load(Ordering::Relaxed);
+    kprint!(
+        " [P-smp-worker] PASS {} workers served {} jobs in parallel over SPSC rings + SGI doorbell, all equal to core 0's own results ({} jobs/s emulated, not a metal figure); each worker on PRIVATE page tables ({} tables total): out-of-window job refused in software, an unchecked read of kernel .data stopped by the MMU on core {} (ESR {:#x} translation fault, FAR = the kernel word) and contained while core {} kept serving, an unchecked write to the read-only window stopped by the MMU on core {} (ESR {:#x} permission fault, window unchanged)\n",
+        live, total, total * freq / dt, smp::tables_used(), bi, esr, ai, ai, wesr
+    );
+}
+
+/// A kernel word in writable .data (never mapped for workers; .rodata is mapped read-only, so the word
+/// must not live there): `[P-smp-worker]` expects a software refusal, then an MMU fault.
+#[cfg(feature = "smpboot")]
+static KERNEL_PROBE_WORD: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0x5EC_2E7);
+
+/// The hard-float worker engine image (ADR 0060 S2), built by build.rs from `os/kernel/worker-engine`.
+#[cfg(feature = "smpboot")]
+static WORKER_ENGINE_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/worker_engine.elf"));
+
+#[cfg(feature = "smpboot")]
+fn cpacr_el1() -> u64 {
+    let v: u64;
+    unsafe { core::arch::asm!("mrs {}, cpacr_el1", out(reg) v, options(nomem, nostack)) };
+    v
+}
+
+/// Parse the engine ELF with the kernel's fail-closed loader parser and hand its read-only segments to smp.
+#[cfg(feature = "smpboot")]
+fn load_worker_engine() -> Result<usize, &'static str> {
+    use arch_aarch64::smp::{engine_load, EngineSeg};
+    let parsed = elf::parse(WORKER_ENGINE_ELF).map_err(|_| "ELF refused by elf::parse")?;
+    let mut segs: [Option<EngineSeg<'_>>; elf::MAX_SEGMENTS] = core::array::from_fn(|_| None);
+    for (k, s) in parsed.segs.iter().take(parsed.nsegs).enumerate() {
+        let bytes = WORKER_ENGINE_ELF.get(s.offset..s.offset + s.filesz).ok_or("segment past the file")?;
+        segs[k] = Some(EngineSeg { vaddr: s.vaddr, bytes, memsz: s.memsz, exec: s.executable(), write: s.writable() });
+    }
+    let list: [EngineSeg<'_>; elf::MAX_SEGMENTS] = core::array::from_fn(|k| match segs[k].take() {
+        Some(s) => s,
+        None => EngineSeg { vaddr: 0, bytes: &[], memsz: 0, exec: false, write: false },
+    });
+    unsafe { engine_load(&list[..parsed.nsegs], parsed.entry) }
+}
+
+/// ADR 0060 S2a gate `[P-smp-simd]`: each worker enabled FP/SIMD for itself (core 0's CPACR_EL1 unchanged, core 0
+/// stays softfloat) and runs int8 GEMV through the hard-float engine image mapped only in its private tables. Every
+/// path (worker scalar, engine NEON, engine SDOT where the CPU has DotProd) on both workers returns the same
+/// output hash as core 0's own scalar reference: bit-exact across cores and code paths, as `quorum` requires.
+#[cfg(feature = "smpboot")]
+fn p_smp_simd(a: &mut arch_aarch64::smp::Port, b: &mut arch_aarch64::smp::Port, freq: u64, core0_cpacr: u64, engine_bytes: usize) {
+    use arch_aarch64::smp::{worker::job, WINDOW, WINDOW_WORDS};
+    fn fail(why: &str) -> ! {
+        kprint!(" [P-smp-simd] FAIL {}\n", why);
+        arch_aarch64::semihosting::exit(1);
+    }
+    fn now() -> u64 {
+        let c: u64;
+        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) c, options(nomem, nostack)) };
+        c
+    }
+    fn run(p: &mut arch_aarch64::smp::Port, id: u32, params: u64, freq: u64) -> job::Done {
+        if !p.submit(job::Job { id, op: job::op::GEMV_I8, a: params, b: 0 }) {
+            fail("job ring full");
+        }
+        p.doorbell();
+        let t = now();
+        loop {
+            if let Some(d) = p.poll() {
+                return d;
+            }
+            if now().wrapping_sub(t) > freq * 5 {
+                fail("a GEMV job never completed");
+            }
+        }
+    }
+    // Core 0 never enabled FP/SIMD: its CPACR_EL1 is what it was before the workers started.
+    let c0 = cpacr_el1();
+    if c0 != core0_cpacr {
+        fail("core 0's CPACR_EL1 changed");
+    }
+    // Each worker enabled FP/SIMD (FPEN = 0b11) on its own core.
+    let (ca, isa) = a.cpacr_isar0();
+    let (cb, _) = b.cpacr_isar0();
+    if (ca >> 20) & 3 != 3 || (cb >> 20) & 3 != 3 {
+        fail("a worker did not enable FP/SIMD for itself");
+    }
+    let dotprod = (isa >> 44) & 0xF >= 1;
+    // W, x and the parameter block live in the read-only window (its xorshift contents, read as int8).
+    let win = unsafe { &mut *core::ptr::addr_of_mut!(WINDOW) };
+    let base = win.0.as_ptr() as u64;
+    let bytes = unsafe { core::slice::from_raw_parts(base as *const i8, WINDOW_WORDS * 8) };
+    let params_off = WINDOW_WORDS * 8 - 64; // last 64 bytes: the parameter block
+    let shapes: [(u32, u32); 4] = [(16, 16), (64, 64), (128, 256), (256, 192)];
+    let paths = [job::path::SCALAR, job::path::NEON, job::path::SDOT];
+    let mut checked = 0u32;
+    let mut sdot_unsupported = 0u32;
+    for (si, &(rows, cols)) in shapes.iter().enumerate() {
+        let w_off = 4096 * si;
+        let x_off = 49_152 + 512 * si;
+        let (r, c) = (rows as usize, cols as usize);
+        let mut y = [0i32; 256];
+        job::gemv_i8_scalar(&bytes[w_off..w_off + r * c], &bytes[x_off..x_off + c], r, c, &mut y);
+        let want = job::hash_i32(&y[..r]);
+        for &pth in &paths {
+            let prm = job::GemvParams { w: base + w_off as u64, x: base + x_off as u64, rows, cols, path: pth, _pad: 0 };
+            unsafe { core::ptr::write_volatile((base as usize + params_off) as *mut job::GemvParams, prm) };
+            for (wk, p) in [(0, &mut *a), (1, &mut *b)] {
+                let d = run(p, (si * 10 + pth as usize) as u32, base + params_off as u64, freq);
+                if pth == job::path::SDOT && !dotprod {
+                    if d.status != job::status::UNSUPPORTED {
+                        fail("SDOT on a CPU without DotProd was not refused");
+                    }
+                    sdot_unsupported += 1;
+                    continue;
+                }
+                if d.status != job::status::OK || d.value != want {
+                    kprint!(" smp-simd: worker {} shape {}x{} path {} -> status {} hash {:#x}, core 0 {:#x}\n",
+                        wk, rows, cols, pth, d.status, d.value, want);
+                    fail("a worker's GEMV differs from core 0's scalar reference");
+                }
+                checked += 1;
+            }
+        }
+    }
+    // Emulated throughput of the two worker paths on the largest shape (TCG: not a metal figure).
+    let mut rate = [0u64; 2];
+    for (k, &pth) in [job::path::SCALAR, job::path::NEON].iter().enumerate() {
+        let prm = job::GemvParams { w: base, x: base + 49_152, rows: 256, cols: 192, path: pth, _pad: 0 };
+        unsafe { core::ptr::write_volatile((base as usize + params_off) as *mut job::GemvParams, prm) };
+        let t = now();
+        for n in 0..40u32 {
+            let _ = run(a, 1000 + n, base + params_off as u64, freq);
+        }
+        let dt = now().wrapping_sub(t).max(1);
+        rate[k] = 40 * 256 * 192 * freq / dt;
+    }
+    kprint!(
+        " [P-smp-simd] PASS engine image {} B (hard-float, mapped only in worker tables at {:#x}); both workers FPEN=0b11 on their own core, core 0 CPACR_EL1 unchanged ({:#x}); {} GEMV results (worker scalar + engine NEON{}) bit-identical to core 0's scalar reference across 4 shapes and 2 cores; SDOT {} ({} refusals); emulated MAC/s scalar {} vs NEON {} (TCG, not a metal figure)\n",
+        engine_bytes, arch_aarch64::smp::ENGINE_VA, c0, checked,
+        if dotprod { " + SDOT" } else { "" },
+        if dotprod { "checked" } else { "refused on this CPU (no DotProd)" }, sdot_unsupported,
+        rate[0], rate[1]
+    );
 }

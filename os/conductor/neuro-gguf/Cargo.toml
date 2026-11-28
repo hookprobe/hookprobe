@@ -14,7 +14,10 @@ path = "src/lib.rs"
 [dependencies]
 neuro-lm = { path = "../neuro-lm" }
 neuro-hnx = { path = "../neuro-hnx" }
+neuro-kernels = { path = "../neuro-kernels" }
+neuro-contract = { path = "../neuro-contract" }
 
 [dev-dependencies]
+tok-build = { path = "../tok-build" }
 neuro-kernels = { path = "../neuro-kernels" }
 ed25519-compact = { version = "=2.3.1", default-features = false }

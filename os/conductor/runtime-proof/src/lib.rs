@@ -247,5 +247,8 @@ pub fn investigation_job(f: &Finding, job_id: [u8; 16], model: [u8; 32], deadlin
         w.u16(text.len() as u16)?;
         w.put(text)?;
     }
+    // No window context: this job carries cards (class 0, length 0).
+    w.u8(0)?;
+    w.u16(0)?;
     Some(w.len())
 }

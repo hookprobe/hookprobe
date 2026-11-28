@@ -26,8 +26,10 @@ Why it matters to the product:
 - **Speed where it can be had.** A token is limited by memory bandwidth, so the gains are bytes not read
   (a packed layout, a pruned output head, verified drafts) and calls not made (rules decide, the model
   explains). None of that needs another runtime; all of it is measured below.
-- **The same authority when the model is elsewhere.** A large model on the owner's workstation or in a cloud is
-  directed under a capability and a network lease. The device never becomes a client of someone else's stack.
+- **The same authority when the model is elsewhere.** Compute beyond the device comes from other heqk nodes
+  only (the owner's, a fleet's, a heqk node in a cloud), each directed under a capability and a network lease.
+  There is no external model and no API tier (operator decision 2026-11-26, ADR 0071 amendment), so this engine
+  is the product's only engine.
 
 What is decided and not reopened here: no tensor work in the kernel; FP/SIMD for one isolated server only
 (ADR 0072); greedy decoding under Neuro's grammar at temperature 0; the kernel's own crypto crates; no
@@ -144,7 +146,7 @@ The container now carries a language model too, so there is one way a model reac
 - **Admission cannot be lied to:** `neuro_gguf::hnx::admit` opens the verified file and recomputes the manifest
   from it (context, KV state, scratch arena, tensor bytes). A signed header that under-declares any of them is
   refused. The build side uses the same function.
-- **Build host tool:** `tok-build --bin hnx-lm`: `pack` wraps a GGUF file and signs it; `run` does what a heqk
+- **Build host tool:** `tok-build --bin hnx-lm`: `pack` wraps a GGUF file (as a bundle, below) and signs it; `run` does what a heqk
   server would: verify, reserve, read and verify in place, admit, bind, answer.
 
 | Gate | Result |
@@ -161,10 +163,221 @@ context 4,096 (KV state 472 MB, arena 25 MB); asked the capital of France, it an
 habit. 0.06 s per token in the GGUF layout and 0.03 s in the packed layout, prompt included. One changed
 weight byte: segment 429 refused and the region wiped. A changed header byte or another key: refused at open.
 
-Still host-side in this path, to move into the container or the image: the tokenizer tables and the RoPE table
-(built here from the GGUF at load; a device carries them precomputed), and the packed layout (packed here
-after load; it should be the stored form). The signature is Ed25519 with a test key; release signing and the
-hybrid scheme are the platform's.
+**The bundle (payload kind `LM_BUNDLE`, `neuro_gguf::bundle`): nothing derived on the device.** A GGUF file is
+not enough on a device with no float and no build tools: the tokenizer needs its Unicode and merge tables and
+the decoder needs the RoPE table, which takes trigonometry. The bundle carries both beside the model under the
+same signature: four sections in a fixed order (model file, tokenizer tables, RoPE pairs, packed matrices; the
+last may be empty), each starting on a 64-byte boundary. Admission checks that the tables fit the model (RoPE rows for the context and head
+size; tokenizer tables that parse and have the model's vocabulary). The tokenizer is read where it lies; the
+RoPE table is copied into the arena admission already counts. `hnx-lm pack` builds a bundle by default.
+
+| Gate | Result |
+|---|---|
+| A signed bundle loads in place, is admitted, and the engine runs from its tables: same tokens as from the plain file with the same table | pass |
+| RoPE rows for another context; a tokenizer with another vocabulary; bytes that are not a tokenizer; an under-declared manifest | refused |
+| Layout: wrong magic, version, section count, kind or order; a non-zero reserved field; a non-canonical offset; a wrong length; bytes after the last section; non-zero padding; a RoPE table that is not whole pairs | refused |
+| A bundle labelled as a bare GGUF payload, and the reverse | refused |
+
+ftFg as a bundle on the build host: the tokenizer tables add 4.07 MB and the RoPE table 2.10 MB to 1.83 GB;
+878 segments; read and verified in place in 3.2 s; the run uses no build-host helper and answers `Paris` at
+0.05 s per token (GGUF layout) and 0.03 s (packed).
+
+**P0 as a session (`neuro_gguf::p0`): one forward pass per call.** ADR 0060's amendment (W3, stage S2) puts
+the engine on a compute-role worker core that never allocates, gets its memory from core 0 before it starts and
+is driven over rings. `p0::sizes` says from the model's hyperparameters exactly what memory a session needs;
+`Session::open` binds an admitted bundle into that memory; `Session::advance` does one pass over the weights
+(a prompt batch fed, or one token generated) and returns, so a job can be paced, preempted or cancelled between
+passes. Greedy decoding; the tokens are those of `Model::generate`.
+
+| Gate | Result |
+|---|---|
+| A session's answer equals whole-answer generation, token for token, at prompt batches 1, 2, 4 and 16; a prompt of n tokens takes ceil(n / batch) passes, then one pass per token | pass |
+| A second job on the same session and memory; a cancelled job stops and keeps what it produced | pass |
+| Any one of the nine memory slices one element short, a batch of 0 or 17, an empty prompt, a prompt that fills the context, a bare GGUF payload (no tables) | refused |
+| The manifest's KV state equals what the session takes; its arena covers the session's scratch and RoPE table | pass |
+
+ftFg as a session on the build host (NEON, batch 16; not a device number): 24 prompt tokens in 2 passes, then
+one pass per token at a median of 66.9 ms, p99 69.1 ms, max 69.8 ms over 47 passes. What the model needs
+besides its 1.83 GB of weights, assigned up front:
+
+| Context | KV state | Scratch and RoPE | 
+|---|---|---|
+| 4,096 | 449.8 MiB | 23.4 MiB |
+| 2,048 | 224.9 MiB | 22.4 MiB |
+| 1,024 | 112.4 MiB | 21.9 MiB |
+
+The context is the lever on memory: Neuro's cards are budgeted at 512 tokens, so a triage job fits a context of
+1,024 with room for the system prompt and the answer only if that prompt is short; the right cap is to be set
+with Neuro, not assumed.
+
+**Under the answer contract, pass by pass.** `neuro_lm::decode::ClosedRun` makes at most one pass per call, with
+the pruned head and verified drafts; `generate_closed` is now that run looped to the end, so every earlier test
+of it stands, and `tok-build/tests/decode.rs` also drives it pass by pass (same tokens and counters in five
+option sets). `p0::Session::start_closed` runs such a job in the session's memory (tested against
+`generate_closed` on a tiny model).
+
+**One triage job as the device runs it (`hnx-lm triage`), ftFg on the build host.** One of Neuro's synthetic
+windows (10 fact cards, 1,202 bytes of context) through guard A, Neuro's contract prompt, the session under the
+contract, and back through the contract parser and guard E:
+
+| | Plain | Pruned head + drafts |
+|---|---|---|
+| Answer | 236 tokens; verdict `suspicious`, 8 facts and 8 aliases cited; **valid under the contract**; guard E finds no carried text | the same count |
+| Prompt | 1,115 tokens in 70 passes, 88 s | the same |
+| Answer passes over the weights | 235 | 168 (20 with a pruned head; 67 of 260 drafts accepted) |
+| One pass | median 140 ms, p99 149 ms, max 156 ms | median 140 ms, p99 1,084 ms (a draft pass computes eight full heads) |
+| Whole job | 121 s | 145 s |
+
+Apple M5 Pro with NEON, a test key, not a device number. What it shows that a device number will not change:
+- **The prompt is most of the job.** 1,115 tokens for 1,202 bytes of context: Neuro's system prompt and the
+  closed schema with its id lists. About 264 of them come before the first per-request id and are the same in
+  every job, so their KV state could be computed once and kept. The rest is per request. Any change to the
+  prompt is Neuro's, because the prompt is what was measured.
+- **A pass costs more as the context fills** (67 ms at 24 tokens of context, 140 ms at about 1,200): attention
+  reads the KV cache.
+- **Drafts cost more than they save where compute is the limit**, as measured before on x86, and they make one
+  pass eight times longer. For a job that must be paced between passes, the plain mode has the tight bound.
+  Whether drafts pay on a memory-bound A76 is still to be measured there.
+
+**Agreed with Neuro on this evidence (2026-11-28):**
+- **The admitted context is 2,048.** Neuro's largest measured prompts are about 700 tokens with answers of up to
+  700; this denser window is 1,115. A job whose prompt leaves less room than the answer bound is refused
+  (`start_closed`), never cut short. At 2,048 the session takes 247 MiB up front besides the weights.
+- **The prompt's text does not change** (the schema's place in it was trained and gated). What is the same in
+  every job is not fed twice: a session keeps the tokens its KV cache was computed from, and a job that starts
+  with the same tokens begins after them (`Session::reused`). Position i of the cache depends only on tokens
+  0 to i, so the answer is exactly that of a fresh session (tested on five consecutive jobs).
+
+Three of Neuro's windows, one after another in one session at context 2,048 (pruned head, no drafts): each answer
+valid under the contract, no carried text. The first job feeds 1,115 prompt tokens in 87 s; the next two find
+293 tokens already in the cache and feed 657 and 892 in 54 s and 80 s. Whole jobs: 120 s, 83 s, 113 s; an answer
+pass stays between 129 and 143 ms at the median and under 160 ms at worst.
+
+**The packed layout is the stored form.** A bundle's fourth section holds the model's matrices in the packed
+layout (`neuro_kernels::q8`), in a fixed order, each on a 64-byte boundary; the GGUF section then keeps only the
+metadata, the tokenizer's source and the norm vectors. The device runs the fast kernels with no packing at load:
+packing 1.9 GB there would need both copies in memory. Admission checks that the section is exactly this
+model's matrices; the engine's own check validates every record when the model is bound.
+`hnx-lm pack --packed` builds it.
+
+| Gate | Result |
+|---|---|
+| A packed bundle of the tiny model gives the tokens of the unpacked one; the file left has the metadata and norms and none of the eight matrices | pass |
+| A packed section 64 bytes short or long; a file with no matrices and no packed section | refused |
+
+ftFg packed (build host, context 2,048): the model file shrinks to 6.4 MB and the packed section is 1.94 GB
+(929 segments, read and verified in place in 3.3 s). One pass per token at short context: 32 ms, against 67 ms
+in the GGUF layout. The three windows above: 85 s, 60 s and 85 s, against 120 s, 83 s and 113 s; an answer
+pass at about 1,200 tokens of context takes 97 to 111 ms at the median (attention over the KV cache is now the
+larger part). The answer to the second window is byte for byte the answer of the unpacked layout in a fresh
+session.
+
+Still open in this path: the
+signature is Ed25519 with a test key; release signing and the hybrid scheme are the platform's. The tables are
+covered by the signature and are not re-derived: the device cannot compute a cosine.
+
+### The worker's compute is the engine (`conductor-p0`)
+
+`conductor-worker` checks the capability, makes its replay mark durable and signs the result; what it runs is an
+`Executor`. `conductor-p0::P0Executor` is that executor on a heqk node: one admitted model in one P0 session.
+
+- It serves one model digest and `infer` only. Anything else gets an ERROR frame.
+- The answer is closed over the facts and aliases of the context the device sent. The executor reads them from
+  the prompt (between the user framing's head and its question) with the device's own rule
+  (`neuro_contract::context_ids`). A prompt without that block, or with no fact, is refused: the node never
+  decodes outside the contract.
+- An answer that does not fit the output the capability allows is an error, not a cut answer.
+- The session keeps the prompt's identical start between jobs, so a second job feeds only what differs.
+
+`conductor-mock/tests/p0_worker.rs` runs the whole path with no scripted answer: the device harness, a signed
+capability, the worker, a signed bundle loaded in place and admitted, the engine session, the signed result, and
+the device's verifier. The model there is a one-block test model whose weights are all equal, so the contract
+alone shapes its answer. A job that requires no citation verifies as valid; the same answer on a job with a
+required fact is held back by the verifier as incomplete; a second job reuses the cached prompt start; another
+model digest is refused before anything is decoded.
+
+**The engine as a worker-core job (`conductor_p0::core_job`, ADR 0060 stage S2).** HomePods' worker executive
+(`os/kernel/worker`, draft #1644) gives a worker core a closed job vocabulary, `Job { id, op, a, b }` in and
+`Done { id, status, value }` out, and leaves the compute engine to be added as a new op. This is that op's body,
+written against slices, with no address arithmetic and no `unsafe`: `ENGINE_INFER` takes the prompt at offset
+`a`, length `b` of the read window core 0 granted, writes a 16-byte header of counters and then the answer to
+the result window, and returns the answer's length. Core 0 does not wait inside the job: it reads a progress
+word (answer tokens so far) and may set a cancel word, both looked at after every pass over the weights. A
+cancelled job returns nothing of its answer, and the core serves the next job normally. A range outside the
+window, bytes that are not a prompt and an answer that does not fit are refused with a status. The test checks
+all of that and that the answer equals, byte for byte, the one the capability path gives on other kernels. The
+crate is `no_std` with no allocation, no float and no `unsafe` (it is in the no-Linux gate); its bare-metal
+build was not run on this host, which has no bare-metal target installed. What remains is kernel side: calling it from the executive's
+loop on a core with FP/SIMD enabled, and granting the model region and the windows.
+
+**The engine fits a worker core's memory map (S1b, #1654).** Since S1b a worker core runs on private page tables:
+kernel `.text` and `.rodata` read-only, its own area (rings, context, a 16 KiB stack) read-write, the shared data
+window read-only, and kernel `.data`/`.bss` unmapped. What the engine job touches, and where it has to live:
+
+| What | Access | Region on a worker core |
+|---|---|---|
+| Engine code and its constant tables | read, execute | kernel `.text` / `.rodata` |
+| The signed bundle (weights, tokenizer tables, RoPE pairs) | read | model region, granted read-only by core 0 |
+| The prompt (`a`, `b` of the job) | read | the shared data window (read-only is enough) |
+| Session memory (`p0::Mem`: KV state, work buffers, token lists; sized by `p0::sizes` before start) | read, write | a region core 0 grants read-write to that worker only |
+| The result (16-byte header, then the answer) | write | **not** the shared data window, which a worker cannot write: the same granted read-write region, or the worker's own area |
+| Progress and cancel words | write / read | the worker's own area (core 0 reaches it) |
+| Stack | read, write | the worker's own 16 KiB |
+| Any global | none | the engine has none |
+
+| Gate | Result |
+|---|---|
+| No writable global in the nine crates whose code runs on a worker core: no `static mut`, no `static` with an atomic, cell or lock type, no once-cell, no thread-local (`no_linux_no_python.rs`) | pass |
+| Those crates depend only on each other and on two reviewed crates at pinned versions and features (`sha2` 0.10.9, `ed25519-compact` 2.3.1, no default features); `sha2-asm` is not in the lock file | pass |
+| The engine job's stack, measured by painting the stack before the call, optimised aarch64 build: about 5.9 KiB with either kernel set, against a 12 KiB budget of the worker's 16 KiB; the same answer on both | pass |
+
+Three things for the kernel side to know:
+- The stack bound holds for an optimised build. An unoptimised build of the same job used 28 to 29 KiB here, so a
+  debug kernel would overflow a 16 KiB worker stack. Measured on the test model; Rust has no variable-length stack
+  arrays, but the real model's figure belongs to the first S2 run.
+- `sha2` keeps one writable flag where it detects CPU features at run time (`cpufeatures`: a static `AtomicU8`).
+  On aarch64 that is only with its `asm` feature, which is off here. On x86_64 it is always there, so on that tier
+  hashing must stay on core 0 or the crate needs `force-soft`. The engine job itself does not hash.
+- The result cannot go to the shared data window as S1b maps it; see the table.
+
+**Exact agreement, with the real engine.** The fleet's verified redundancy (`conductor_core::quorum`, ADR 0071
+amendment A3) compares signed output hashes for equality, so it stands on nodes giving the same bytes. The same
+file checks that on a test model with seeded weights (tokens score differently, so the answer depends on every
+pass): a node on scalar kernels, a node on this host's NEON kernels, and a node that reuses a cached prompt
+start from another job give byte-identical answers, and their signed votes reach agreement. A node with other
+weights gives another answer and is a conflict with re-verifiable evidence that names it. This is the
+host-side form of the proposed `[P-fleet-exact]` gate; across real core counts it needs the worker cores
+(ADR 0060 S2).
+
+**The real model through the same path** (`hnx-lm job`, build host, test key; 2026-11-28). ftFg from its signed
+packed bundle, two jobs with the same two facts, the device's L0 verdict "suspicious":
+
+| | Job 1 | Job 2 |
+|---|---|---|
+| Whole job | 26.1 s | 11.0 s |
+| Prompt tokens not fed again | 0 | 453 |
+| Prefill passes / answer tokens | 29 / 181 | 1 / 181 |
+| Verifier | Valid, verdict suspicious, decided by L0 | the same; the same answer text |
+| Ledger records; leases started/ended; worker high-water mark | 4; 1/1; 1 | 4; 1/1; 2 |
+
+That run uses the harness's fact form of the request. With `--context FILE` the job carries a window context
+as Neuro's cards write it (the window job, #1645), one job per file. Three of Neuro's synthetic windows, same
+bundle, same host:
+
+| | Window 1 | Window 2 | Window 3 |
+|---|---|---|---|
+| Whole job | 84.7 s | 82.2 s | 59.3 s |
+| Prompt tokens not fed again | 0 | 306 | 293 |
+| Prefill passes / answer tokens | 70 / 236 | 55 / 229 | 42 / 226 |
+| Verifier | Valid, decided by L0 | Valid, decided by L0 | Valid, decided by L0 |
+
+This is the path, not an evaluation: three synthetic windows say nothing about ftFg's quality. Host numbers, not
+device numbers. One limit showed up: a capability allows at most 120 s of compute per call
+(`limits::MAX_COMPUTE_MS`). A job fits on this host; on a CM5-class core it will not, so that limit has to be set
+from the first device measurement.
+
+The tests above are host tests. The node's EL0 wiring, block device
+and kernel-held key are still kernel work (below).
 
 ## neuro-lm: the language-model pieces
 
@@ -410,6 +623,7 @@ kernel, and x86.
 | Crate | What | Target |
 |---|---|---|
 | [`conductor-core/`](conductor-core/) | protocol, HP-EXEC v1, classes, tools, strict JSON, verifier, placement, ledger, harness, worker gate; signer behind `--features signer` | `no_std`, no alloc, `forbid(unsafe_code)`; clippy denies indexing, unwrap/expect/panic, unchecked arithmetic, truncating casts |
+| [`conductor-p0/`](conductor-p0/) | the worker's `Executor` over the native engine session: a heqk node's `infer` | `no_std`, no alloc, no float, `forbid(unsafe_code)` |
 | [`conductor-mock/`](conductor-mock/) | mock kernel + mock worker, the C0 gate tests, fuzzing, host timing | host only |
 | [`el0-harness/`](el0-harness/) | the harness as an EL0 excursion server (no signer, no key) | `aarch64-unknown-none-softfloat`, pinned heqk nightly |
 
@@ -420,7 +634,7 @@ The crypto crates are the kernel's own, pinned to the kernel's versions: `sha2 =
 
 | Gate item | Evidence | Result |
 |---|---|---|
-| Capability refusal | `gate.rs`: remote off by default; required Fingerprint without owner opt-in; Raw/Secret on any tier; P3 public-only; P4 public-only until C3b; P2 refused (fleet_mesh unbuilt); unpaired worker; signer refuses Raw, unapproved classes, wrong egress profile, P2, unknown ops, KV persistence; harness refuses a blob the signer did not sign | pass |
+| Capability refusal | `gate.rs`: remote off by default; required Fingerprint without owner opt-in; Raw/Secret on any tier; P3 public-only; tiers 4 and 5 (the removed GPU VM and external API) do not decode, are not signed for, and an environment that enables them is refused; P2 refused (fleet_mesh unbuilt); unpaired worker; signer refuses Raw, unapproved classes, wrong egress profile, P2, unknown ops, KV persistence; harness refuses a blob the signer did not sign | pass |
 | Replay rejection | worker gate: same capability twice → Replay (ADR 0069 counter pattern); wrong session, wrong worker, wrong tier, altered request, not-yet-valid, expired, tampered body, revoked epoch; device: frames replayed from a previous call → CapabilityMismatch | pass |
 | Budget exhaustion | step budget ends a tool loop; output-unit budget caps the capability and rejects an overrun; deadline aborts even while frames arrive; silent worker times out | pass |
 | Malformed responses | bad result signature, bad output hash, wrong capability id, skipped sequence, usage lie, garbage, oversize, error frame, double FINAL; 15 strict-schema cases (unknown/duplicate/reordered keys, trailing bytes, leading zeros, tab, `\u` escape, bidi override, raw control char, negative/float numbers, unknown tool, non-object) | pass |
@@ -519,7 +733,8 @@ cd os/conductor && cargo run --release -p tok-build --bin fidelity -- --dir DIR 
   store (the record layer is built and power-loss tested: `durable.rs`, KR-3); broadcast epoch announcements; wire `el0-harness` behind a feature; assign its
   address range; time Ed25519 verify at opt-level "z" on CM5.
 - **Remote workers**: only as heqk-native nodes (heqk on the worker machine), after ADR 0068 and the
-  kernel requests. No Linux-hosted worker. The worker side is built (`conductor-worker`, C2 host part). The
+  kernel requests. No Linux-hosted worker. The worker side is built (`conductor-worker`, C2 host part), and its
+  compute is bound to the engine (`conductor-p0`). The
   node still needs its own EL0 wiring, its block device and its key held by its kernel.
 - Third-party applications (containers / microVMs on a companion host) are outside C0 and need their own
   ADR.
@@ -581,11 +796,12 @@ and the `json_schema` call. Changing `maxLength` 600 → 500 in Neuro's file mad
 | Conductor on the contract: all 28 C0 gate tests, C1-prep, fuzz, quotes, Runtime Proof 001. A fabricated id cannot be written; a card that injects its own `F9 …` line is caught by the verifier; a bidi override hidden as `‮` is refused after unescaping | pass |
 | EL0 harness: `.text` 82,716 B (+7.9 KB for the contract and Neuro's prompt text), `.bss` 52,392 B, **stack bound 10,912 B** (was 13,280), 0 FP/SIMD. `stack_bound` now also recognises half-word and byte jump tables | pass |
 | **Guard G and grounding (Neuro's answers, 2026-11-24).** `neuro_contract::grounding` mirrors `guard_ground.py` and `grounding.py`: 1,518 vectors from Neuro's own functions match exactly. The ATT&CK 20.1 table (867 ids, 3.5 KB) has a drift gate against `attack-ids.json`. The harness runs G on the decoded summary before the verifier, against the cards and the earlier tool results, and records every edit in the ledger (`GroundingEdit`). The verifier applies Neuro's severities: an invented technique or an unreturned CVE → REJECTED; a service without its port on the cards → UNVERIFIED, and L0's verdict stands. Harness cost: `.text` +8.0 KB, `.rodata` +4.1 KB (90,736 / 8,408 B); stack bound unchanged | pass |
-| **Evidence cards (Neuro's `semantic_compression.py`).** `neuro_contract::cards::build_context` turns a window's flows and detections into the context text: fan-out, periodic, volume and reset flags, novelty against the baseline, detection notes, ranking, entity aliases, the budget fill and the `REST` line. No float and no allocation: the caller's flows are sorted in place and the working memory is the caller's. Python's two float results that real traffic meets are reproduced exactly in integers (the mean gap, and the `out=…GB` rounding). Follows Neuro's d65431e5c: the 2-3 port match is `min(ports)`, one `REST` line when one card is dropped, the 5 s floor on the mean rounded to ms. 120 committed windows from Neuro's own functions match byte for byte, as do 6,400 more generated windows and Neuro's 22 windows of the E2E fixture (run locally; that file has real addresses). A drift gate reads 48 fragments of Neuro's two sources. DNS and behaviour events are not mirrored | pass |
+| **Evidence cards (Neuro's `semantic_compression.py`).** `neuro_contract::cards::build_context` turns a window's flows and detections into the context text: fan-out, periodic, volume and reset flags, novelty against the baseline, detection notes, ranking, entity aliases, the budget fill and the `REST` line. No float and no allocation: the caller's flows are sorted in place and the working memory is the caller's. Python's two float results that real traffic meets are reproduced exactly in integers (the mean gap, and the `out=…GB` rounding). Follows Neuro's d65431e5c: the 2-3 port match is `min(ports)`, one `REST` line when one card is dropped, the 5 s floor on the mean rounded to ms. 120 committed windows from Neuro's own functions match byte for byte, as do 6,400 more generated windows and Neuro's 22 windows of the E2E fixture (run locally; that file has real addresses). A drift gate reads 48 fragments of Neuro's two sources. Since 2026-11-28 it takes every event kind (`build_window`): DNS groups and behaviour records too, equal on Neuro's 64 synthetic contexts, 104 committed contexts and 6,000 more generated windows; entropy is computed in fixed point, with no float | pass |
 | **Guards A and E (Neuro docs 24 and 25).** `neuro_contract::guard` mirrors `guard.py` and the template sentence of `run_eval.py`'s `template_backend`: 718 committed vectors from Neuro's own functions match exactly, and so do 15,018 more generated cases and the contexts of the spent sets dev v8 and blind v7 (run on the Neuro host, not committed). A drift gate reads `guard.py`, `semantic_compression.py` and `run_eval.py`. In the harness, guard A replaces every quoted value on a card or in a tool result by its description before a provider sees it, and the schema ids come from that shown context, as in `run_eval.py`. Guard E replaces an answer's prose that repeats 8 or more characters of a quoted value, of a card or of a tool result as received, by the template sentence and records it in the ledger (`EchoFallback`), before guard G. Cost: the harness keeps the cards as written and the tool results as received next to the prompt, two more `MAX_PROMPT` buffers (16,400 B of `.bss` by their size). The EL0 harness's `.text`, `.bss` and stack bound were **not** re-measured: no bare-metal toolchain on the host this was built on | pass (host) |
 | **The investigation turn (Neuro's `inv_contract.json`, adapter ftM).** `neuro_contract::inv` writes the request as llama-server renders it (`--jinja --reasoning off`): Neuro's system prompt, the five tools in the model's own template, the user framing. A drift gate reads `tools/neuro-research/inv_contract.json`. On Neuro's 3 test vectors the prompt bytes equal llama-server's rendering, and with ftM's GGUF (`QWEN3_INV_GGUF`, run on the Neuro host) all 2,137 token ids equal llama-server's. `parse_answer` is the device's strict reading of the answer: free text, or ONE call of one of the five tools with exactly its typed arguments and an entity alias from the context; 22 malformed or out-of-scope calls are refused. **Not built:** constrained decoding of the tool call in the engine, the harness wiring of these tools, and the ftM fidelity run | pass (host) |
 | **Decoding the investigation answer (Neuro's `inv_contract_gen.json`).** `neuro_contract::inv::ToolMachine` is llama-server's lazy tool-call grammar as a byte automaton (6 bytes of state): free text until the generated text contains `<tool_call>` and a newline, then the grammar the server derives from the five tools. The test reads the GBNF text the server reports and interprets it with an independent matcher: 1,500 random answers are accepted by both, and 18,000 one-byte changes get the same verdict from both. `neuro_lm::decode::generate_tool` decodes under it. With ftM's GGUF (`QWEN3_INV_GGUF`, run on the Neuro host) against llama.cpp b12477's CPU backend on Neuro's 3 vectors: raw top-1 and the constrained choice are equal on all 57 teacher-forced steps (no near-ties; top-2 margin error mean 0.048, max 0.191 nats), and the engine's own decoding gives the same token ids in all three. Three synthetic vectors, not an evaluation. **Not built:** head pruning and speculation for this path, the harness wiring of the five tools, the run on the spent investigation sets | pass (host) |
 | **The investigation turn in the harness.** A job granted any of Neuro's five tools (bits 2 to 6 of the job's tool byte; never mixed with Conductor's own two) is an investigation job. The prompt is `neuro_contract::inv`'s, with nothing added, and always offers all five tools, as measured; the grant acts on the call. `inv::parse_answer` reads the answer and `tools::authorize_inv` authorizes it again on its own. A read tool becomes `Action::RunTool(ToolCall::Investigate)`; the device's one-line result joins the context as Neuro's `RESULT <tool> <alias>: <text>` line, after guard A, for the next call. `propose_policy_change` becomes `Action::Propose` and ends the job: nothing is applied. It stops a model (or an injection through it) running a tool the job was not granted, naming a device it was not shown, or changing a policy, and a tool result forging a card. `conductor-mock/tests/investigate.rs`, 14 tests: the prompt equals Neuro's; an ungranted call is refused and recorded; 13 malformed or out-of-contract calls are rejected and none is acted on; a proposal never reaches the tool executor; a result with a line break, a bidi override or no text aborts the job; a result of a class the provider may not see stays on the device; the step budget ends a chain; the `RESULT` line is checked against one of Neuro's vectors; the host ABI carries the alias | pass |
+| **Cards built in the harness (operator decision 2026-11-28, Neuro doc 53 R12).** `conductor_core::window` decodes a window of events from the kernel (string table, flows, DNS queries, detections, behaviour records, baseline) and builds the context with `neuro_contract::cards`, in caller-provided memory. A job carries that context in place of cards; its shape is checked at load (fact lines in order, at most one closing `REST` line, nothing else). The provider is shown exactly it after guard A, with `RESULT` lines before `REST` in an investigation. `conductor-mock/tests/window.rs`: 86 vector windows through the wire format give Neuro's context byte for byte (104 contexts); 40 go on through the harness to the worker unchanged; answers are closed over the context; a window with no fact card is not sent; 14 malformed contexts and truncated, oversized or forged windows are refused | pass |
 
 Random models repeat characters, which flatters n-gram drafts (0.49 passes per token there). The real-model
 numbers are below.

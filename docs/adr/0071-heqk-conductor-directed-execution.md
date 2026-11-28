@@ -366,6 +366,11 @@ model digest and request. Verification is by exact comparison:
 **Invariant:** determinism is a hard requirement of the engine ABI. **Gate `[P-fleet-exact]`:** the same job
 on two nodes with different core counts and timings returns identical hashes.
 
+**Built (2026-11-26):** `os/conductor/conductor-core/src/quorum.rs` (k-of-n agreement, sticky conflict with
+self-contained evidence, keyed audit sampling; no allocation), tested in `conductor-mock/tests/fleet_quorum.rs`.
+The deep-research validation and the comparison with Verde, Proof of Sampling, TOPLOC and DiFR are in the research
+note §8: the mechanism is known; getting bitwise determinism for free from an integer CPU engine is what is unusual.
+
 ### A4. Node-local priority
 
 A node's first duty is to protect its owner:

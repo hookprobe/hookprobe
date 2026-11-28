@@ -59,6 +59,9 @@ pub mod kind {
     /// A GGUF file of a language model the integer engine binds (`neuro-gguf`). [`crate::Loader::finish_lm`]
     /// hands back the verified bytes; the binder checks the manifest against the file.
     pub const GGUF_LM: u8 = 1;
+    /// A language-model bundle (`neuro_gguf::bundle`): the GGUF file with the tokenizer tables and the RoPE
+    /// table beside it, so the device derives nothing. [`crate::Loader::finish_lm`], as for `GGUF_LM`.
+    pub const LM_BUNDLE: u8 = 2;
 }
 
 /// Targets (doc 06 §3). `GENERIC_INT` runs on any integer-only engine; the others need their features.
@@ -281,7 +284,7 @@ impl Header {
             merkle_root: r.arr().ok_or(l)?,
             payload_kind: r.u8().ok_or(l)?,
         };
-        if !matches!(h.payload_kind, kind::ENGINE | kind::GGUF_LM) {
+        if !matches!(h.payload_kind, kind::ENGINE | kind::GGUF_LM | kind::LM_BUNDLE) {
             return Err(Refusal::Kind);
         }
         // The pads and the tail are reserved: zero, so no field can hide in them.
@@ -394,7 +397,7 @@ impl<'a> Loader<'a> {
         if !(MIN_SEGMENT_LOG2..=MAX_SEGMENT_LOG2).contains(&h.segment_log2) {
             return Err(Refusal::Segments);
         }
-        let cap = if h.payload_kind == kind::GGUF_LM { MAX_LM_PAYLOAD } else { MAX_PAYLOAD };
+        let cap = if h.payload_kind == kind::ENGINE { MAX_PAYLOAD } else { MAX_LM_PAYLOAD };
         if m.payload_bytes == 0 || m.payload_bytes > cap {
             return Err(Refusal::Payload);
         }
@@ -539,7 +542,7 @@ impl<'a> Loader<'a> {
 }
 
 impl Loader<'_> {
-    /// Step 5 for a language model ([`kind::GGUF_LM`]): every segment present and verified, so the region
+    /// Step 5 for a language model ([`kind::GGUF_LM`], [`kind::LM_BUNDLE`]): every segment present and verified, so the region
     /// is the signed file, byte for byte. The binder (`neuro_gguf::hnx::admit`) opens it and checks that the
     /// manifest told admission the truth; this crate does not know the model's format.
     pub fn finish_lm<'r>(&self, region: &'r [u8]) -> Result<&'r [u8], Refusal> {
@@ -549,7 +552,7 @@ impl Loader<'_> {
         if !self.complete() {
             return Err(Refusal::Incomplete);
         }
-        if self.header.payload_kind != kind::GGUF_LM {
+        if !matches!(self.header.payload_kind, kind::GGUF_LM | kind::LM_BUNDLE) {
             return Err(Refusal::Kind);
         }
         if u64::try_from(region.len()).ok() != Some(self.header.manifest.payload_bytes) {

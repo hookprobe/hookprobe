@@ -5,7 +5,7 @@
 //! Header (little-endian u32 words, like `hal::neuroabi`): MAGIC "HQCN", CMD, IN_LEN, STATUS, OUT_LEN.
 //! IN starts at `IN_OFF`, OUT at `OUT_OFF`. One command per excursion; the harness state persists in .bss.
 
-use crate::class::OwnerPolicy;
+use crate::class::{OwnerPolicy, Tier};
 use crate::place::{Env, WorkerInfo};
 use crate::wire::Reader;
 
@@ -30,10 +30,10 @@ pub const ST_OK: u32 = 0;
 pub const ST_BAD_INPUT: u32 = 1;
 pub const ST_PANIC: u32 = 0xdead;
 
-pub const ENV_LEN: usize = 32 + 8 + 5 * (1 + 32 + 16 + 1 + 1);
+pub const ENV_LEN: usize = 32 + 4 + 3 * (1 + 32 + 16 + 1 + 1);
 
-/// env = device_pk[32] policy[8 bytes: remote, tiers, fp_p1, fp_p4, addr_p1, addr_p4, agg_p5, p4_proven]
-/// then for tiers 1..=5: present u8, pk[32], egress[16], available u8, idle u8.
+/// env = device_pk[32] policy[4 bytes: remote, tiers, fp_p1, addr_p1]
+/// then for tiers 1..=3: present u8, pk[32], egress[16], available u8, idle u8.
 pub fn decode_env(b: &[u8]) -> Option<Env> {
     let r = &mut Reader::new(b);
     let device_pk = r.arr()?;
@@ -46,17 +46,16 @@ pub fn decode_env(b: &[u8]) -> Option<Env> {
     };
     let remote_enabled = flag(r)?;
     let tiers = r.u8()?;
+    if tiers & !Tier::ALL_BITS != 0 {
+        return None;
+    }
     let policy = OwnerPolicy {
         remote_enabled,
         tiers,
         fingerprints_p1: flag(r)?,
-        fingerprints_p4: flag(r)?,
         addresses_p1: flag(r)?,
-        addresses_p4: flag(r)?,
-        aggregate_p5: flag(r)?,
-        p4_chain_proven: flag(r)?,
     };
-    let mut workers = [WorkerInfo::EMPTY; 6];
+    let mut workers = [WorkerInfo::EMPTY; Tier::SLOTS];
     for slot in workers.iter_mut().skip(1) {
         *slot = WorkerInfo { present: flag(r)?, public_key: r.arr()?, egress_policy_id: r.arr()?, available: flag(r)?, idle: flag(r)? };
     }

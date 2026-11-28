@@ -1,0 +1,32 @@
+# ADR 0060 S2 — the compute engine image a WORKER core runs (never core 0, never EL0).
+#
+# Built HARD-FLOAT (`aarch64-unknown-none`: NEON on) as a separate, position-fixed ELF by the kernel's build.rs
+# (nested `cargo build`, clean env), embedded with include_bytes!, and mapped executable ONLY in a worker core's
+# private stage-1 tables (`arch-aarch64/src/smp.rs`). The kernel itself stays softfloat: the call from the worker
+# executive passes integers and pointers only, so the two float ABIs never meet. S2a is a NEON/SDOT int8 GEMV
+# probe proving the route; S2b replaces it with the Conductor's `conductor_p0::core_job` (ENGINE_INFER, #1646).
+#
+# Detached workspace (own `[workspace]`): never a member of ../Cargo.toml, never in the kernel's Cargo.lock.
+[package]
+name = "worker-engine"
+version = "0.0.26"
+license = "AGPL-3.0-only"
+edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0063 G4)
+
+[workspace]
+
+[[bin]]
+name = "worker-engine"
+path = "src/main.rs"
+
+[dependencies]
+# The job vocabulary and the reference scalar functions, shared with the worker executive (no FP in that crate).
+heqk-worker = { path = "../worker" }
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

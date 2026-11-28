@@ -14,3 +14,8 @@ pub const WQ: [i16; 28] = [15954, 25247, 24395, 5188, 4170, -374, 1745, -6256, -
 pub const BQ: i32 = -8186606;
 /// Alert iff accumulator > THR_Q.
 pub const THR_Q: i32 = -868445;
+/// dev= token (doc 53 R10): z_q16 = DEV_A_Q16 + DEV_B_Q16 * q, the S1 standardisation on the dequantised feature.
+pub const DEV_A_Q16: [i32; 28] = [-103968, -186873, -76191, -47327, -46671, -157749, -90207, -156151, -87418, -122398, -81257, -35432, -79696, -54107, -39348, -128013, -33060, -17819, -3232, -39540, -32296, -18156, -88946, -78891, -80861, -69731, -36439, -67886];
+pub const DEV_B_Q16: [i32; 28] = [1021, 837, 867, 679, 699, 865, 554, 1357, 805, 1312, 1143, 1915, 656, 786, 611, 713, 1038, 1238, 5984, 1957, 935, 1220, 647, 750, 1191, 554, 628, 708];
+/// Short feature names for the token, in feature order.
+pub const DEV_NAMES: [&str; 28] = ["flows", "out", "remotes", "dst_ports", "port_entropy", "top_port", "fail", "bytes_out", "bytes_in", "out_in", "mean_dur", "pkts_per_flow", "tcp", "udp", "icmp", "wellknown", "telnet", "ssh", "smb", "web", "dns", "ntp", "periodic_cv", "period", "max_per_min", "novel_pair", "lan_peer", "inbound_sources"];

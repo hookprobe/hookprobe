@@ -12,6 +12,7 @@ cargo os/kernel/el0-lansvc
 cargo os/kernel/el0-hsh
 cargo os/kernel/el0-wifi
 cargo os/kernel/el0-wpa
+cargo os/kernel/worker-engine
 cargo os/kernel/flashstub
 cargo os/kernel/wasip1-fixture
 cargo os/kernel/efiboot

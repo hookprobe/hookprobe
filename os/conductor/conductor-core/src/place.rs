@@ -27,8 +27,8 @@ pub struct Env {
     /// The device's delegation PUBLIC key (the harness verifies what the signer returns).
     pub device_pk: [u8; 32],
     pub policy: OwnerPolicy,
-    /// Indexed by tier number (1..=5); index 0 unused.
-    pub workers: [WorkerInfo; 6],
+    /// Indexed by tier number (1..=3); index 0 unused.
+    pub workers: [WorkerInfo; Tier::SLOTS],
 }
 
 impl Env {

@@ -89,6 +89,9 @@ pub mod timer;
 pub mod pci;
 #[cfg(feature = "smccc")]
 pub mod smccc;
+/// ADR 0060 S0a: secondary-core start over PSCI HVC on tiers without HBoot (QEMU, OCI A1).
+#[cfg(feature = "smp")]
+pub mod smp;
 pub mod virtio;
 pub mod virtio_blk;
 /// QEMU integration-test profile only (kernel `qemu-itest`): virtio-rng entropy leaf. Never in a CM5 / cloud image.

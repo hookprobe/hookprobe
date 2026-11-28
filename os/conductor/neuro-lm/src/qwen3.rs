@@ -32,9 +32,18 @@ pub struct Mat<'a> {
 }
 
 impl<'a> Mat<'a> {
+    /// No matrix: a placeholder for memory that is filled before use. `check()` refuses it.
+    pub const EMPTY: Mat<'static> = Mat { rows: 0, cols: 0, w: &[], packed: false, wexp: 0 };
+
     /// A GGUF-layout matrix (computes `wexp` with one pass over the scales).
     pub fn gguf(rows: usize, cols: usize, w: &'a [u8]) -> Self {
         Mat { rows, cols, w, packed: false, wexp: q8::wexp_gguf(w) }
+    }
+
+    /// A matrix already in the packed layout (computes `wexp` with one pass over the records). `check()`
+    /// validates the layout.
+    pub fn packed(rows: usize, cols: usize, w: &'a [u8]) -> Self {
+        Mat { rows, cols, w, packed: true, wexp: q8::wexp_packed(w) }
     }
 
     fn ok(&self, rows: usize, cols: usize) -> bool {
@@ -69,6 +78,12 @@ pub struct Layer<'a> {
     pub w_gate: Mat<'a>,
     pub w_up: Mat<'a>,
     pub w_down: Mat<'a>,
+}
+
+impl Layer<'_> {
+    /// No layer: a placeholder for the caller's layer table before the binder fills it.
+    pub const EMPTY: Layer<'static> =
+        Layer { attn_norm: &[], wq: Mat::EMPTY, wk: Mat::EMPTY, wv: Mat::EMPTY, wo: Mat::EMPTY, q_norm: &[], k_norm: &[], ffn_norm: &[], w_gate: Mat::EMPTY, w_up: Mat::EMPTY, w_down: Mat::EMPTY };
 }
 
 #[derive(Clone, Copy, Debug)]

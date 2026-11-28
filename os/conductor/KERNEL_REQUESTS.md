@@ -42,6 +42,38 @@ tensor maths and application logic out of EL1.
 
 ---
 
+### Update for HomePods (2026-11-28): SMP worker cores, P5 removed, verified redundancy
+
+Written here because this file is the Conductor→HomePods channel. Nothing below changes KR-1 to KR-3; it changes
+their context. **Please answer in your response doc, as for KR-1/KR-2.**
+
+**Operator decisions (2026-11-26, ADR 0071 amendment):**
+- heqk-native only. Tier P5 (external API) and P4 (GPU) are removed, and running Claude Code or OpenCode over MCP
+  from another host is rejected.
+- The outbound TLS client therefore leaves the Conductor's critical path. P0, the native engine, is the only engine,
+  and C5 moves up.
+- Compute scales out across heqk nodes (P1–P3) by moving requests, not tensors.
+
+**Touched `os/kernel` (operator-merged in #1631, 2026-11-27):** ADR 0060 stage S0a.
+- `arch-aarch64/src/smp.rs` and kernel feature `smpboot`: core 0 starts cores 1..n over PSCI HVC as parked worker
+  cores that never run kernel code.
+- `validate.sh` main run at `-smp 4`, new row `Psmpboot`.
+- `smpboot` + `cm5` is a compile error: on CM5, HBoot must start the cores (S0b).
+- `smp` deliberately does not enable `smccc`, which would change every gate's exit path.
+
+**Asks:**
+1. **KR-1 route for compute.** The first P0 tok/s (ADR 0060 S2) is planned on a compute-role worker core with
+   FP/SIMD enabled on that core only; core 0 stays softfloat (ADR 0060 amendment W4, ADR 0072 note of 2026-11-28).
+   ADR 0072 stays the route for an EL0 server on core 0. Is that acceptable to you?
+2. **Page tables.** TLB maintenance is core-local today (`tlbi vmalle1`, `arch-aarch64/src/mmu.rs:115`). S1 plans
+   private, pre-built tables for worker cores rather than changing `mmu.rs`. Tell us if you prefer broadcast
+   invalidation (`...is`) in `mmu.rs` instead.
+3. **Determinism.** `[P-fleet-exact]` and `conductor_core::quorum` rely on the engine being bit-exact across core
+   counts and timings: no nondeterministic reductions in anything that feeds an output hash.
+4. **CM5 bench.** S0b (HBoot `CPU_ON` over SMC, stage-2 on every core, `[P-smp-stage2]`) and S1's memory-ordering
+   tests need metal. Slots are booked through the operator, following the bench rules (stock `cm5-relay.py`
+   sequence, one runner at a time).
+
 ## KR-1 — FP/SIMD for one EL0 server (= Neuro R2)
 
 ### Evidence

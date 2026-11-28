@@ -5,6 +5,8 @@
 pub const MAX_EVIDENCE: usize = 32;
 /// Bytes of one evidence card's text.
 pub const MAX_CARD: usize = 256;
+/// Bytes of a window's context: Neuro's 512-token budget is about 2,048 bytes, plus the `REST` line.
+pub const MAX_CONTEXT: usize = 2560;
 /// Bytes of the operator's intent.
 pub const MAX_INTENT: usize = 512;
 /// Bytes of the prompt sent to a worker (intent + cards + tool results + instructions).

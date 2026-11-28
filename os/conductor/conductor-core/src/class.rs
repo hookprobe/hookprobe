@@ -45,20 +45,18 @@ pub const NEVER_LEAVES: u8 = (1 << DataClass::Raw as u8) | (1 << DataClass::Secr
 /// All defined class bits.
 pub const ALL_CLASSES: u8 = 0x7f;
 
-/// Execution providers (design review v2 §02). P0 (local) is not a remote tier and has no number here.
+/// Execution providers (ADR 0071 amendment A1). Every provider is a heqk node. P0 (the engine on this
+/// device) is not a remote tier and has no number here. Numbers 4 and 5 were a GPU confidential VM and an
+/// external API; both are removed and are refused wherever a tier is decoded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Tier {
-    /// The owner's LAN workstation, paired by the owner, on a confined compute segment.
+    /// The owner's paired heqk node on the LAN, on a confined compute segment.
     P1 = 1,
-    /// Other HookProbe devices: needs the `fleet_mesh` capability (ADR 0004), not built. Always refused in C0.
+    /// HookProbe peers: needs the `fleet_mesh` capability (ADR 0004), not built. Always refused.
     P2 = 2,
-    /// Untrusted cloud worker: public-class data only.
+    /// A heqk node in the cloud: public-class and reviewed-aggregate data only.
     P3 = 3,
-    /// Confidential VM with the full attestation chain (CPU, and GPU where used).
-    P4 = 4,
-    /// External API under an explicit owner data-sharing policy.
-    P5 = 5,
 }
 
 impl Tier {
@@ -67,16 +65,19 @@ impl Tier {
             1 => Self::P1,
             2 => Self::P2,
             3 => Self::P3,
-            4 => Self::P4,
-            5 => Self::P5,
             _ => return None,
         })
     }
     pub fn bit(self) -> u8 {
         1u8 << (self as u8)
     }
-    /// Placement preference: the owner's own hardware first, then attested, then API, then untrusted.
-    pub const PREFERENCE: [Tier; 4] = [Tier::P1, Tier::P4, Tier::P5, Tier::P3];
+    /// Number of slots in a table indexed by tier number (index 0 unused).
+    pub const SLOTS: usize = 4;
+    /// Bits of the tiers that exist.
+    pub const ALL_BITS: u8 = 0b1110;
+    /// Placement preference: the owner's own node first, then the cloud node. P2 is not placed until
+    /// `fleet_mesh` exists.
+    pub const PREFERENCE: [Tier; 2] = [Tier::P1, Tier::P3];
 }
 
 /// The owner's choices. The default is the design's default: remote execution OFF, every opt-in false.
@@ -86,17 +87,10 @@ pub struct OwnerPolicy {
     pub remote_enabled: bool,
     /// Bitmask of enabled tiers (`Tier::bit`).
     pub tiers: u8,
-    /// Fingerprints may go to the owner's LAN worker (P1) / to an attested P4.
+    /// Fingerprints may go to the owner's paired LAN node (P1).
     pub fingerprints_p1: bool,
-    pub fingerprints_p4: bool,
-    /// Addresses and names may go to P1 / P4.
+    /// Addresses and names may go to P1.
     pub addresses_p1: bool,
-    pub addresses_p4: bool,
-    /// Aggregates may go to the external API (P5).
-    pub aggregate_p5: bool,
-    /// P4 attestation (CPU + GPU) has been demonstrated end to end (gate C3b). Until then P4 is
-    /// treated as public-only, whatever the other flags say.
-    pub p4_chain_proven: bool,
 }
 
 impl OwnerPolicy {
@@ -110,7 +104,6 @@ pub fn allowed(class: DataClass, tier: Tier, p: &OwnerPolicy) -> bool {
     if !p.tier_enabled(tier) {
         return false;
     }
-    let p4_full = p.p4_chain_proven;
     match (class, tier) {
         // Never, anywhere.
         (DataClass::Raw | DataClass::Secret, _) => false,
@@ -118,16 +111,11 @@ pub fn allowed(class: DataClass, tier: Tier, p: &OwnerPolicy) -> bool {
         (_, Tier::P2) => false,
         (DataClass::Public, _) => true,
         (DataClass::AggregateReviewed, Tier::P1 | Tier::P3) => true,
-        (DataClass::AggregateReviewed, Tier::P4) => p4_full,
-        (DataClass::AggregateReviewed | DataClass::Aggregate, Tier::P5) => p.aggregate_p5,
         (DataClass::Aggregate, Tier::P1) => true,
-        (DataClass::Aggregate, Tier::P4) => p4_full,
         (DataClass::Aggregate, Tier::P3) => false,
         (DataClass::Fingerprint, Tier::P1) => p.fingerprints_p1,
-        (DataClass::Fingerprint, Tier::P4) => p4_full && p.fingerprints_p4,
         (DataClass::Address, Tier::P1) => p.addresses_p1,
-        (DataClass::Address, Tier::P4) => p4_full && p.addresses_p4,
-        (DataClass::Fingerprint | DataClass::Address, Tier::P3 | Tier::P5) => false,
+        (DataClass::Fingerprint | DataClass::Address, Tier::P3) => false,
     }
 }
 

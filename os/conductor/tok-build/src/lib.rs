@@ -284,3 +284,181 @@ pub fn from_gguf(g: &neuro_gguf::Gguf) -> Result<Source, String> {
     }
     Ok(Source { tokens, merges: ms, added })
 }
+
+// ------------------------------------------------------------------------------------------- model bundles
+
+/// A GGUF file with the same metadata and only the tensors `keep` accepts, laid out again. Build side.
+pub fn gguf_keeping(g: &neuro_gguf::Gguf, keep: impl Fn(&neuro_gguf::Tensor) -> bool) -> Vec<u8> {
+    let align = g.alignment as usize;
+    let mut kept = vec![];
+    g.for_each_tensor(|t| {
+        if keep(&t) {
+            kept.push(t);
+        }
+    });
+    let mut out = b"GGUF".to_vec();
+    out.extend_from_slice(&3u32.to_le_bytes());
+    out.extend_from_slice(&(kept.len() as u64).to_le_bytes());
+    out.extend_from_slice(&g.kv_count().to_le_bytes());
+    out.extend_from_slice(g.kv_bytes());
+    let mut data: Vec<u8> = vec![];
+    for t in &kept {
+        while !data.len().is_multiple_of(align) {
+            data.push(0);
+        }
+        out.extend_from_slice(&(t.name.len() as u64).to_le_bytes());
+        out.extend_from_slice(t.name);
+        out.extend_from_slice(&(t.n_dims as u32).to_le_bytes());
+        for d in t.dims.iter().take(t.n_dims) {
+            out.extend_from_slice(&d.to_le_bytes());
+        }
+        out.extend_from_slice(&t.ty.to_le_bytes());
+        out.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        data.extend_from_slice(t.data);
+    }
+    while !out.len().is_multiple_of(align) {
+        out.push(0);
+    }
+    out.extend_from_slice(&data);
+    out
+}
+
+/// The model's matrices in the packed layout, in the order and alignment of `neuro_gguf::qwen3::packed_shapes`,
+/// and the GGUF file without them. Refuses a model whose output head is not tied to the embedding.
+pub fn packed_parts(g: &neuro_gguf::Gguf, h: &neuro_gguf::qwen3::Hparams) -> Result<(Vec<u8>, Vec<u8>), String> {
+    use neuro_gguf::qwen3::{layer, PACK_ALIGN};
+    if g.tensor(b"output.weight").is_some() {
+        return Err("the output head is not tied to the embedding; a packed section does not carry one".into());
+    }
+    let d = h.dims;
+    let mut out: Vec<u8> = vec![];
+    let mut put = |m: &neuro_lm::qwen3::Mat| -> Result<(), String> {
+        while !out.len().is_multiple_of(PACK_ALIGN) {
+            out.push(0);
+        }
+        let at = out.len();
+        out.resize(at + neuro_kernels::q8::packed_bytes(m.rows, m.cols), 0);
+        m.pack_into(&mut out[at..]).map(|_| ()).ok_or_else(|| "a matrix does not pack".to_string())
+    };
+    let embed = g.tensor(b"token_embd.weight").ok_or("no embedding")?;
+    put(&neuro_lm::qwen3::Mat::gguf(d.vocab, d.d_model, embed.data))?;
+    for i in 0..d.n_layers {
+        let l = layer(g, h, i).map_err(|e| format!("layer {i}: {e:?}"))?;
+        for m in [&l.wq, &l.wk, &l.wv, &l.wo, &l.w_gate, &l.w_up, &l.w_down] {
+            put(m)?;
+        }
+    }
+    // The file keeps everything that is not one of those matrices: metadata, tokenizer, norm vectors.
+    let is_matrix = |name: &[u8]| name == b"token_embd.weight" || (name.starts_with(b"blk.") && [&b".attn_q.weight"[..], b".attn_k.weight", b".attn_v.weight", b".attn_output.weight", b".ffn_gate.weight", b".ffn_up.weight", b".ffn_down.weight"].iter().any(|s| name.ends_with(s)));
+    Ok((out, gguf_keeping(g, |t| !is_matrix(t.name))))
+}
+
+/// A bundle from its four sections (`neuro_gguf::bundle`): model file, tokenizer tables, RoPE pairs, packed
+/// matrices (empty when the file carries them).
+pub fn bundle(parts: [&[u8]; 4]) -> Option<Vec<u8>> {
+    use neuro_gguf::bundle::{layout, write_preamble};
+    let lens = [parts[0].len(), parts[1].len(), parts[2].len(), parts[3].len()];
+    let (offs, total) = layout(lens)?;
+    let mut b = vec![0u8; total];
+    write_preamble(lens, &mut b)?;
+    for (o, part) in offs.iter().zip(parts) {
+        b.get_mut(*o..*o + part.len())?.copy_from_slice(part);
+    }
+    Some(b)
+}
+
+/// A minimal valid Qwen3 GGUF file for tests: one block, width 32, one head, every weight the same. Its
+/// vocabulary is `tokens` (the tokenizer metadata a real file has is not written: build the tokenizer tables
+/// from the same list with [`blob`]). It computes nothing meaningful; it exercises every code path a real
+/// model does.
+pub fn tiny_qwen3_gguf(tokens: &[Vec<u8>], train_ctx: u32) -> Vec<u8> {
+    tiny_qwen3(tokens, train_ctx, None)
+}
+
+/// The same file with weights drawn from `seed` instead of all equal: still meaningless, but tokens now score
+/// differently, so an answer depends on every pass of the arithmetic. For tests of exact agreement.
+pub fn tiny_qwen3_gguf_seeded(tokens: &[Vec<u8>], train_ctx: u32, seed: u64) -> Vec<u8> {
+    tiny_qwen3(tokens, train_ctx, Some(seed))
+}
+
+fn tiny_qwen3(tokens: &[Vec<u8>], train_ctx: u32, seed: Option<u64>) -> Vec<u8> {
+    fn s(v: &mut Vec<u8>, x: &[u8]) {
+        v.extend_from_slice(&(x.len() as u64).to_le_bytes());
+        v.extend_from_slice(x);
+    }
+    let vocab = tokens.len();
+    let (mut kv, mut n_kv) = (vec![], 0u64);
+    let mut put = |key: &str, ty: u32, val: &[u8]| {
+        s(&mut kv, key.as_bytes());
+        kv.extend_from_slice(&ty.to_le_bytes());
+        kv.extend_from_slice(val);
+        n_kv += 1;
+    };
+    let (u32t, f32t, strt, arrt) = (4u32, 6u32, 8u32, 9u32);
+    let mut arch = vec![];
+    s(&mut arch, b"qwen3");
+    put("general.architecture", strt, &arch);
+    for (k, v) in [("qwen3.block_count", 1u32), ("qwen3.context_length", train_ctx), ("qwen3.embedding_length", 32), ("qwen3.feed_forward_length", 32), ("qwen3.attention.head_count", 1), ("qwen3.attention.head_count_kv", 1), ("qwen3.attention.key_length", 32)] {
+        put(k, u32t, &v.to_le_bytes());
+    }
+    put("qwen3.rope.freq_base", f32t, &1e6f32.to_bits().to_le_bytes());
+    put("qwen3.attention.layer_norm_rms_epsilon", f32t, &1e-6f32.to_bits().to_le_bytes());
+    let mut toks = strt.to_le_bytes().to_vec();
+    toks.extend_from_slice(&(vocab as u64).to_le_bytes());
+    for t in tokens {
+        s(&mut toks, t);
+    }
+    put("tokenizer.ggml.tokens", arrt, &toks);
+    let mut state = seed;
+    let mut q8 = |rows: usize| -> Vec<u8> {
+        let mut v = vec![];
+        for _ in 0..rows {
+            v.extend_from_slice(&0x2000u16.to_le_bytes());
+            match state.as_mut() {
+                None => v.extend_from_slice(&[1u8; 32]),
+                Some(x) => v.extend((0..32).map(|_| {
+                    *x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    (*x >> 56) as u8
+                })),
+            }
+        }
+        v
+    };
+    let ones: Vec<u8> = 1.0f32.to_bits().to_le_bytes().repeat(32);
+    let (mut ti, mut data, mut n_t) = (vec![], vec![], 0u64);
+    let mut tensor = |name: &str, ty: u32, dims: &[u64], bytes: &[u8]| {
+        while !data.len().is_multiple_of(32) {
+            data.push(0);
+        }
+        s(&mut ti, name.as_bytes());
+        ti.extend_from_slice(&(dims.len() as u32).to_le_bytes());
+        for d in dims {
+            ti.extend_from_slice(&d.to_le_bytes());
+        }
+        ti.extend_from_slice(&ty.to_le_bytes());
+        ti.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        data.extend_from_slice(bytes);
+        n_t += 1;
+    };
+    let (f32_tensor, q8_tensor) = (0u32, 8u32);
+    tensor("token_embd.weight", q8_tensor, &[32, vocab as u64], &q8(vocab));
+    tensor("output_norm.weight", f32_tensor, &[32], &ones);
+    for n in ["attn_norm", "attn_q_norm", "attn_k_norm", "ffn_norm"] {
+        tensor(&format!("blk.0.{n}.weight"), f32_tensor, &[32], &ones);
+    }
+    for n in ["attn_q", "attn_k", "attn_v", "attn_output", "ffn_gate", "ffn_up", "ffn_down"] {
+        tensor(&format!("blk.0.{n}.weight"), q8_tensor, &[32, 32], &q8(32));
+    }
+    let mut f = b"GGUF".to_vec();
+    f.extend_from_slice(&3u32.to_le_bytes());
+    f.extend_from_slice(&n_t.to_le_bytes());
+    f.extend_from_slice(&n_kv.to_le_bytes());
+    f.extend_from_slice(&kv);
+    f.extend_from_slice(&ti);
+    while !f.len().is_multiple_of(32) {
+        f.push(0);
+    }
+    f.extend_from_slice(&data);
+    f
+}
+

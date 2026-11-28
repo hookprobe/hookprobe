@@ -105,8 +105,25 @@ name = "conductor-mock"
 version = "0.0.26"
 dependencies = [
  "conductor-core",
+ "conductor-p0",
  "conductor-worker",
  "neuro-contract",
+ "neuro-gguf",
+ "neuro-hnx",
+ "neuro-kernels",
+ "neuro-lm",
+ "tok-build",
+]
+
+[[package]]
+name = "conductor-p0"
+version = "0.0.26"
+dependencies = [
+ "conductor-core",
+ "conductor-worker",
+ "neuro-contract",
+ "neuro-gguf",
+ "neuro-lm",
 ]
 
 [[package]]
@@ -458,9 +475,11 @@ name = "neuro-gguf"
 version = "0.0.26"
 dependencies = [
  "ed25519-compact",
+ "neuro-contract",
  "neuro-hnx",
  "neuro-kernels",
  "neuro-lm",
+ "tok-build",
 ]
 
 [[package]]
@@ -807,6 +826,10 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 name = "tok-build"
 version = "0.0.26"
 dependencies = [
+ "conductor-core",
+ "conductor-mock",
+ "conductor-p0",
+ "conductor-worker",
  "ed25519-compact",
  "fancy-regex",
  "neuro-build",

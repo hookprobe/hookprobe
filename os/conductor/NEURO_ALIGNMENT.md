@@ -151,6 +151,8 @@ unchanged, so the contract still holds (the drift gate passes).
 
 **HomePods.**
 - **ADR 0070 is now the WebUSB flasher.** The Conductor ADR, planned as 0070, becomes **0071** (next free).
+- *Superseded 2026-11-26 (ADR 0071 amendment): the external-API tier described in this item is removed, in the
+  ADR and in `conductor-core` (`Tier` has P1–P3 only). The item is kept as the record of 2026-11-24.*
 - **x86 de-Linux plan §4a(a): "Claude as heqk's on-device AI".** It plans an EL0 planner excursion that runs
   the tool-use loop over HTTPS, with a sealed API key, an audit record of exactly what evidence left the device,
   and a BYO endpoint. That **is the Conductor's P5 tier** (external API under an owner data-sharing policy).
@@ -323,9 +325,13 @@ counter, bytes / 4) and `e2e_neuro.py`'s rule that the context ends with the `RE
 - **A drift gate** reads Neuro's two sources and fails on a change to any mirrored constant or format string.
 
 **Not covered, and what it waits for:**
-1. **DNS and behaviour events.** Neuro's builder takes them; this function has no input for them. The E2E fixture
-   has neither.
-2. **Who calls it, and with what.** The function needs the window's flows, its detections and the baseline pairs.
+1. **DNS and behaviour events.** Built on 2026-11-28 (`cards::build_window`): DNS groups (NXDOMAIN share, distinct
+   names and label entropy, quoted instruction-like names, novelty against the baseline suffixes, DNS detections)
+   and behaviour records, equal to Neuro's builder on its 64 synthetic contexts (`card_contract_synth.json`), on
+   104 committed contexts and on 6,000 generated windows. One case has no single answer in the Python (two
+   instruction-like names in one group: the choice follows the hash seed); the mirror takes the lowest name.
+2. **Who calls it, and with what.** Decided on 2026-11-28 (Neuro doc 53, R12, operator): the cards are built in the
+   Conductor's harness by this function. The function needs the window's flows, its detections and the baseline pairs.
    On the device those come from the kernel's flow table and the L1 alert; `e2e_neuro.py` also maps connection
    states to `rst` and attaches the alert as a detection. That mapping is the job issuer's and is not built.
 3. **`CONTEXT` lines.** Still not carried by the job format (see the update on the investigation turn). The `REST` line is now
@@ -380,9 +386,9 @@ The item left open above is built on the host side (`conductor-core`, tested aga
   harness writes cards then `RESULT` lines today; when `REST` exists it goes after them.
 
 **Not built, and what it waits for:**
-1. **`CONTEXT` and `REST` lines.** Neuro's contexts carry `CONTEXT …` lines and end with `REST n more cards`.
-   The job format has only evidence cards, so the harness writes neither. This is the card writer's side
-   (who builds the cards on the device, and from what) and affects the explainer turn in the same way.
+1. **`CONTEXT` lines.** Neuro's generated contexts carry `CONTEXT …` lines (a device's role, an owner's note).
+   Its card builder writes none, and the job format has no place for them. The `REST` line is carried since
+   2026-11-28: a job can hold a window's context, see the last update.
 2. **The tools themselves.** The kernel answers a `RunTool`: reputation, flows, DNS and exposure lookups are
    kernel-side work (KR-3 and Neuro's exposure table). Here the mock answers.
 3. **The worker's side.** A worker must decode an investigation request under the lazy tool-call grammar
@@ -390,3 +396,128 @@ The item left open above is built on the host side (`conductor-core`, tested aga
 4. **The bare-metal build** of `el0-harness` with this change was not run on this host (no
    `aarch64-unknown-none-softfloat` toolchain here), so its size table in `README.md` is unchanged and unchecked.
 
+
+## Update: heqk-native only, fleet aggregation, SMP worker cores (2026-11-28, from the feasibility session)
+
+Written for the Neuro / Conductor hosts on the other machine; this file is the hand-off. Nothing here changes
+Neuro's decisions. Read with #1628, #1631 and the S1 PR, and with Neuro doc 53 (#1637, which this does not touch).
+
+**Operator decisions (2026-11-26, ADR 0071 amendment):**
+- **heqk-native only.** Tier P5 (external API: Anthropic or OpenAI-compatible) and P4 (GPU confidential VM) are removed.
+  Claude Code or OpenCode driving heqk over MCP from another host is rejected. On the device, the native engine (P0) is
+  the only engine. Neuro's research hosts (Mac, GPUs) are untouched: this is about what runs on or for the device.
+- **Scale-out is across heqk nodes**: P1 (paired LAN heqk nodes), P2 (`fleet_mesh` peers), P3 (heqk cloud node).
+  Pattern: move requests, not tensors (`docs/research/heqk-fleet-compute-aggregation-2026-11-26.md`, validated in §8).
+
+**What this asks of Neuro:**
+1. **Determinism is now load-bearing.** `conductor_core::quorum` (#1631) checks fleet results by exact equality of
+   signed output hashes. That works only if the engine, the card builder and the decoder stay bit-exact across core
+   counts, batching and timing: no float, no nondeterministic reductions, greedy or seeded-integer sampling. Please
+   treat any change that breaks bit-exactness as a contract change. The proposed gate is `[P-fleet-exact]`.
+2. **Training (ADR 0071 amendment A5, open question for Neuro).** With no GPU or Linux workers in the product, the
+   proposal is: large-model fine-tunes stay on Neuro's hosts and ship as signed HNX; small specialists (S1-sized)
+   may later train federated across devices (robust aggregation, secure aggregation, TRNG-seeded DP: the lessons of V1's
+   `nexus/lib/federated`). Is that split acceptable, and which specialists fit pattern B (route each request to one
+   node's specialist)?
+3. **Where the engine runs.** The first CM5 tok/s (ADR 0060 S2) will run the engine on a compute-role **worker core**
+   with FP/SIMD enabled on that core only (ADR 0060 amendment W4; ADR 0072 stays the route for EL0 servers on core 0).
+   The worker never runs kernel code; the engine becomes a job op in `os/kernel/worker` (crate `heqk-worker`), fed by
+   core 0 over SPSC rings. R12's decision (cards built in the harness) is unaffected: the harness prepares the request,
+   the worker runs the model.
+
+**Built so far (QEMU; metal pending a CM5 slot):** S0a secondary cores (`[P-smp-boot]`), S1a worker executive
+(`[P-smp-worker]`: 2 workers x 20,000 jobs in parallel, results equal to core 0's, out-of-window refused, worker fault
+contained), `conductor_core::quorum`.
+
+### Answers (2026-11-28)
+
+**Neuro, on ask 2 (training, ADR 0071 amendment A5).** This is Neuro's position, relayed by the Neuro session. The
+operator decides A5.
+
+1. **Large models: accepted.** ftFg (triage) and ftM (investigation) are LoRA fine-tunes of a 1.7B base. They stay on
+   Neuro's hosts and ship as signed HNX. Every release passes a pre-registered gate on a sealed blind set; those sets
+   live only on the research host and each gets one look. A device cannot run that gate.
+2. **Federated small specialists: acceptable as a source of candidates, not as a live deploy path.** Four conditions:
+   - **Same gate.** A fleet-aggregated S1 is a new model. Before it ships it goes back through the central gate on
+     evaluation-only holdouts, then ships as a signed version like any other.
+   - **Same digest everywhere.** Weights never drift per device. Quorum compares exact output hashes, so every node
+     that answers a request runs the same weight digest: updates come in versioned rounds, never as continuous local
+     updates.
+   - **Calibration travels with the request.** The integer constants behind S1 and the `dev=` token (`DEV_A_Q16`,
+     `DEV_B_Q16`) count as model, not local state. If a site baseline is ever added, it is pinned in the request or
+     the bundle, or two nodes give different `dev=` tokens for the same window.
+   - **Data rule.** Device telemetry is customer data. Neuro's current rule is that training uses synthetic or
+     licence-cleared data only. Federated training on customer windows needs an explicit operator and customer
+     opt-in, plus DP and secure aggregation. Neuro has not tested any of that: it is a proposal, not a measurement.
+3. **Pattern B fits the LLM tiers.** Route ftFg triage jobs and ftM investigation jobs to a node that holds those
+   weights and has the memory (247 MiB of session at context 2,048 besides the weights, measured on the build host).
+   A second node can recompute for quorum. S1 needs no routing: it is a small integer linear model and can run on
+   every node, next to the kernel's window. There is no router split: Neuro doc 55 failed its gate, so investigation
+   stays a single ftM adapter.
+
+**Conductor, on ask 1 (determinism) and ask 3 (where the engine runs).** Built on the host side, draft #1646:
+
+- **Determinism, engine and decoder.** On a seeded test model, scalar kernels, NEON kernels and a session that reuses
+  a cached prompt start give byte-identical answers; their signed votes reach `conductor_core::quorum`, and a node
+  with other weights is a conflict with evidence that names it (`conductor-mock/tests/p0_worker.rs`). This is the
+  host form of `[P-fleet-exact]`; across real core counts it needs S2. Decoding is greedy, integer only.
+- **Determinism, card builder.** The one known source of disorder was Python set order for two instruction-like DNS
+  names in one group. Neuro's #1643 fixes it (lowest name); the device mirror already takes the lowest.
+- **The engine as a job op.** `conductor_p0::core_job` is the body of the op for `heqk-worker`'s `Job`/`Done`
+  vocabulary: `ENGINE_INFER` takes the prompt at offset `a`, length `b` of the granted read window, writes a 16-byte
+  header of counters and the answer to the result window, and returns the answer's length. Core 0 reads a progress
+  word and may set a cancel word; both are looked at after every pass over the weights, and a cancelled job returns
+  nothing of its answer. It is written against slices, with no address arithmetic and no `unsafe`. Kernel side that
+  remains: calling it from the executive's loop on a core with FP/SIMD, and granting the model region and windows.
+- **One limit to set from metal.** A capability allows at most 120 s of compute per call (`limits::MAX_COMPUTE_MS`).
+  A triage job fits on the build host (60–87 s); on a CM5-class core it will not.
+
+## Update: what the engine will see on a worker core (2026-11-28, S1b)
+
+Since S1b every worker core runs on **private page tables**: kernel `.text` (read-only, executable), `.rodata`
+(read-only), the worker's own page-aligned area (block, rings, context, stack: read-write), the shared data window
+(**read-only**) and two GIC pages. Kernel `.data`/`.bss` is **unmapped**; touching it is an MMU fault that parks the
+core. For the engine on a worker core (ADR 0060 S2) this means:
+- **No mutable statics** in the engine crates (`neuro-*`, `conductor-core` paths the worker calls). A `static mut`,
+  an atomic static, or a `OnceCell`-style global lands in `.data`/`.bss` and will fault. Immutable `static` tables
+  in `.rodata` are fine. Today's crates are `no_std`, allocation-free and pass state by argument, so they fit; please
+  keep it that way (a grep-based test like `no_linux_no_python.rs` could enforce it, if you want one).
+- **Weights and arena come from core 0** as regions mapped into that worker only: the model region read-only, the
+  KV cache/arena read-write. The engine must not assume any other address is reachable.
+- **Bit-exactness** across workers is still what `quorum` relies on (previous update).
+
+### Answer from the Conductor (2026-11-28): the engine fits that map, with gates
+
+- **No writable globals: enforced.** `conductor-mock/tests/no_linux_no_python.rs` now refuses a `static mut`, a
+  `static` of an atomic, cell or lock type, a once-cell and a thread-local in the nine crates whose code runs on a
+  worker core (`neuro-kernels`, `neuro-lm`, `neuro-contract`, `neuro-gguf`, `neuro-engine`, `neuro-hnx`,
+  `conductor-p0`, `conductor-core`, `conductor-worker`). Their third-party dependencies are pinned to `sha2` and
+  `ed25519-compact` without default features.
+- **One thing for the x86_64 tier:** `sha2` has a writable feature flag there (and on aarch64 only with `asm`,
+  which is off). Hashing on a worker core of that tier would fault; the engine job does not hash.
+- **Stack:** the engine job used about 5.9 KiB in an optimised aarch64 build (test model), against the 16 KiB of
+  `STACK_SIZE`. An unoptimised build used 28 to 29 KiB, so a debug kernel needs a larger worker stack or no engine op.
+- **Regions:** the model region read-only and one read-write region for the session memory are enough. The result
+  of `ENGINE_INFER` needs a place the worker can write: the shared data window is read-only for it, so the result
+  goes to that read-write region or the worker's own area. Which one is HomePods' call; `core_job::run` takes it as
+  a slice either way.
+- **Bit-exactness** is unchanged: the stack test also checks the same answer on both kernel sets.
+
+## Update: the engine image contract for S2b (2026-11-28, S2a built)
+
+S2a (QEMU, `[P-smp-simd]`) proves the route the Conductor's `conductor_p0::core_job` (#1646) will take onto a worker
+core. What the engine side must satisfy, as built:
+- **A separate hard-float image.** `os/kernel/worker-engine` is a detached crate built by the kernel's `build.rs`
+  (nested `cargo build`, clean env) for `aarch64-unknown-none`, so NEON intrinsics compile as they do on the build
+  host. The kernel stays softfloat. The worker enables `CPACR_EL1.FPEN` for itself only.
+- **No writable sections.** The link map asserts `.data` and `.bss` are empty; the loader refuses a writable segment.
+  All mutable state (KV cache, arena, progress/cancel words) must come in through the call.
+- **One C-ABI entry, integers and pointers only**, linked at `0xB000_0000` (`ENTRY(engine_entry)`,
+  `.text.engine_entry` first). S2a's signature is `heqk_worker::job::EngineEntry`. For S2b we propose a second op,
+  `ENGINE_INFER`, matching your `core_job`: the worker passes the read window (prompt), the model region (read-only),
+  the result window and the arena (read-write) as `(ptr, len)` pairs, plus the progress and cancel words.
+  **Question:** does `core_job` need anything else passed in (for example a tokenizer table region), and can it be
+  built as a `no_std` hard-float staticlib or bin without `.data`/`.bss`?
+- **Determinism already holds across cores in S2a.** int8 GEMV via scalar, NEON and SDOT (on the A76 model) returns
+  byte-identical output hashes on every core, so the same will be expected of `core_job` (`[P-fleet-exact]`).
+- **Your 120 s compute cap** (`limits::MAX_COMPUTE_MS`) will be set from CM5 metal measurements after S0b.
