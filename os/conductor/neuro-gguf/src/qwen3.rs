@@ -209,6 +209,79 @@ pub fn layer<'a>(g: &Gguf<'a>, h: &Hparams, i: usize) -> Result<Layer<'a>, BindE
     })
 }
 
+// ------------------------------------------------------------------------------------------- packed weights
+
+/// Every matrix of a packed model starts on this boundary inside the packed section.
+pub const PACK_ALIGN: usize = 64;
+
+/// The matrices of a model in the order a packed section stores them: the embedding, then for each block
+/// `attn_q, attn_k, attn_v, attn_output, ffn_gate, ffn_up, ffn_down`. `(rows, cols)` each. The output head is
+/// tied to the embedding (an untied head is not supported in a packed section).
+pub fn packed_shapes(h: &Hparams, mut f: impl FnMut(usize, usize)) {
+    let d = &h.dims;
+    let (dm, qd, kvd) = (d.d_model, d.n_heads * d.head_dim, d.n_kv_heads * d.head_dim);
+    f(d.vocab, dm);
+    for _ in 0..d.n_layers {
+        for (r, c) in [(qd, dm), (kvd, dm), (kvd, dm), (dm, qd), (d.ffn, dm), (d.ffn, dm), (dm, d.ffn)] {
+            f(r, c);
+        }
+    }
+}
+
+/// Bytes of the packed section of this model, alignment included.
+pub fn packed_len(h: &Hparams) -> Option<usize> {
+    let mut at = Some(0usize);
+    packed_shapes(h, |r, c| {
+        at = at.and_then(|a| a.checked_next_multiple_of(PACK_ALIGN)).and_then(|a| a.checked_add(neuro_kernels::q8::packed_bytes(r, c)));
+    });
+    at
+}
+
+/// A packed section read in order.
+pub struct Packed<'a> {
+    b: &'a [u8],
+    at: usize,
+}
+
+impl<'a> Packed<'a> {
+    pub fn new(b: &'a [u8]) -> Self {
+        Self { b, at: 0 }
+    }
+    /// The next matrix, of this shape.
+    pub fn take(&mut self, rows: usize, cols: usize) -> Result<Mat<'a>, BindError> {
+        let start = self.at.checked_next_multiple_of(PACK_ALIGN).ok_or(BindError::Tensor)?;
+        let end = start.checked_add(neuro_kernels::q8::packed_bytes(rows, cols)).ok_or(BindError::Tensor)?;
+        let w = self.b.get(start..end).ok_or(BindError::Missing)?;
+        self.at = end;
+        Ok(Mat::packed(rows, cols, w))
+    }
+    /// Everything was taken: the section holds exactly this model's matrices.
+    pub fn done(&self) -> bool {
+        self.at == self.b.len()
+    }
+}
+
+/// Bind layer `i` of a packed model: norms from the GGUF file, matrices from the packed section, in order.
+pub fn layer_packed<'a>(g: &Gguf<'a>, h: &Hparams, i: usize, p: &mut Packed<'a>) -> Result<Layer<'a>, BindError> {
+    let d = &h.dims;
+    let (dm, qd, kvd) = (d.d_model, d.n_heads * d.head_dim, d.n_kv_heads * d.head_dim);
+    let mut b = [0u8; 64];
+    let mut t = |s: &[u8]| g.tensor(blk_name(&mut b, i, s));
+    let (attn_norm, q_norm, k_norm, ffn_norm) = (norm(t(b"attn_norm.weight"), dm)?, norm(t(b"attn_q_norm.weight"), d.head_dim)?, norm(t(b"attn_k_norm.weight"), d.head_dim)?, norm(t(b"ffn_norm.weight"), dm)?);
+    let (wq, wk, wv, wo) = (p.take(qd, dm)?, p.take(kvd, dm)?, p.take(kvd, dm)?, p.take(dm, qd)?);
+    let (w_gate, w_up, w_down) = (p.take(d.ffn, dm)?, p.take(d.ffn, dm)?, p.take(dm, d.ffn)?);
+    Ok(Layer { attn_norm, wq, wk, wv, wo, q_norm, k_norm, ffn_norm, w_gate, w_up, w_down })
+}
+
+/// Assemble and check a packed model. `embed` is the first matrix of the packed section; `layers` hold
+/// `layer_packed` for every block, in order.
+pub fn model_packed<'a>(g: &Gguf<'a>, h: &Hparams, embed: Mat<'a>, layers: &'a [Layer<'a>], rope: &'a [(i32, i32)]) -> Result<Model<'a>, BindError> {
+    let d = h.dims;
+    let m = Model { dims: d, embed, layers, final_norm: norm(g.tensor(b"output_norm.weight"), d.d_model)?, head: None, rope, eps: h.eps, kq_scale: h.kq_scale };
+    m.check().map_err(|_| BindError::Check)?;
+    Ok(m)
+}
+
 /// Assemble and check the whole model. `layers` must hold `layer(g, h, i)` for every block, in order.
 pub fn model<'a>(g: &Gguf<'a>, h: &Hparams, layers: &'a [Layer<'a>], rope: &'a [(i32, i32)]) -> Result<Model<'a>, BindError> {
     let d = h.dims;
