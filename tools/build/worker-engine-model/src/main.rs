@@ -126,6 +126,19 @@ fn main() {
 
     std::fs::write(out.join("model.prefix"), &prefix).unwrap();
     std::fs::write(out.join("model.bundle"), &bundle).unwrap();
+    // ADR 0061 M1 gate: the same signed model as one container a loader places in RAM above 4 GiB:
+    // header (64 B: "HQMODEL1", prefix off/len, bundle off/len, total), prefix at 4 KiB, bundle page-aligned.
+    let page_up = |n: usize| (n + 4095) & !4095;
+    let (p_off, b_off) = (4096usize, page_up(4096 + prefix.len()));
+    let total = b_off + bundle.len();
+    let mut c = vec![0u8; total];
+    c[..8].copy_from_slice(b"HQMODEL1");
+    for (i, v) in [p_off, prefix.len(), b_off, bundle.len(), total].iter().enumerate() {
+        c[8 + i * 8..16 + i * 8].copy_from_slice(&(*v as u64).to_le_bytes());
+    }
+    c[p_off..p_off + prefix.len()].copy_from_slice(&prefix);
+    c[b_off..].copy_from_slice(&bundle);
+    std::fs::write(out.join("model.container"), &c).unwrap();
     std::fs::write(out.join("model.pk"), public_key(&SIGN_SEED)).unwrap();
     std::fs::write(out.join("prompt.bin"), prompt.as_bytes()).unwrap();
     std::fs::write(out.join("golden.bin"), golden).unwrap();
