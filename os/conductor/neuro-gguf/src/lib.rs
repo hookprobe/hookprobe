@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+pub mod bundle;
 pub mod hnx;
 pub mod qwen3;
 

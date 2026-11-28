@@ -71,6 +71,11 @@ shown at all, it is fixed: benign, observe, "only ordinary traffic the device ha
 own EL0 server, or (c) EL1. **Neuro recommends (a):** it keeps text handling out of EL1 and reuses the mirror that is
 drift-gated against Neuro's sources.
 
+**Decided (operator, 2026-11-28): (a), in the harness.** The Conductor's `build_context` builds the cards. For the
+card kinds the fixture vectors do not cover (DNS, behaviour records, verbatim detections), Neuro adds
+`card_contract_synth.py`: deterministic vectors on synthetic windows (RFC 1918/5737 addresses only), at budgets 64,
+128, 256 and 512.
+
 ## R13 — Typed tool outcomes (only if Rule P goes ahead, doc 52)
 
 **Evidence**

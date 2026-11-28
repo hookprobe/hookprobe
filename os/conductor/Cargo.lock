@@ -461,6 +461,7 @@ dependencies = [
  "neuro-hnx",
  "neuro-kernels",
  "neuro-lm",
+ "tok-build",
 ]
 
 [[package]]

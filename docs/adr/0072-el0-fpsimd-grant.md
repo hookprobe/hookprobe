@@ -43,6 +43,16 @@ The request's design, unchanged except where noted:
 
 Not decided here: FP in EL1, lazy FP, SVE/SME (absent), KR-2.
 
+### Note (2026-11-28): the compute case can also run on a worker core
+
+ADR 0060's amendment (worker cores first, 2026-11-26) adds a second route for the **compute** case: a
+compute-role worker core that runs only the engine, never kernel code. On that core FP/SIMD can stay
+enabled, with no excursion switch and no owner change, while core 0 stays softfloat with no V-register
+save (ADR 0060 amendment W4). The first P0 tok/s measurement (ADR 0060 S2) takes that route. This ADR
+stays the path for FP/SIMD in an EL0 server **on core 0**, does not have to land first, and keeps its
+G46 review. Rule 4 ("a second grant fails the build") is unaffected: a worker core is not a second
+grant on core 0's owner-switch path.
+
 ## Gates (from the request)
 
 QEMU:

@@ -394,35 +394,35 @@ The item left open above is built on the host side (`conductor-core`, tested aga
 4. **The bare-metal build** of `el0-harness` with this change was not run on this host (no
    `aarch64-unknown-none-softfloat` toolchain here), so its size table in `README.md` is unchanged and unchecked.
 
-## Update: the cards are built in the harness (2026-11-28)
 
-The operator decided where the device's evidence cards are built (Neuro doc 53, R12): in the Conductor's
-harness, by `neuro_contract::cards::build_window`. This is that path, on the host side.
+## Update: heqk-native only, fleet aggregation, SMP worker cores (2026-11-28, from the feasibility session)
 
-- **The kernel hands over events, never prose.** `conductor_core::window` defines the window's wire format
-  (a string table, then flows, DNS queries, detections, behaviour records and the baseline) and `window::build`
-  turns it into the context with the card builder, in caller-provided memory. A window that does not fit, a
-  truncated one, or a text that could forge a line is refused.
-- **A job carries the context in place of cards** (`JobSpec::context`, with one data class). Its shape is
-  checked when the job is loaded: fact lines `F1`, `F2`, … in order, closed by at most one `REST` line. No other
-  line kind is accepted, so nothing in it can pose as a result, a question or a second context.
-- **The provider is shown exactly that context**, after guard A. In an investigation the results of earlier
-  checks go before the `REST` line: cards, `RESULT` lines, `REST` last, as agreed with Neuro.
-- **Answers stay closed over it.** Fact ids and aliases come from the shown context; a fact cited twice is
-  rejected. Nothing is "required": the context is one piece of evidence, shown whole or not at all.
-- **A window with no fact card is not sent to a model** (`Refused(NoEvidence)`), in either turn.
-- **Conductor's own two tools** name evidence cards and cannot be granted with a context.
+Written for the Neuro / Conductor hosts on the other machine; this file is the hand-off. Nothing here changes
+Neuro's decisions. Read with #1628, #1631 and the S1 PR, and with Neuro doc 53 (#1637, which this does not touch).
 
-Tested in `conductor-mock/tests/window.rs`: 86 windows of the card vectors go through the wire format and give
-Neuro's context byte for byte at every budget (104 contexts); 40 of them go on through the harness and reach the
-worker as built.
+**Operator decisions (2026-11-26, ADR 0071 amendment):**
+- **heqk-native only.** Tier P5 (external API: Anthropic or OpenAI-compatible) and P4 (GPU confidential VM) are removed.
+  Claude Code or OpenCode driving heqk over MCP from another host is rejected. On the device, the native engine (P0) is
+  the only engine. Neuro's research hosts (Mac, GPUs) are untouched: this is about what runs on or for the device.
+- **Scale-out is across heqk nodes**: P1 (paired LAN heqk nodes), P2 (`fleet_mesh` peers), P3 (heqk cloud node).
+  Pattern: move requests, not tensors (`docs/research/heqk-fleet-compute-aggregation-2026-11-26.md`, validated in §8).
 
-**Not built, and what it waits for:**
-1. **The kernel side.** Collecting a window's flows, DNS queries and baseline from the kernel's tables, mapping
-   connection states to `rst`, attaching the L1 alert as a detection, and choosing which windows become jobs
-   (Neuro's R11: no fact card, no job). These are the job issuer's, with HomePods.
-2. **The server's buffers.** `window::build` takes its memory from the caller. The sizes a real device window
-   needs, and what they add to the harness server's `.bss`, are not measured.
-3. **The data class of a context.** It holds addresses; the issuer states one class for the whole context. Finer
-   handling (a context with addresses withheld for a tier that may not see them) is not built.
+**What this asks of Neuro:**
+1. **Determinism is now load-bearing.** `conductor_core::quorum` (#1631) checks fleet results by exact equality of
+   signed output hashes. That works only if the engine, the card builder and the decoder stay bit-exact across core
+   counts, batching and timing: no float, no nondeterministic reductions, greedy or seeded-integer sampling. Please
+   treat any change that breaks bit-exactness as a contract change. The proposed gate is `[P-fleet-exact]`.
+2. **Training (ADR 0071 amendment A5, open question for Neuro).** With no GPU or Linux workers in the product, the
+   proposal is: large-model fine-tunes stay on Neuro's hosts and ship as signed HNX; small specialists (S1-sized)
+   may later train federated across devices (robust aggregation, secure aggregation, TRNG-seeded DP: the lessons of V1's
+   `nexus/lib/federated`). Is that split acceptable, and which specialists fit pattern B (route each request to one
+   node's specialist)?
+3. **Where the engine runs.** The first CM5 tok/s (ADR 0060 S2) will run the engine on a compute-role **worker core**
+   with FP/SIMD enabled on that core only (ADR 0060 amendment W4; ADR 0072 stays the route for EL0 servers on core 0).
+   The worker never runs kernel code; the engine becomes a job op in `os/kernel/worker` (crate `heqk-worker`), fed by
+   core 0 over SPSC rings. R12's decision (cards built in the harness) is unaffected: the harness prepares the request,
+   the worker runs the model.
 
+**Built so far (QEMU; metal pending a CM5 slot):** S0a secondary cores (`[P-smp-boot]`), S1a worker executive
+(`[P-smp-worker]`: 2 workers x 20,000 jobs in parallel, results equal to core 0's, out-of-window refused, worker fault
+contained), `conductor_core::quorum`.

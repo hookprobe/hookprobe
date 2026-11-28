@@ -13,13 +13,15 @@ Per observable playbook, one card template (SIGN below) renders its "seen on the
             two results support it (doc 42 found v2 multi-step targets repeated step 1's tool)
   v5 (doc 49, --version 5): v4 plus v3's multi-step targets. v4 tested `version == 3` there, so its multi cases fell
             back to v2's (repeat a lookup; never a policy proposal).
+  v7 (doc 54, --version 7): v6 with each move-on target (gold entity and the second RESULT line) taken from the
+            playbook step's own `on` target; v3-v6 named the first step's target there.
   v6 (doc 51, --version 6): v5 with varied RESULT wording (RESULT6); --kinds keeps only some case kinds.
   v4 (doc 44, --version 4): adds `alert` cases in the E2E L1-alert card shape (the card's shape decides the check:
             fan-out -> the device's flows; one remote -> its reputation), more decoy and invisible cases, and
             invisible gold = no tool only
 Usage: gen_investigate.py --playbooks data/playbooks.json --n 600 --seed 39 --out inv.jsonl [--ro 0.10]
 """
-import argparse, hashlib, json, os, random, sys
+import argparse, hashlib, json, os, random, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import gen_t0 as g  # noqa: E402
@@ -94,6 +96,15 @@ RESULT = {  # (step-1 result that SUPPORTS going on, step-1 result that CLEARS)
     "query_dns": ("random-looking names, one resolved and was contacted", "names of a known content network, all resolved normally"),
     "lookup_exposure": ("class matches devices often attacked through this service", "class unknown; no exposure stated"),
 }
+# doc 54 (--version 7): the alias a playbook step targets, from its `on` wording. Same table as l0_playbook.TARGET
+# (Rule P, doc 52); keep the two equal. Unlisted wording ("each reached host") keeps the earlier behaviour.
+STEP_TARGET = {
+    "the device": "device", "the targeted device": "device", "the server": "device", "the source device": "device",
+    "the inbound sources": "remote", "the remote peers": "remote", "the sources": "remote", "the peer": "remote",
+    "the download peer": "remote", "those sources": "remote", "the destination": "remote",
+    "the outside server": "remote", "the coordinating peer": "remote", "the source if it is a LAN device": "remote",
+    "those domains and addresses": "name", "the name that resolved and its address": "name",
+}
 # doc 51 (--version 6): varied wording, as real tool output would vary. Same meaning per (tool, supports/clears).
 RESULT6 = {
     "lookup_reputation": (["listed on two threat feeds as malware infrastructure", "flagged as a botnet controller by 3 of 5 feeds",
@@ -126,9 +137,10 @@ def main():
     ap.add_argument("--playbooks", required=True); ap.add_argument("--n", type=int, default=600); ap.add_argument("--seed", type=int, default=39)
     ap.add_argument("--ro", type=float, default=0.10); ap.add_argument("--out", required=True); ap.add_argument("--id-prefix", default="inv")
     ap.add_argument("--v1", action="store_true", help="doc 41 version: no decoy kind (reproduces the P3 output)")
-    ap.add_argument("--version", type=int, choices=[2, 3, 4, 5, 6], default=2,
+    ap.add_argument("--version", type=int, choices=[2, 3, 4, 5, 6, 7], default=2,
                     help="2 = doc 42 (default, reproduces its output); 3 = doc 43: multi-step targets MOVE ON; "
-                         "5 = doc 49: v4's mix with v3's multi-step targets; 6 = doc 51: v5 with varied RESULT wording")
+                         "5 = doc 49: v4's mix with v3's multi-step targets; 6 = doc 51: v5 with varied RESULT wording; "
+                         "7 = doc 54: v6 with move-on targets taken from the playbook step's own target")
     ap.add_argument("--kinds", default="", help="doc 51: comma list; only these case kinds are written (others are drawn, then skipped)")
     a = ap.parse_args()
     pbs = [p for p in json.load(open(a.playbooks))["playbooks"]]
@@ -139,7 +151,22 @@ def main():
     kinds = ["next"] * 4 + ["multi"] * 3 + ["clears"] * 2 + ["invisible"] + ([] if a.v1 else ["decoy"] * 2)
     if a.version >= 4:   # doc 44: the L1-alert card shape, and more decoy / invisible cases
         kinds = ["next"] * 4 + ["multi"] * 3 + ["clears"] * 2 + ["invisible"] * 2 + ["decoy"] * 3 + ["alert"] * 3
-    res_text = lambda tool, i: r.choice(RESULT6[tool][i]) if a.version == 6 else RESULT[tool][i]
+    res_text = lambda tool, i: r.choice(RESULT6[tool][i]) if a.version in (6, 7) else RESULT[tool][i]
+
+    def step_alias(step, w, H, R, old):
+        """v7: the aliases the playbook step means (a list; more than one = all acceptable), read from the cards;
+        `old` for v3-v6 or unlisted wording; [] when the window defines no such alias (the case is then skipped)."""
+        kind = STEP_TARGET.get(step["on"]) if a.version == 7 else None
+        if kind is None:
+            return old
+        if kind == "device":
+            return [H.split("=")[0]]
+        cards = "\n".join(w.cards)
+        det = next((c for c in w.cards if "det=" in c), "")
+        rs = re.findall(r"\b(R\d+)\b", det) or re.findall(r"\b(R\d+)=", cards)
+        if kind == "name":
+            return (re.findall(r"\b(D\d+)=", cards)[:1] + rs[:1])
+        return rs[:1]
     keep = set(a.kinds.split(",")) if a.kinds else None
     while len(out) < a.n:
         kind = r.choice(kinds)
@@ -195,16 +222,25 @@ def main():
                 st = steps[0]
                 res = res_text(st["tool"], 0 if kind == "multi" else 1)
                 w.ctx_lines.append("RESULT %s %s: %s" % (st["tool"], tgt if st["tool"] != "lookup_exposure" else H.split("=")[0], res))
-                if kind == "multi" and a.version in (3, 5, 6):   # doc 49: v4 had dropped this branch (== 3 only)
+                if kind == "multi" and a.version in (3, 5, 6, 7):   # doc 49: v4 had dropped this branch (== 3 only)
                     # doc 43: after a supporting result the next check is a DIFFERENT tool; once two results support
                     # it, the case is conclusive and the step is a policy proposal (doc 42's multi-step template gap)
                     other = [x for x in steps[1:] if x["tool"] != st["tool"]]
                     if other and r.random() < 0.5:
-                        gold = {"kind": "multi", "tools": [other[0]["tool"]], "entities": [tgt, H.split("=")[0]], "technique": p["id"]}
+                        ents = [tgt, H.split("=")[0]]
+                        if a.version == 7:   # doc 54: v3-v6 named the FIRST step's target here (68/73 and 154/162 wrong)
+                            ents = step_alias(other[0], w, H, R, ents)
+                            if not ents:
+                                gold = None   # the window has no alias for the step's target: ill-posed, skipped
+                        if ents:
+                            gold = {"kind": "multi", "tools": [other[0]["tool"]], "entities": ents, "technique": p["id"]}
                     else:
                         if other:
                             t2 = other[0]["tool"]
-                            w.ctx_lines.append("RESULT %s %s: %s" % (t2, tgt if t2 != "lookup_exposure" else H.split("=")[0], res_text(t2, 0)))
+                            e2 = tgt if t2 != "lookup_exposure" else H.split("=")[0]
+                            if a.version == 7:
+                                e2 = (step_alias(other[0], w, H, R, [e2]) or [e2])[0]
+                            w.ctx_lines.append("RESULT %s %s: %s" % (t2, e2, res_text(t2, 0)))
                         gold = {"kind": "multi", "tools": ["propose_policy_change"], "entities": [H.split("=")[0]],
                                 "policies": ["isolated", "internet_only"], "technique": p["id"]}
                 elif kind == "multi" and len(steps) > 1:
@@ -217,7 +253,7 @@ def main():
                     gold = {"kind": "clears", "tools": [None], "entities": [], "technique": p["id"]}
         ctx = w.render()
         h = hashlib.sha256(" ".join(ctx.split()).lower().encode()).hexdigest()
-        if h in seen or (keep is not None and gold["kind"] not in keep):
+        if gold is None or h in seen or (keep is not None and gold["kind"] not in keep):
             continue
         seen.add(h)
         out.append({"id": "%s-%05d" % (a.id_prefix, len(out)), "lang": "ro" if ro else "en", "task": "investigate", "context": ctx,

@@ -233,6 +233,11 @@ fn inv_sqrt_equals_ieee() {
 
 /// A minimal valid Qwen3 file: 1 layer, d 32, 1 head of 32, ffn 32, vocab 4.
 fn qwen3_file(arch: &str, q_ty: u32, ctx: u32) -> Vec<u8> {
+    qwen3_file_v(arch, q_ty, ctx, 4)
+}
+
+/// The same with a vocabulary of `vocab` one-byte-named tokens.
+fn qwen3_file_v(arch: &str, q_ty: u32, ctx: u32, vocab: usize) -> Vec<u8> {
     let q8 = |rows: usize, cols: usize| {
         let mut v = vec![];
         for _ in 0..rows * cols / 32 {
@@ -244,9 +249,9 @@ fn qwen3_file(arch: &str, q_ty: u32, ctx: u32) -> Vec<u8> {
     let one = |n: usize| 1.0f32.to_bits().to_le_bytes().repeat(n);
     let mut w = W::new();
     let mut toks = vt::STRING.to_le_bytes().to_vec();
-    toks.extend_from_slice(&4u64.to_le_bytes());
-    for t in ["a", "b", "c", "d"] {
-        s(&mut toks, t.as_bytes());
+    toks.extend_from_slice(&(vocab as u64).to_le_bytes());
+    for t in 0..vocab {
+        s(&mut toks, &[b'a' + (t % 26) as u8]);
     }
     w.kv_str("general.architecture", arch)
         .kv_u32("qwen3.block_count", 1)
@@ -259,7 +264,7 @@ fn qwen3_file(arch: &str, q_ty: u32, ctx: u32) -> Vec<u8> {
         .kv("qwen3.rope.freq_base", vt::F32, &1e6f32.to_bits().to_le_bytes())
         .kv("qwen3.attention.layer_norm_rms_epsilon", vt::F32, &1e-6f32.to_bits().to_le_bytes())
         .kv("tokenizer.ggml.tokens", vt::ARRAY, &toks)
-        .tensor("token_embd.weight", tt::Q8_0, &[32, 4], &q8(4, 32))
+        .tensor("token_embd.weight", tt::Q8_0, &[32, vocab as u64], &q8(vocab, 32))
         .tensor("output_norm.weight", tt::F32, &[32], &one(32))
         .tensor("blk.0.attn_norm.weight", tt::F32, &[32], &one(32))
         .tensor("blk.0.attn_q.weight", q_ty, &[32, 32], &if q_ty == tt::Q4_0 { vec![0u8; 32 * 18] } else { q8(32, 32) })
@@ -301,7 +306,7 @@ fn qwen3_binder_refuses_wrong_files() {
 // ------------------------------------------------------------------------------------------- the signed container
 
 mod container {
-    use super::qwen3_file;
+    use super::{qwen3_file, qwen3_file_v};
     use neuro_gguf::hnx::{admit, manifest_for, AdmitError};
     use neuro_gguf::qwen3::{layer, model};
     use neuro_gguf::tt;
@@ -340,6 +345,10 @@ mod container {
 
     /// The build side: wrap a GGUF file as a signed language-model container.
     fn pack(file: &[u8], edit: impl FnOnce(&mut Header)) -> Vec<u8> {
+        pack_as(file, kind::GGUF_LM, manifest_for(file, CTX).unwrap(), edit)
+    }
+
+    fn pack_as(payload: &[u8], payload_kind: u8, manifest: neuro_hnx::Manifest, edit: impl FnOnce(&mut Header)) -> Vec<u8> {
         let mut licence = [0u8; 32];
         licence[..10].copy_from_slice(b"Apache-2.0");
         let mut h = Header {
@@ -350,16 +359,16 @@ mod container {
             n_segments: 0,
             model_id: [9; 16],
             model_svn: 1,
-            manifest: manifest_for(file, CTX).unwrap(),
+            manifest,
             licence,
             source_sha256: [1; 32],
             eval_sha256: [2; 32],
             merkle_root: [0; 32],
-            payload_kind: kind::GGUF_LM,
+            payload_kind,
         };
         edit(&mut h);
-        let mut prefix = vec![0u8; HEADER_LEN + file.len().div_ceil(4096) * LEAF_LEN + 2 + 64];
-        let n = build_prefix(&mut h, file, &mut prefix, |d| {
+        let mut prefix = vec![0u8; HEADER_LEN + payload.len().div_ceil(4096) * LEAF_LEN + 2 + 64];
+        let n = build_prefix(&mut h, payload, &mut prefix, |d| {
             let sig = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(SEED)).sk.sign(d, None);
             let mut out = [0u8; MAX_SIG];
             out[..64].copy_from_slice(sig.as_ref());
@@ -382,11 +391,14 @@ mod container {
         l
     }
 
-    fn first_tokens(g: &neuro_gguf::Gguf, h: &neuro_gguf::qwen3::Hparams) -> Vec<usize> {
+    fn flat_rope() -> Vec<(i32, i32)> {
+        vec![(1 << 30, 0); CTX * 16]
+    }
+
+    fn first_tokens(g: &neuro_gguf::Gguf, h: &neuro_gguf::qwen3::Hparams, rope: &[(i32, i32)]) -> Vec<usize> {
         let d = h.dims;
         let layers = vec![layer(g, h, 0).unwrap()];
-        let rope: Vec<(i32, i32)> = vec![(1 << 30, 0); CTX * d.head_dim / 2];
-        let m = model(g, h, &layers, &rope).unwrap();
+        let m = model(g, h, &layers, rope).unwrap();
         let (kvn, kvs) = d.kv_len();
         let (mut vals, mut shifts) = (vec![0i16; kvn], vec![0u8; kvs]);
         let (a, b, c, e) = Work::lens(&d, 1);
@@ -409,12 +421,14 @@ mod container {
         let mut region = vec![];
         let l = load(&prefix, &file, &mut region);
         assert!(l.header().n_segments >= 2, "more than one segment");
-        let (g, h) = admit(&l, &region).unwrap();
+        let ad = admit(&l, &region).unwrap();
+        assert!(ad.bundle.is_none(), "a bare GGUF payload carries no tables");
+        let (g, h) = (ad.gguf, ad.hparams);
         assert_eq!((h.dims.max_ctx, h.dims.vocab), (CTX, 4));
         // The engine runs from the verified region exactly as from the file.
         let direct = neuro_gguf::Gguf::open(&file).unwrap();
         let hd = neuro_gguf::qwen3::hparams(&direct, CTX).unwrap();
-        assert_eq!(first_tokens(&g, &h), first_tokens(&direct, &hd));
+        assert_eq!(first_tokens(&g, &h, &flat_rope()), first_tokens(&direct, &hd, &flat_rope()));
         // The specialist path refuses a language model, and the other way round.
         assert_eq!(l.finish(&region).err(), Some(Refusal::Kind));
     }
@@ -465,5 +479,133 @@ mod container {
         let mut unknown = pack(&file, |_| {});
         unknown[208] = 7;
         assert_eq!(Loader::open(&unknown, &dev()).err(), Some(Refusal::Kind));
+    }
+
+    // ---------------------------------------------------------------------------------------- the bundle
+
+    use neuro_gguf::bundle::{self, Bundle, BundleError};
+    use neuro_gguf::hnx::manifest_for_bundle;
+    use neuro_lm::tok::Tokenizer;
+
+    fn tok_blob(vocab: usize) -> Vec<u8> {
+        // Every byte is a token; beyond 256, merged pairs.
+        let mut tokens: Vec<Vec<u8>> = (0..=255u8).map(|b| vec![b]).collect();
+        let mut merges = vec![];
+        for i in 256..vocab {
+            let (l, r) = (b'a' as u32, b'a' as u32 + (i - 255) as u32);
+            tokens.push(vec![l as u8, r as u8]);
+            merges.push((l, r));
+        }
+        tok_build::blob(&tok_build::Source { tokens, merges, added: vec![] }, &tok_build::unicode_ranges(), &tok_build::nfc_tables()).unwrap()
+    }
+
+    /// A rotation table with distinct values, so a wrong or shifted table changes the output.
+    fn turned_rope(rows: usize) -> Vec<(i32, i32)> {
+        (0..rows).map(|i| if i % 3 == 0 { (0, 1 << 30) } else { (1 << 30, 0) }).collect()
+    }
+
+    fn rope_bytes(t: &[(i32, i32)]) -> Vec<u8> {
+        t.iter().flat_map(|(c, s)| [c.to_le_bytes(), s.to_le_bytes()].concat()).collect()
+    }
+
+    /// The build side of a bundle.
+    fn bundle_of(file: &[u8], tok: &[u8], rope: &[u8]) -> Vec<u8> {
+        let lens = [file.len(), tok.len(), rope.len()];
+        let (offs, total) = bundle::layout(lens).unwrap();
+        let mut b = vec![0u8; total];
+        bundle::write_preamble(lens, &mut b).unwrap();
+        for (o, part) in offs.iter().zip([file, tok, rope]) {
+            b[*o..*o + part.len()].copy_from_slice(part);
+        }
+        b
+    }
+
+    #[test]
+    fn a_signed_bundle_runs_with_nothing_derived_on_the_device() {
+        let file = qwen3_file_v("qwen3", tt::Q8_0, 64, 256);
+        let rope = turned_rope(CTX * 16);
+        let b = bundle_of(&file, &tok_blob(256), &rope_bytes(&rope));
+        // Every section starts on a cache line, so GGUF's own tensor alignment survives inside the bundle.
+        let (offs, total) = bundle::layout([file.len(), tok_blob(256).len(), rope.len() * 8]).unwrap();
+        assert!(offs.iter().all(|o| o % 64 == 0) && total == b.len());
+
+        let prefix = pack_as(&b, kind::LM_BUNDLE, manifest_for_bundle(&b, CTX).unwrap(), |_| {});
+        let mut region = vec![];
+        let l = load(&prefix, &b, &mut region);
+        let ad = admit(&l, &region).unwrap();
+        let tables = ad.bundle.expect("a bundle carries its tables");
+        // The tokenizer is read where it lies; the rotation table is copied into the server's arena.
+        let tok = Tokenizer::new(tables.tokenizer).unwrap();
+        assert_eq!((tok.vocab(), tok.bytes(99)), (256, Some(&b"c"[..])));
+        let mut arena = vec![(0i32, 0i32); tables.rope_pairs()];
+        tables.rope_into(&mut arena).unwrap();
+        assert_eq!(arena, rope);
+        assert!(tables.rope_into(&mut vec![(0, 0); 3]).is_none());
+        // The engine gives the tokens it gives from the plain file with the same table, and other tokens with
+        // another table: the bundled table is the one in use.
+        let direct = neuro_gguf::Gguf::open(&file).unwrap();
+        let hd = neuro_gguf::qwen3::hparams(&direct, CTX).unwrap();
+        assert_eq!(first_tokens(&ad.gguf, &ad.hparams, &arena), first_tokens(&direct, &hd, &rope));
+        // The specialist path refuses it.
+        assert_eq!(l.finish(&region).err(), Some(Refusal::Kind));
+    }
+
+    #[test]
+    fn bundle_tables_must_fit_the_model_and_the_layout_is_exact() {
+        let file = qwen3_file_v("qwen3", tt::Q8_0, 64, 256);
+        let rope = rope_bytes(&turned_rope(CTX * 16));
+        let admit_err = |b: &[u8]| {
+            let prefix = pack_as(b, kind::LM_BUNDLE, manifest_for_bundle(b, CTX).unwrap(), |_| {});
+            let mut region = vec![];
+            let l = load(&prefix, b, &mut region);
+            admit(&l, &region).err()
+        };
+        // Tables for another context, another vocabulary, or no tokenizer at all.
+        assert_eq!(admit_err(&bundle_of(&file, &tok_blob(256), &rope[..rope.len() - 8])), Some(AdmitError::Tables));
+        assert_eq!(admit_err(&bundle_of(&file, &tok_blob(257), &rope)), Some(AdmitError::Tables));
+        assert_eq!(admit_err(&bundle_of(&file, b"not a tokenizer", &rope)), Some(AdmitError::Tables));
+        // The manifest is still recomputed from the model inside.
+        let good = bundle_of(&file, &tok_blob(256), &rope);
+        let prefix = pack_as(&good, kind::LM_BUNDLE, manifest_for_bundle(&good, CTX).unwrap(), |h| h.manifest.state_bytes_per_session -= 1);
+        let mut region = vec![];
+        let l = load(&prefix, &good, &mut region);
+        assert_eq!(admit(&l, &region).err(), Some(AdmitError::ManifestMismatch));
+
+        // The layout: the offsets are the ones the lengths give, every other field is zero, nothing is left over.
+        assert!(Bundle::open(&good).is_ok());
+        let pad_at = bundle::PREAMBLE + file.len(); // first padding byte after the model, if any
+        let mut cases: Vec<(Vec<u8>, BundleError)> = vec![];
+        let mut edit = |f: &dyn Fn(&mut Vec<u8>), e| {
+            let mut c = good.clone();
+            f(&mut c);
+            cases.push((c, e));
+        };
+        edit(&|c| c[0] = b'G', BundleError::Magic);
+        edit(&|c| c[4] = 2, BundleError::Version);
+        edit(&|c| c[6] = 2, BundleError::Layout); // two sections
+        edit(&|c| c[16] = 2, BundleError::Layout); // first section is not the model
+        edit(&|c| c[20] = 1, BundleError::Layout); // a reserved field
+        edit(&|c| c[24] += 64, BundleError::Layout); // an offset that is not the canonical one
+        edit(&|c| c[33] += 1, BundleError::Layout); // a length the rest does not match (256 bytes more)
+        edit(&|c| c.push(0), BundleError::Layout); // something after the last section
+        edit(&|c| c.truncate(c.len() - 8), BundleError::Layout);
+        edit(&|c| c.truncate(40), BundleError::Length);
+        if file.len() % 64 != 0 {
+            edit(&|c| c[pad_at] = 1, BundleError::Layout); // padding that is not zero
+        }
+        for (c, want) in &cases {
+            assert_eq!(Bundle::open(c).err(), Some(*want));
+        }
+        // A rotation table that is not whole pairs.
+        assert_eq!(Bundle::open(&bundle_of(&file, &tok_blob(256), &rope[..rope.len() - 3])).err(), Some(BundleError::Layout));
+
+        // The wrong label in either direction is refused when the payload is opened.
+        let as_bare = pack_as(&good, kind::GGUF_LM, manifest_for_bundle(&good, CTX).unwrap(), |_| {});
+        let mut region = vec![];
+        let l = load(&as_bare, &good, &mut region);
+        assert!(matches!(admit(&l, &region).err(), Some(AdmitError::Gguf(_))));
+        let as_bundle = pack_as(&file, kind::LM_BUNDLE, manifest_for(&file, CTX).unwrap(), |_| {});
+        let l = load(&as_bundle, &file, &mut region);
+        assert_eq!(admit(&l, &region).err(), Some(AdmitError::Bundle(BundleError::Magic)));
     }
 }

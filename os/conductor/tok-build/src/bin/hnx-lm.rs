@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! A language model through the device's one load path, on the build host.
 //!
-//! `pack`: wrap a GGUF file as a signed HNX container (kind `GGUF_LM`), with the manifest admission reads.
+//! `pack`: wrap a GGUF file as a signed HNX container with the manifest admission reads. By default the payload is
+//!         a bundle (kind `LM_BUNDLE`): the model with its tokenizer tables and RoPE table, made here once, so the
+//!         device derives nothing. `--bare` stores the GGUF file alone (kind `GGUF_LM`).
 //! `run`:  what a heqk server does with that file: open and verify the header and signature, reserve exactly the
 //!         payload, read each segment straight into its place and verify it there, check the manifest against the
 //!         file, bind the integer engine, answer one question. No other runtime is involved.
 //!
 //! Usage:
-//!   hnx-lm pack --gguf MODEL.gguf --out MODEL.hnx --key SEED.hex --eval REPORT [--ctx 4096] [--licence Apache-2.0] [--svn 1]
+//!   hnx-lm pack --gguf MODEL.gguf --out MODEL.hnx --key SEED.hex --eval REPORT [--ctx 4096] [--licence Apache-2.0] [--svn 1] [--bare]
 //!   hnx-lm run  --hnx MODEL.hnx --pub PUBKEY.hex --ask "question" [--max-new 64] [--scalar] [--packed]
 //!
 //! `SEED.hex` is a 32-byte Ed25519 seed in hex (a build-host test key here; release signing is an operator step).
-//! Host-side helpers that a device image would carry precomputed: the tokenizer tables and the RoPE table.
-use neuro_gguf::hnx::{admit, manifest_for};
+//! With a bundle, `run` uses no build-host helper: the tokenizer and the RoPE table come from the verified payload.
+//! With a bare GGUF payload they are built here from the file, which a device cannot do.
+use neuro_gguf::bundle;
+use neuro_gguf::hnx::{admit, manifest_for, manifest_for_bundle};
 use neuro_gguf::qwen3 as bind;
 use neuro_hnx::{build_prefix, kind, scheme, target, Header, Loader, Platform, HEADER_LEN, LEAF_LEN, MAX_SIG};
 use neuro_kernels::Simd;
@@ -66,6 +70,25 @@ fn pack(args: &[String]) {
     }
     licence[..spdx.len()].copy_from_slice(spdx.as_bytes());
     let source = sha(&file);
+    // The payload: the file alone, or the bundle with the tables a device cannot derive.
+    let bare = args.iter().any(|a| a == "--bare");
+    let payload = if bare {
+        file.clone()
+    } else {
+        let g = neuro_gguf::Gguf::open(&file).unwrap_or_else(|e| die(&format!("GGUF: {e:?}")));
+        let hp = bind::hparams(&g, ctx).unwrap_or_else(|e| die(&format!("this file is not a model the engine binds: {e:?}")));
+        let tok = tok_build::blob(&tok_build::from_gguf(&g).unwrap_or_else(|e| die(&e)), &tok_build::unicode_ranges(), &tok_build::nfc_tables()).unwrap_or_else(|e| die(&format!("tokenizer: {e:?}")));
+        let rope: Vec<u8> = neuro_build::rope_neox_table(ctx, hp.dims.head_dim, f32::from_bits(hp.rope_base) as f64).iter().flat_map(|(c, s)| [c.to_le_bytes(), s.to_le_bytes()].concat()).collect();
+        let lens = [file.len(), tok.len(), rope.len()];
+        let (offs, total) = bundle::layout(lens).unwrap_or_else(|| die("bundle layout"));
+        let mut b = vec![0u8; total];
+        bundle::write_preamble(lens, &mut b).unwrap_or_else(|| die("bundle preamble"));
+        for (o, part) in offs.iter().zip([&file[..], &tok[..], &rope[..]]) {
+            b[*o..*o + part.len()].copy_from_slice(part);
+        }
+        println!("bundle: model {} bytes, tokenizer tables {} bytes, RoPE table {} bytes", file.len(), tok.len(), rope.len());
+        b
+    };
     let mut model_id = [0u8; 16];
     model_id.copy_from_slice(&source[..16]);
     let mut h = Header {
@@ -76,16 +99,16 @@ fn pack(args: &[String]) {
         n_segments: 0,
         model_id,
         model_svn: arg(args, "--svn").map_or(1, |v| v.parse().unwrap_or_else(|_| die("--svn"))),
-        manifest: manifest_for(&file, ctx).unwrap_or_else(|e| die(&format!("this file is not a model the engine binds: {e:?}"))),
+        manifest: if bare { manifest_for(&payload, ctx) } else { manifest_for_bundle(&payload, ctx) }.unwrap_or_else(|e| die(&format!("this file is not a model the engine binds: {e:?}"))),
         licence,
         source_sha256: source,
         eval_sha256: sha(&eval),
         merkle_root: [0; 32],
-        payload_kind: kind::GGUF_LM,
+        payload_kind: if bare { kind::GGUF_LM } else { kind::LM_BUNDLE },
     };
-    let mut prefix = vec![0u8; HEADER_LEN + file.len().div_ceil(1 << SEG_LOG2) * LEAF_LEN + 2 + 64];
+    let mut prefix = vec![0u8; HEADER_LEN + payload.len().div_ceil(1 << SEG_LOG2) * LEAF_LEN + 2 + 64];
     let kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(seed));
-    let n = build_prefix(&mut h, &file, &mut prefix, |d| {
+    let n = build_prefix(&mut h, &payload, &mut prefix, |d| {
         let mut out = [0u8; MAX_SIG];
         out[..64].copy_from_slice(kp.sk.sign(d, None).as_ref());
         Some((out, 64))
@@ -93,7 +116,7 @@ fn pack(args: &[String]) {
     .unwrap_or_else(|| die("could not build the container"));
     let out_path = need(args, "--out");
     let mut out = std::fs::File::create(&out_path).unwrap_or_else(|e| die(&format!("create {out_path}: {e}")));
-    out.write_all(&prefix[..n]).and_then(|()| out.write_all(&file)).unwrap_or_else(|e| die(&format!("write {out_path}: {e}")));
+    out.write_all(&prefix[..n]).and_then(|()| out.write_all(&payload)).unwrap_or_else(|e| die(&format!("write {out_path}: {e}")));
     let m = h.manifest;
     println!("packed {out_path}: {} segments of 2 MiB, prefix {n} bytes, payload {} bytes", h.n_segments, m.payload_bytes);
     println!("manifest: context {}, KV state {} bytes, arena {} bytes, {} tensor bytes per token at most", m.max_context, m.state_bytes_per_session, m.arena_bytes, m.bytes_per_token);
@@ -182,10 +205,24 @@ fn run(args: &[String]) {
 
     // 5: the manifest must be what the file needs; then the engine binds the verified bytes.
     let region: &'static [u8] = region.leak();
-    let (g, hp) = admit(&loader, region).unwrap_or_else(|e| die(&format!("admission refused: {e:?}")));
+    let ad = admit(&loader, region).unwrap_or_else(|e| die(&format!("admission refused: {e:?}")));
+    let (g, hp) = (ad.gguf, ad.hparams);
     let d = hp.dims;
     let layers: &'static [_] = (0..d.n_layers).map(|i| bind::layer(&g, &hp, i).unwrap_or_else(|e| die(&format!("layer {i}: {e:?}")))).collect::<Vec<_>>().leak();
-    let rope: &'static [(i32, i32)] = neuro_build::rope_neox_table(d.max_ctx, d.head_dim, f32::from_bits(hp.rope_base) as f64).leak();
+    // The tables: from the verified bundle, or (bare GGUF payload) built here as a device could not.
+    let (rope, tok_blob): (&'static [(i32, i32)], &'static [u8]) = match ad.bundle {
+        Some(b) => {
+            let arena: &'static mut [(i32, i32)] = vec![(0, 0); b.rope_pairs()].leak();
+            b.rope_into(arena).unwrap_or_else(|| die("RoPE table"));
+            println!("tables from the bundle: tokenizer {} bytes read in place, RoPE {} pairs copied to the arena; nothing derived", b.tokenizer.len(), b.rope_pairs());
+            (arena, b.tokenizer)
+        }
+        None => {
+            println!("bare GGUF payload: tokenizer and RoPE tables built on this host (a device cannot)");
+            let tb = tok_build::blob(&tok_build::from_gguf(&g).unwrap_or_else(|e| die(&e)), &tok_build::unicode_ranges(), &tok_build::nfc_tables()).unwrap_or_else(|e| die(&format!("tokenizer: {e:?}")));
+            (neuro_build::rope_neox_table(d.max_ctx, d.head_dim, f32::from_bits(hp.rope_base) as f64).leak(), tb.leak())
+        }
+    };
     let gm = bind::model(&g, &hp, layers, rope).unwrap_or_else(|e| die(&format!("bind: {e:?}")));
     let packed = args.iter().any(|a| a == "--packed");
     let model: Model<'static> = if packed {
@@ -196,8 +233,7 @@ fn run(args: &[String]) {
         gm
     };
     model.check().unwrap_or_else(|e| die(&format!("model check: {e:?}")));
-    let tb = tok_build::blob(&tok_build::from_gguf(&g).unwrap_or_else(|e| die(&e)), &tok_build::unicode_ranges(), &tok_build::nfc_tables()).unwrap_or_else(|e| die(&format!("tokenizer: {e:?}")));
-    let tok = Tokenizer::new(&tb).unwrap_or_else(|_| die("tokenizer tables"));
+    let tok = Tokenizer::new(tok_blob).unwrap_or_else(|_| die("tokenizer tables"));
     let sd = simd(args.iter().any(|a| a == "--scalar"));
     println!("admitted: {} layers, vocab {}, context {}, {} layout, {}", d.n_layers, d.vocab, d.max_ctx, if packed { "packed" } else { "GGUF" }, sd.name());
 
