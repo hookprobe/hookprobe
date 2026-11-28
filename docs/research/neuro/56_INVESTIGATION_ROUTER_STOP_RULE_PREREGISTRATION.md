@@ -98,3 +98,15 @@ that exists.
   The labels-by-kind report shows how often that happens on multi cases. Condition 5 caps it.
 - **Two adapters** (ftM, ftT) cost memory or a swap on the device. Not measured here.
 - multi is 35 cases and clears is 30.
+
+## 6. Seal (2026-11-28, before any model has seen the set)
+
+- `blind_cases.jsonl` SHA-256 **`4b5e3511ef13d9eeed7b22ad741fe263d2de75fd7765035dd90e8a5da50f4e72`**.
+- `outcomes.json` SHA-256 **`4c831b2d74a5b070b3da58df5d70454890e9a4a132f011a58c9b4c7b3852eafc`**.
+- **Mix:** next 45, multi 35, clears 30, decoy 25, invisible 15, alert 25 (175 cases); 21 Romanian (12.0%).
+- **Seal checks: PASS.** 0 collisions with inv-blind v1–v7 and the gen v4–v7 case files.
+- **Second annotator** (isolated, 44-case sample): 43/44. The author adjudicated the one disagreement and added
+  the annotator's answer to that case's acceptable answers (only that case's gold changed; all 77 RESULT lines were
+  checked unchanged by script). After adjudication: 44/44. The annotator marked 17 of the 44 as genuinely ambiguous.
+- **Typed outcomes** (isolated labeller, 77 RESULT lines in 65 cases, each seen alone): supports 33, clears 30,
+  none 14. How they fall by kind is reported only by the gate.
