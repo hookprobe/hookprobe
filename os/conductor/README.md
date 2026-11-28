@@ -372,6 +372,25 @@ window): model region 1,947 MB read-only; arena 247.7 MiB; reading the model's s
 job 34.3 s against 34.0 s on a node's open session; **the same 818 bytes from both**. Host numbers, not device
 numbers.
 
+**Memory from the header alone (`reserve`).** Core 0 has the model's 256-byte signed header before it has the
+model. `reserve` turns four fields of that header into the two regions to set aside, in whole pages: the
+read-only model region and the arena. A device without the memory refuses at once and reads nothing from storage
+(ADR 0061 D4: reserve when staged, no overcommit). After the load, `arena_need` gives the exact figure, and the
+caller refuses the model if it is more than was reserved: the header is a promise until admission has checked it.
+
+| Gate (`the_header_alone_bounds_the_memory`) | Result |
+|---|---|
+| The reserved arena is never below `arena_need` of the loaded model, at four answer bounds, and is over it by less than the layer-table allowance plus a page | pass |
+| A job in an arena of exactly the reserved size gives the capability path's bytes | pass |
+| Limits that are not the header's context or are out of range, an empty payload: refused, nothing reserved | pass |
+| A header declaring the largest values does not overflow | pass |
+
+ftFg (`hnx-lm entry --reserve-only`, packed bundle, context 2,048): model region 1,856.9 MiB, arena 247.7 MiB
+(35,952 bytes over the exact need), **2,104.6 MiB for one model**. Two such models side by side with one arena,
+which is what Neuro's doc 56 design costs: **3,961.4 MiB**. That does not fit a device with 4 GiB of RAM beside
+the kernel and its reserves; it needs the 8 GiB class and RAM above 4 GiB mapped (ADR 0061 M1). One model fits
+either.
+
 **Keeping the cache between jobs (`run_kept`, `engine_infer_kept`).** A second entry beside the first, same
 arguments plus one 32-byte block the caller owns (`Kept`). The cache a job leaves in the arena serves the next
 job as far as the two prompts start with the same tokens: the system prompt and the framing, for the explainer.

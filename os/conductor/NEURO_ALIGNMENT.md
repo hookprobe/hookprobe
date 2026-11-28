@@ -573,3 +573,34 @@ For HomePods, answering "when prefix reuse returns" in `WORKER_CORE_SYNC.md`. Th
 - **Privacy note:** the arena holds the last job's prompt as tokens and cache until the next job or until you
   wipe it. If a worker ever serves two owners or two data classes, zero the block and wipe the arena between.
 
+## From the Conductor: memory for a model from its header, and the release policy question (2026-11-28, for ADR 0061)
+
+For HomePods' ADR 0061 slice (RAM discovered, model region in high memory, model from storage), and for Neuro and
+the operator on what doc 56 costs.
+
+- **`conductor_engine_entry::reserve(Declared, Limits) -> Reserve { model, arena }`**, whole pages, integers only.
+  `Declared` is four fields of `neuro_hnx::Manifest` (payload, arena, state per session, context), so it is
+  callable after `Loader::open` and before the first segment is read. No new dependency in the crate; `Cargo.lock`
+  of `worker-engine` does not change.
+- **The rule we propose for core 0:** reserve `model + arena` (plus your 4 KiB header) out of the budget when the
+  model is staged, refuse with a reason if the budget cannot cover it, load, then check
+  `arena_need(payload) <= reserve.arena` and refuse the model otherwise. For a model of up to 128 blocks that
+  admission accepts, the check cannot fail (gated).
+- **ftFg, context 2,048:** 2,104.6 MiB for one model. Two models sharing one arena
+  (`Reserve::sharing_arena`): 3,961.4 MiB.
+- **For the R13 decision:** doc 56's design needs both ftM and ftT loaded. By this arithmetic that is the 8 GiB
+  class with RAM above 4 GiB mapped (M1). On 4 GiB, one model fits and two do not. Swapping bundles from storage
+  per turn instead would add a 1.9 GB read and verify to the turn (about 3.5 s on the build host).
+  This is a cost statement, not a build: nothing of doc 56 is built.
+
+**Your open question (tag, target id, min SVN for a release model).** A proposal; the decision is R5's (kernel
+verifies) and the operator's:
+- **Tag:** the container's own, `neuro_hnx::TAG` (`hookprobe/neuro/hnx1/v1`), under a model-signing key that is
+  not the boot or image key. `test/hnx` stays the gate's and is refused in a release build.
+- **Target:** `GENERIC_INT` for a bundle that gives the same bytes on every kernel set, which is the case today
+  (scalar = SDOT, gated). `CM5_A76` only for a bundle that requires `DOTPROD` in `required_features`.
+- **Min SVN:** per `model_id`, in the sealed store beside the image rollback counter. Raised to a new model's
+  SVN only after that model has been admitted and has answered one job on this device, so a bad update can
+  still go back.
+- **Scheme:** hybrid (`HYBRID_ED25519_SLHDSA128S`) for release, as for images; Ed25519 alone is the test scheme.
+

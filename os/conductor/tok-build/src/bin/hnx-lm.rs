@@ -20,6 +20,8 @@
 //!
 //!   hnx-lm entry --hnx MODEL.hnx --pub PUBKEY.hex --context WINDOW.txt [--scalar]
 //!         the engine job as a worker core runs it: model region, one arena, a window; compared with the node's bytes.
+//!         With --reserve-only: print what the signed header alone says to set aside, check it covers the
+//!         loaded model's need, and stop.
 //!   hnx-lm entry --hnx MODEL.hnx --pub PUBKEY.hex --context W1.txt --context W2.txt ...
 //!         several windows, one job each: every job from an empty cache, then the same jobs with the cache kept
 //!         between calls (`engine_infer_kept`'s safe form); the bytes must be the same.
@@ -278,6 +280,26 @@ fn entry(args: &[String]) {
     let t = Instant::now();
     let need_bytes = ee::arena_need(payload, limits).unwrap_or_else(|s| die(&format!("arena_need refused: {s:#x}")));
     let reopen = t.elapsed();
+    // What core 0 would have set aside from the signed header alone, before reading the payload.
+    let m = neuro_gguf::hnx::manifest_for_bundle(payload, ad.hparams.dims.max_ctx).unwrap_or_else(|e| die(&format!("manifest: {e:?}")));
+    let declared = ee::Declared { payload_bytes: m.payload_bytes, arena_bytes: m.arena_bytes, state_bytes_per_session: m.state_bytes_per_session, max_context: m.max_context };
+    let r = ee::reserve(declared, limits).unwrap_or_else(|s| die(&format!("reserve refused: {s:#x}")));
+    if r.arena < need_bytes {
+        die(&format!("the header's bound ({}) is below the arena the loaded model needs ({need_bytes})", r.arena));
+    }
+    let mib = |n: u64| n as f64 / 1048576.0;
+    let two = r.sharing_arena(r);
+    println!(
+        "\nreserve from the header alone: model region {:.1} MiB, arena {:.1} MiB ({} bytes over the need), total {:.1} MiB; two such models sharing one arena {:.1} MiB",
+        mib(r.model),
+        mib(r.arena),
+        r.arena - need_bytes,
+        mib(r.total()),
+        mib(two.total())
+    );
+    if args.iter().any(|a| a == "--reserve-only") {
+        return;
+    }
     let mut arena = vec![0xEEu8; need_bytes as usize];
     let mut result = vec![0u8; HEADER + 8192];
     let (progress, cancel) = (AtomicU32::new(0), AtomicBool::new(false));

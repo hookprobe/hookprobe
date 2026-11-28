@@ -12,6 +12,8 @@
 //! | result | write | a 16-byte header of counters, then the answer |
 //! | progress, cancel | write / read | one word each, shared with core 0 |
 //!
+//! [`reserve`] bounds the model region and the arena from the signed header alone, before the payload is read.
+//!
 //! [`run`] is the safe form over slices. [`engine_infer`] is the same over pointers, C ABI, integers and
 //! pointers only, for the image's entry stub. The only `unsafe` in the Conductor's engine path is here: turning
 //! the caller's pointers into slices, and giving the arena's bytes their types.
@@ -104,6 +106,69 @@ pub fn arena_need(model: &[u8], limits: Limits) -> Result<u64, u32> {
     let ad = reopen_bundle(model, ctx).map_err(|_| refused(code::MODEL))?;
     let fixed = (CPS + LIST + answer).saturating_mul(4).saturating_add(BUF).saturating_add(SLACK);
     u64::try_from(p0::sizes(&ad.hparams, BATCH).bytes().saturating_add(fixed)).map_err(|_| refused(code::LIMITS))
+}
+
+/// The largest layer table [`reserve`] allows for. A model with more blocks still runs if the arena it is given
+/// covers [`arena_need`]; only the early bound does not hold for it.
+pub const RESERVED_LAYERS: usize = 128;
+/// Memory is granted in pages of this size.
+pub const PAGE: u64 = 4096;
+
+/// What the signed header says about a language model's memory (`neuro_hnx::Manifest`, the four fields that
+/// count here). Admission has checked nothing yet when it reads these; `neuro_gguf::hnx::admit` later proves
+/// they were true, or refuses the model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Declared {
+    pub payload_bytes: u64,
+    pub arena_bytes: u32,
+    pub state_bytes_per_session: u32,
+    pub max_context: u32,
+}
+
+/// Memory to set aside for one model on a worker core, in whole pages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Reserve {
+    /// The read-only model region: the payload.
+    pub model: u64,
+    /// The read-write arena: not less than [`arena_need`] will ask once the payload is loaded.
+    pub arena: u64,
+}
+
+impl Reserve {
+    pub fn total(self) -> u64 {
+        self.model.saturating_add(self.arena)
+    }
+
+    /// Two models loaded side by side and run one at a time on the same core: both model regions, one arena.
+    pub fn sharing_arena(self, other: Reserve) -> Reserve {
+        Reserve { model: self.model.saturating_add(other.model), arena: self.arena.max(other.arena) }
+    }
+}
+
+const fn pages(n: u64) -> u64 {
+    n.saturating_add(PAGE - 1) / PAGE * PAGE
+}
+
+/// What to set aside for a model, from its header alone: before a byte of the payload is read from storage,
+/// so a device without the memory refuses at once and reserves nothing (ADR 0061 D4). Integer arithmetic only.
+///
+/// For a model of at most [`RESERVED_LAYERS`] blocks whose manifest admission accepts, `arena` is not less than
+/// [`arena_need`] of the loaded payload under the same `limits`. The caller still asks [`arena_need`] after the
+/// load and refuses the model if it is more: the header is a promise until admission has checked it.
+/// `Err` is a status ([`code::LIMITS`]: the limits are out of range or are not the context the header declares).
+pub fn reserve(declared: Declared, limits: Limits) -> Result<Reserve, u32> {
+    let answer = limits.answer().ok_or(refused(code::LIMITS))?;
+    if limits.max_ctx == 0 || limits.max_ctx != declared.max_context || declared.payload_bytes == 0 {
+        return Err(refused(code::LIMITS));
+    }
+    // The session (`p0::Sizes::bytes`): the manifest's arena is the pass scratch and the RoPE table, its state
+    // the KV cache; the token lists (`ids`, `prev`) are two words per position; then the layer table.
+    const { assert!(BATCH <= neuro_lm::qwen3::MAX_BATCH) };
+    let tokens = u64::from(declared.max_context).saturating_mul(8);
+    let layers = (RESERVED_LAYERS as u64).saturating_mul(size_of::<Layer>() as u64);
+    let fixed = (CPS + LIST + answer).saturating_mul(4).saturating_add(BUF).saturating_add(SLACK) as u64;
+    let arena = u64::from(declared.arena_bytes).saturating_add(u64::from(declared.state_bytes_per_session)).saturating_add(tokens).saturating_add(layers).saturating_add(fixed);
+    Ok(Reserve { model: pages(declared.payload_bytes), arena: pages(arena) })
 }
 
 /// Types every bit pattern is a valid value of, with no padding: bytes may be read as them.
