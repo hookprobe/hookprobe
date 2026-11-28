@@ -668,6 +668,42 @@ mod entry {
     }
 
     #[test]
+    fn the_header_alone_bounds_the_memory() {
+        // Core 0 reads the 256-byte signed header, then decides; the payload is still on storage.
+        let model = bundle_bytes(Some(7));
+        let m = manifest_for_bundle(model, CTX).unwrap();
+        let declared = ee::Declared { payload_bytes: m.payload_bytes, arena_bytes: m.arena_bytes, state_bytes_per_session: m.state_bytes_per_session, max_context: m.max_context };
+        for max_answer in [0, 1, MAX_ANSWER as u32, ee::MAX_ANSWER_LIMIT] {
+            let limits = Limits { max_answer, ..LIMITS };
+            let r = ee::reserve(declared, limits).unwrap();
+            let need = arena_need(model, limits).unwrap();
+            assert!(r.arena >= need, "answer bound {max_answer}: reserved {} for a need of {need}", r.arena);
+            // Not a loose bound: the spare is the layer table's allowance and the page rounding.
+            let spare = (ee::RESERVED_LAYERS * std::mem::size_of::<neuro_lm::qwen3::Layer>()) as u64 + ee::PAGE;
+            assert!(r.arena - need < spare, "answer bound {max_answer}: {} over a need of {need}", r.arena - need);
+            assert!(r.model >= model.len() as u64 && r.model - (model.len() as u64) < ee::PAGE);
+            assert_eq!((r.model % ee::PAGE, r.arena % ee::PAGE, r.total()), (0, 0, r.model + r.arena));
+        }
+        // A job in an arena of exactly the reserved size runs.
+        let r = ee::reserve(declared, LIMITS).unwrap();
+        let (window, mut arena, mut result) = (prompt(), vec![0u8; r.arena as usize], vec![0u8; 8192]);
+        let (st, value, _) = call(Call { model, arena: &mut arena, window: &window, result: &mut result, cancel: false, limits: LIMITS, op: op::ENGINE_INFER, path: ee::path::SCALAR });
+        assert_eq!((st, &result[HEADER..HEADER + value as usize]), (status::OK, &reference()[..]));
+
+        // Two models on one core, one at a time: both regions, one arena.
+        let both = r.sharing_arena(ee::Reserve { model: 3 * ee::PAGE, arena: r.arena + ee::PAGE });
+        assert_eq!((both.model, both.arena), (r.model + 3 * ee::PAGE, r.arena + ee::PAGE));
+        // Limits that are not the header's context, or out of range, reserve nothing.
+        for bad in [Limits { max_ctx: CTX as u32 / 2, ..LIMITS }, Limits { max_ctx: 0, ..LIMITS }, Limits { max_answer: ee::MAX_ANSWER_LIMIT + 1, ..LIMITS }] {
+            assert!(refused_with(ee::reserve(declared, bad).unwrap_err(), ee::code::LIMITS));
+        }
+        assert!(refused_with(ee::reserve(ee::Declared { payload_bytes: 0, ..declared }, LIMITS).unwrap_err(), ee::code::LIMITS));
+        // A header that declares the largest values does not overflow.
+        let huge = ee::reserve(ee::Declared { payload_bytes: u64::MAX, arena_bytes: u32::MAX, state_bytes_per_session: u32::MAX, max_context: u32::MAX }, Limits { max_ctx: u32::MAX, max_answer: 0 }).unwrap();
+        assert!(huge.total() >= huge.model);
+    }
+
+    #[test]
     fn what_the_entry_refuses() {
         let model = bundle_bytes(Some(7));
         let need = arena_need(model, LIMITS).unwrap() as usize;
