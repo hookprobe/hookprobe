@@ -91,7 +91,12 @@ allocation.
 - **Model from storage, QEMU (built):** a model disk is identified by its `HQMODEL1` header; `virtio_blk::open()` skips
   model disks (the data-disk users never see one) and `open_model()` finds it; core 0 streams the container into the
   region through its window and the engine answers from it (`[P-mem-model]`). eMMC/NVMe are the metal slot-ins.
-  **Not yet:** the CM5 map above 4 GiB, block mappings for a GiB-scale window, budgets, verification in the kernel (R5).
+- **DMA into the region (built):** `virtio_blk::read_into_pa` reads multi-sector requests (up to 256 KiB) straight
+  into the region's physical pages, bounded by a DMA window core 0 allows (the region only; a probe at kernel memory
+  is refused); core 0 keeps only a one-page header window. Measured by hand: 1.5 GiB in 6,144 requests, 3.3 s
+  emulated, 768 block mappings per worker, engine answer unchanged. A metal driver must invalidate the range after
+  DMA (QEMU is coherent).
+  **Not yet:** the CM5 map above 4 GiB and eMMC/NVMe DMA, budgets, verification in the kernel (R5).
 
 ## Consequences
 

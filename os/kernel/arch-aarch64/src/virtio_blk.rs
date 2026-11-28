@@ -70,6 +70,19 @@ fn blk_slots() -> impl Iterator<Item = (usize, usize)> {
     })
 }
 
+/// ADR 0061: the only physical range `read_into_pa` may DMA into (the model region), set by core 0. Empty = none.
+static DMA_LO: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static DMA_HI: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Largest single `read_into_pa` request.
+pub const MAX_DMA: u32 = 256 * 1024;
+
+/// Allow `read_into_pa` to write `[lo, hi)` (physical). Core 0, for the model region only.
+pub fn allow_dma_window(lo: u64, hi: u64) {
+    use core::sync::atomic::Ordering::Release;
+    DMA_LO.store(lo, Release);
+    DMA_HI.store(hi, Release);
+}
+
 /// ADR 0061: a disk whose LBA 0 starts with this is a MODEL disk (a signed-model container), never a data disk:
 /// `open()` skips it, `open_model()` finds it. Slots are probed once (bring-up reserves ring memory for good).
 pub const MODEL_MAGIC: &[u8; 8] = b"HQMODEL1";
@@ -122,6 +135,30 @@ impl VirtioBlk {
     /// attached no `-drive`/`virtio-blk-device` (so a diskless boot skips cleanly).
     pub fn open() -> Option<VirtioBlk> {
         open_kind(false)
+    }
+
+    /// ADR 0061: read `len` bytes (a multiple of 512, at most [`MAX_DMA`]) from `lba` by DMA straight into physical
+    /// `pa`, with no CPU copy. Refused unless `[pa, pa+len)` lies inside the window core 0 allowed
+    /// ([`allow_dma_window`]: the model region), so the device can never be pointed at kernel memory through this.
+    /// On QEMU DMA is cache-coherent; a metal driver must invalidate the range for the CPU afterwards.
+    pub fn read_into_pa(&self, lba: u64, pa: u64, len: u32) -> Result<(), BlockErr> {
+        use core::sync::atomic::Ordering::Acquire;
+        let (lo, hi) = (DMA_LO.load(Acquire), DMA_HI.load(Acquire));
+        let n = u64::from(len / 512);
+        let end = pa.checked_add(u64::from(len));
+        if len == 0 || !len.is_multiple_of(512) || len > MAX_DMA || lo == hi || pa < lo || end.is_none_or(|e| e > hi) {
+            return Err(BlockErr::OutOfRange);
+        }
+        if lba.checked_add(n).is_none_or(|e| e > self.sectors) {
+            return Err(BlockErr::OutOfRange);
+        }
+        let me = self as *const VirtioBlk as *mut VirtioBlk;
+        unsafe {
+            match (*me).submit_buf(VIRTIO_BLK_T_IN, lba, true, pa, len) {
+                Some(VIRTIO_BLK_S_OK) => Ok(()),
+                _ => Err(BlockErr::Io),
+            }
+        }
     }
 
     /// ADR 0061: the first model disk (LBA 0 starts with [`MODEL_MAGIC`]), read-only by use.
@@ -194,6 +231,12 @@ impl VirtioBlk {
     /// Submit one 3-descriptor blk request (header RO, data, status WO) and poll
     /// the used ring for completion. Returns the device status byte.
     unsafe fn submit(&mut self, req_type: u32, lba: u64, data_dev_writable: bool) -> Option<u8> {
+        let data = self.data;
+        self.submit_buf(req_type, lba, data_dev_writable, data as u64, 512)
+    }
+
+    /// `submit` with the data descriptor pointing at `addr` (physical), `len` bytes.
+    unsafe fn submit_buf(&mut self, req_type: u32, lba: u64, data_dev_writable: bool, addr: u64, len: u32) -> Option<u8> {
         // Header: type u32, reserved u32, sector u64 (all little-endian).
         write_volatile(self.hdr as *mut u32, req_type);
         write_volatile((self.hdr + 4) as *mut u32, 0);
@@ -212,8 +255,8 @@ impl VirtioBlk {
             } else {
                 0
             };
-        write_volatile((self.desc + 16) as *mut u64, self.data as u64);
-        write_volatile((self.desc + 24) as *mut u32, 512);
+        write_volatile((self.desc + 16) as *mut u64, addr);
+        write_volatile((self.desc + 24) as *mut u32, len);
         write_volatile((self.desc + 28) as *mut u16, d1_flags);
         write_volatile((self.desc + 30) as *mut u16, 2);
         // desc2 = status byte (device-writable), end of chain.

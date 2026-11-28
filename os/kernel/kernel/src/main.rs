@@ -18040,6 +18040,10 @@ fn p_mem_discover() -> Option<boot_abi::fdt::Inventory> {
     None
 }
 
+/// A kernel word `[P-mem-model]` points a DMA request at, expecting the driver to refuse.
+#[cfg(feature = "smpboot")]
+static KERNEL_DMA_PROBE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 /// The model region's container, as `[P-mem-model]` found it: (prefix pa, prefix len, bundle pa, bundle len).
 #[cfg(feature = "smpboot")]
 static HIGH_MODEL: [core::sync::atomic::AtomicU64; 4] = [const { core::sync::atomic::AtomicU64::new(0) }; 4];
@@ -18092,13 +18096,10 @@ fn p_mem_model(inv: Option<&boot_abi::fdt::Inventory>) {
             kprint!(" [P-mem-model] FAIL the model disk declares {} B (disk {} sectors, RAM to {:#x})\n", total, disk.block_count(), ram_end);
             arch_aarch64::semihosting::exit(1);
         }
-        // Map the whole region into core 0's window (4 KiB pages; a GiB-scale model will want blocks) and fill it.
-        for off in (4096..(sectors * 512) as usize).step_by(4096) {
-            if !mmu.map_page(WINDOW_VA + off, MODEL_PA as usize + off, false) {
-                kprint!(" [P-mem-model] FAIL could not map the region window\n");
-                arch_aarch64::semihosting::exit(1);
-            }
-        }
+        // DMA the container straight into the region (no CPU copy, no window beyond the header page): the driver
+        // refuses any target outside the window allowed here, i.e. the region itself.
+        let region_end = MODEL_PA + sectors * 512;
+        arch_aarch64::virtio_blk::allow_dma_window(MODEL_PA, region_end);
         let freq: u64 = {
             let f: u64;
             unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
@@ -18110,15 +18111,32 @@ fn p_mem_model(inv: Option<&boot_abi::fdt::Inventory>) {
             c
         };
         let t0 = now();
-        for lba in 0..sectors {
-            if disk.read_block(lba, &mut sec).is_err() {
-                kprint!(" [P-mem-model] FAIL read error at sector {}\n", lba);
+        let chunk = u64::from(arch_aarch64::virtio_blk::MAX_DMA / 512);
+        let mut lba = 0u64;
+        let mut requests = 0u64;
+        while lba < sectors {
+            let n = chunk.min(sectors - lba);
+            if disk.read_into_pa(lba, MODEL_PA + lba * 512, (n * 512) as u32).is_err() {
+                kprint!(" [P-mem-model] FAIL DMA read error at sector {}\n", lba);
                 arch_aarch64::semihosting::exit(1);
             }
-            let dst = (WINDOW_VA + (lba as usize) * 512) as *mut u8;
-            unsafe { core::ptr::copy_nonoverlapping(sec.as_ptr(), dst, 512) };
+            lba += n;
+            requests += 1;
         }
-        stream_note = (sectors, now().wrapping_sub(t0) * 1000 / freq.max(1));
+        arch_aarch64::virtio_blk::allow_dma_window(0, 0);
+        // The header page was read through the window before the DMA: drop any cached copy before reading it again
+        // (a no-op on QEMU's coherent DMA; required on metal).
+        for a in (WINDOW_VA..WINDOW_VA + 4096).step_by(64) {
+            unsafe { core::arch::asm!("dc civac, {}", in(reg) a, options(nostack)) };
+        }
+        unsafe { core::arch::asm!("dsb sy", options(nostack)) };
+        stream_note = (requests, now().wrapping_sub(t0) * 1000 / freq.max(1));
+        // A DMA probe aimed at kernel memory (the kernel image) is refused by the driver.
+        let kern = core::ptr::addr_of!(KERNEL_DMA_PROBE) as u64 & !0xfff;
+        if disk.read_into_pa(0, kern, 512).is_ok() {
+            kprint!(" [P-mem-model] FAIL the driver accepted a DMA target outside the model region\n");
+            arch_aarch64::semihosting::exit(1);
+        }
         source = "the model disk (virtio-blk, read-only)";
     }
     let word = |i: usize| u64::from_le_bytes([h[8 + i * 8], h[9 + i * 8], h[10 + i * 8], h[11 + i * 8], h[12 + i * 8], h[13 + i * 8], h[14 + i * 8], h[15 + i * 8]]);
@@ -18135,7 +18153,7 @@ fn p_mem_model(inv: Option<&boot_abi::fdt::Inventory>) {
     kprint!(
         " [P-mem-model] PASS model container at {:#x} (above 4 GiB, outside the kernel's map and frame pool) from {}{}: header checked through a core-0 window at {:#x}, prefix {} B + bundle {} B, {} B registered as the read-only worker model region (2 MiB blocks); {} MiB of RAM above 4 GiB discovered\n",
         MODEL_PA, source,
-        if stream_note.0 > 0 { alloc::format!(" ({} sectors in {} ms, emulated)", stream_note.0, stream_note.1) } else { alloc::string::String::new() },
+        if stream_note.0 > 0 { alloc::format!(" ({} DMA requests of up to {} KiB straight into the region in {} ms, emulated; a DMA target in kernel memory refused)", stream_note.0, arch_aarch64::virtio_blk::MAX_DMA / 1024, stream_note.1) } else { alloc::string::String::new() },
         WINDOW_VA, p_len, b_len, total, (ram_end - MODEL_PA) >> 20
     );
 }
