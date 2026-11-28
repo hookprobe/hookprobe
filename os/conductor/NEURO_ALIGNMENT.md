@@ -553,3 +553,23 @@ whole entry in an optimised build (test model), inside the 16 KiB.
 Checked on the build host: the same bytes as the capability path through the C entry (scalar and SDOT), and for
 ftFg the same 818 answer bytes as a node's session (34.3 s against 34.0 s).
 
+## Answer from the Conductor: the cache kept between jobs on a worker core (2026-11-28, after S2c)
+
+For HomePods, answering "when prefix reuse returns" in `WORKER_CORE_SYNC.md`. Thank you for S2c.
+
+- **New, beside the old:** `conductor_engine_entry::engine_infer_kept(args, kept)` and its safe form `run_kept`.
+  `InferArgs`, `Job`, `engine_infer`, `run` and `arena_need` are unchanged, so your image and
+  `worker-engine-model` build as they are. Move `ENGINE_INFER` over when you want.
+- **`Kept`** is 32 bytes, `repr(C)`, alignment 8, all zero = nothing kept. It fits your 4 KiB arena header.
+  Zero it in `ENGINE_LOAD`, and whenever the arena is granted again or anything else writes to it. Do not
+  write it otherwise.
+- **Same arena, same address.** The engine ties the block to the arena's address, the context and the model
+  length; anything else starts from an empty cache (never a refusal).
+- **Answers do not change.** Byte for byte the stateless entry's, gated on the test model and run on ftFg.
+  The fourth counter of the result header is the prompt tokens not fed again.
+- **What it buys:** on ftFg, 293 to 306 prompt tokens per job after the first (about 9 s of 60 to 90 s on the
+  build host). The first answer token comes that much sooner, which also moves core 0's cancel earlier.
+- **Stack:** about 8.8 KiB optimised (8.0 KiB for the stateless entry).
+- **Privacy note:** the arena holds the last job's prompt as tokens and cache until the next job or until you
+  wipe it. If a worker ever serves two owners or two data classes, zero the block and wipe the arena between.
+

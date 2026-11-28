@@ -20,6 +20,9 @@
 //!
 //!   hnx-lm entry --hnx MODEL.hnx --pub PUBKEY.hex --context WINDOW.txt [--scalar]
 //!         the engine job as a worker core runs it: model region, one arena, a window; compared with the node's bytes.
+//!   hnx-lm entry --hnx MODEL.hnx --pub PUBKEY.hex --context W1.txt --context W2.txt ...
+//!         several windows, one job each: every job from an empty cache, then the same jobs with the cache kept
+//!         between calls (`engine_infer_kept`'s safe form); the bytes must be the same.
 //!
 //! `job` is the whole Conductor path around the engine, on this host: the device harness builds the request from
 //! the job's evidence, the (mock) kernel signs a capability, the worker (`conductor-worker`) checks it, makes its
@@ -237,12 +240,36 @@ fn entry(args: &[String]) {
     use conductor_engine_entry::{self as ee, Limits};
     use conductor_p0::core_job::{op, status, Link, HEADER};
     use conductor_p0::P0Executor;
-    use neuro_contract::{USER_HEAD, USER_MID};
+    use neuro_contract::{context_ids, guard, write_system, IdList, Lang, Out, CHAT_ASSISTANT, CHAT_SYSTEM, CHAT_USER, USER_HEAD, USER_MID};
     use neuro_gguf::p0::{self, Mem, Session};
     use std::sync::atomic::{AtomicBool, AtomicU32};
     let path = need(args, "--context");
-    let context = String::from_utf8(std::fs::read(&path).unwrap_or_else(|e| die(&format!("read {path}: {e}")))).unwrap_or_else(|_| die("the context is not UTF-8"));
-    let prompt = format!("{USER_HEAD}{}{USER_MID}Assess this window.", context.trim_end_matches('\n')).into_bytes();
+    let window = |path: &String| {
+        let context = String::from_utf8(std::fs::read(path).unwrap_or_else(|e| die(&format!("read {path}: {e}")))).unwrap_or_else(|_| die("the context is not UTF-8"));
+        let context = context.trim_end_matches('\n');
+        // The prompt the device sends, as `triage` builds it: guard A on the context, Neuro's system prompt
+        // with the closed schema for the ids shown, the user framing.
+        let mut shown = vec![0u8; context.len() * 4 + 256];
+        let mut o = Out::new(&mut shown);
+        guard::guard_a(context.as_bytes(), &mut o).unwrap_or_else(|e| die(&format!("guard A: {e:?}")));
+        let n_shown = o.n;
+        let shown = &shown[..n_shown];
+        let (mut facts, mut ents) = (IdList::new(), IdList::new());
+        context_ids(shown, &mut facts, &mut ents).unwrap_or_else(|e| die(&format!("context ids: {e:?}")));
+        let mut pbuf = vec![0u8; 1 << 16];
+        let mut p = Out::new(&mut pbuf);
+        let put = |p: &mut Out, b: &[u8]| p.put(b).unwrap_or_else(|_| die("the prompt is too large"));
+        put(&mut p, CHAT_SYSTEM.as_bytes());
+        write_system(Lang::En, &facts, &ents, true, &mut p).unwrap_or_else(|e| die(&format!("system prompt: {e:?}")));
+        for part in [CHAT_USER.as_bytes(), USER_HEAD.as_bytes(), shown, USER_MID.as_bytes(), b"Assess this window.", CHAT_ASSISTANT.as_bytes()] {
+            put(&mut p, part);
+        }
+        let n = p.n;
+        pbuf.truncate(n);
+        pbuf
+    };
+    let prompt = window(&path);
+    let paths: Vec<String> = args.iter().enumerate().filter(|(_, a)| *a == "--context").filter_map(|(i, _)| args.get(i + 1).cloned()).collect();
     let (ad, payload) = loaded(args);
     let sd = simd(args.iter().any(|a| a == "--scalar"));
     let limits = Limits { max_ctx: u32::try_from(ad.hparams.dims.max_ctx).unwrap_or_else(|_| die("context")), max_answer: 0 };
@@ -264,6 +291,49 @@ fn entry(args: &[String]) {
     let word = |i: usize| u32::from_le_bytes(result[i * 4..i * 4 + 4].try_into().unwrap_or([0; 4]));
     let answer = &result[HEADER..HEADER + value as usize];
     println!("entry: {secs:.1} s; prompt {} bytes; {} prefill passes, {} answer passes, {} answer tokens; answer {} bytes", prompt.len(), word(1), word(2), word(0), answer.len());
+
+    if paths.len() > 1 {
+        // A worker core serving one window after another: the arena and a 32-byte block outlive the call.
+        let mut kept_arena = vec![0xEEu8; need_bytes as usize];
+        let mut kept = ee::Kept::EMPTY;
+        let mut kept_result = vec![0u8; HEADER + 8192];
+        let (mut alone_s, mut kept_s) = (0f64, 0f64);
+        println!("\n{} windows, one job each: from an empty cache, then with the cache kept between calls", paths.len());
+        for (i, path) in paths.iter().enumerate() {
+            let prompt = window(path);
+            let once = |arena: &mut [u8], result: &mut [u8], kept: Option<&mut ee::Kept>| {
+                let job = ee::Job { model: payload, arena, limits, simd: sd, op: op::ENGINE_INFER, a: 0, b: prompt.len() as u64, link: Link { window: &prompt, progress: &progress, cancel: &cancel }, result };
+                let t = Instant::now();
+                let (st, value) = match kept {
+                    Some(k) => ee::run_kept(job, k),
+                    None => ee::run(job),
+                };
+                if st != status::OK {
+                    die(&format!("window {}: status {st:#x}", i + 1));
+                }
+                (t.elapsed().as_secs_f64(), value as usize)
+            };
+            let (a_s, a_len) = once(&mut arena, &mut result, None);
+            let (k_s, k_len) = once(&mut kept_arena, &mut kept_result, Some(&mut kept));
+            let at = |r: &[u8], i: usize| u32::from_le_bytes(r[i * 4..i * 4 + 4].try_into().unwrap_or([0; 4]));
+            if result[HEADER..HEADER + a_len] != kept_result[HEADER..HEADER + k_len] {
+                die(&format!("window {}: the kept cache changed the answer", i + 1));
+            }
+            println!(
+                "window {}: empty cache {a_s:.1} s ({} prefill passes); kept {k_s:.1} s ({} prefill passes, {} prompt tokens not fed again); {} answer tokens, {a_len} bytes, the same from both; {} tokens kept for the next",
+                i + 1,
+                at(&result, 1),
+                at(&kept_result, 1),
+                at(&kept_result, 3),
+                at(&result, 0),
+                kept.tokens()
+            );
+            alone_s += a_s;
+            kept_s += k_s;
+        }
+        println!("total: {alone_s:.1} s from an empty cache, {kept_s:.1} s with the cache kept");
+        return;
+    }
 
     // The node's form: typed memory, a session that stays open.
     let z = p0::sizes(&ad.hparams, MAX_BATCH);

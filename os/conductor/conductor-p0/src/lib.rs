@@ -81,6 +81,18 @@ impl<'a, C: FnMut() -> u64> P0Executor<'a, C> {
     pub fn last_reused(&self) -> usize {
         self.session.reused()
     }
+
+    /// Take up the cache an earlier executor left in the same session memory (`Session::resume`). Before the
+    /// first job only.
+    pub fn resume(&mut self, kept: usize) {
+        self.session.resume(kept);
+    }
+
+    /// Before the executor is dropped: how many tokens the cache holds, for [`P0Executor::resume`] on a later
+    /// executor over the same memory (`Session::suspend`).
+    pub fn suspend(&mut self) -> usize {
+        self.session.suspend()
+    }
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
