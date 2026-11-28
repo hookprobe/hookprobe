@@ -20,7 +20,7 @@ Classes (the worst class in a file wins: D > C > B > A):
 - **C** — cites GPL-2.0 code only as a behaviour or register-value reference ("as Linux does", "Linux uses X").
 - **D** — says it was transcribed, ported, mirrored or copied from GPL-2.0 code, or quotes its lines.
 
-Scope: every `.rs` file in `os/kernel/arch-aarch64/src` and `os/kernel/hboot/src` (59 files; `fwcfg.rs` and `virtio_rng.rs` added 2026-11-23) and
+Scope: every `.rs` file in `os/kernel/arch-aarch64/src` and `os/kernel/hboot/src` (60 files; `fwcfg.rs` and `virtio_rng.rs` added 2026-11-23, `smp.rs` 2026-11-28) and
 `os/kernel/flashstub/src` (8 files, ADR 0070 flash stub, added 2026-11-24; `tools/ci/provenance_check.py` checks it too), plus the
 files in `hal/src`, `sae/src`, `el0-wifi/src`, `el0-wpa/src` and `kernel/src` that cite an external code
 base (14 files). Paths are relative to `os/kernel`. "Linux" in a comment that means HookProbe's own
@@ -128,6 +128,7 @@ Citations give our file:line. Quotes are the comment's own words.
 | `arch-aarch64/src/sdhci.rs` | SDHCI v3 helper layer (base-parameterized) | own `cyw43.rs` (:3, :189, :251, :298, :348); Linux `sdhci_set_transfer_mode` (:340) | "a faithful TRANSCRIPTION of the metal-proven SDHCI knowledge in `cyw43.rs`" (:3); "Matches Linux `sdhci_set_transfer_mode`" (:340) | `sdhci.c` GPL-2.0-or-later | C |
 | `arch-aarch64/src/semihosting.rs` | Arm semihosting exit (QEMU) | Arm semihosting; PSCI | specification facts | — | A |
 | `arch-aarch64/src/smccc.rs` | SMCCC over HVC: PSCI, TRNG (cloud tier) | Arm DEN0098 (:2); Linux `smccc_trng` (:3); Linux `psci_init_smccc` (:15) | "(the Linux `psci_init_smccc` procedure)" (:15) | `psci.c` GPL-2.0-only; `smccc.c` GPL-2.0-only | C |
+| `arch-aarch64/src/smp.rs` | Secondary-core start over PSCI `CPU_ON` (HVC) and the worker-core park loop, tiers without HBoot (ADR 0060 amendment, S0a) | Arm PSCI function id and return codes (:181–:185); Arm architecture system registers | specification facts; no external code base cited | — | A |
 | `arch-aarch64/src/syscall.rs` | EL0 entry / kernel resume glue | none | no external source cited | — | A |
 | `arch-aarch64/src/thread.rs` | Thread trap-frame context | none | no external source cited | — | A |
 | `arch-aarch64/src/timer.rs` | Arm generic timer | Arm architecture | register facts | — | A |
