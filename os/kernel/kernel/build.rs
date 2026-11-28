@@ -62,6 +62,11 @@ fn main() {
     }
     gen_policy_key(&std::env::var("OUT_DIR").unwrap());
     gen_pop_key(&std::env::var("OUT_DIR").unwrap());
+    // ADR 0060 S2: the hard-float engine image a worker core runs (QEMU gate feature `smpboot`). Detached crate,
+    // nested build, target aarch64-unknown-none (NEON), mapped only in worker cores' private tables.
+    if std::env::var("CARGO_FEATURE_SMPBOOT").is_ok() {
+        build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "worker-engine", "workerengine-target", None, "worker_engine.elf");
+    }
     if std::env::var("CARGO_FEATURE_MCTLS").is_ok() {
         build_el0_tlshost(&dir, &std::env::var("OUT_DIR").unwrap());
         // ADR 0050 D4 step 2: the EL0 LAN-services (DNS) server, same substrate
@@ -372,7 +377,19 @@ fn build_el0_crate(kernel_manifest_dir: &str, out_dir: &str, name: &str, tdir: &
 
     // the binary is named after the crate directory (a crate outside os/kernel is passed as a relative path)
     let bin = Path::new(name).file_name().unwrap_or_else(|| panic!("{name}: no crate directory name"));
-    let produced = nested_target.join("aarch64-unknown-none-softfloat/release").join(bin);
+    // The target triple is the crate's own (`.cargo/config.toml` `[build] target`): softfloat for EL0 servers,
+    // hard-float for the worker engine (ADR 0060 S2). Default: softfloat.
+    let triple = std::fs::read_to_string(crate_dir.join(".cargo/config.toml"))
+        .ok()
+        .and_then(|c| {
+            c.lines().find_map(|l| {
+                let l = l.trim();
+                let v = l.strip_prefix("target")?.trim_start().strip_prefix('=')?.trim();
+                Some(v.trim_matches('"').to_string())
+            })
+        })
+        .unwrap_or_else(|| "aarch64-unknown-none-softfloat".to_string());
+    let produced = nested_target.join(&triple).join("release").join(bin);
     let dest = Path::new(out_dir).join(dest_name);
     std::fs::copy(&produced, &dest).unwrap_or_else(|e| {
         panic!("{name} ELF not found at {}: {e}", produced.display())

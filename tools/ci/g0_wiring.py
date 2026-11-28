@@ -48,6 +48,7 @@ CARGO_NOT_IN_GATES = {
     "os/kernel/el0-wasmhost": "EL0 server: built by os/kernel/kernel/build.rs, exercised by validate.sh (g2)",
     "os/kernel/el0-wifi": "EL0 server: built by os/kernel/kernel/build.rs, exercised by validate.sh (g2)",
     "os/kernel/el0-wpa": "EL0 server: built by os/kernel/kernel/build.rs, exercised by validate.sh (g2)",
+    "os/kernel/worker-engine": "ADR 0060 S2 worker engine image: built by os/kernel/kernel/build.rs (feature smpboot), exercised by validate.sh [P-smp-simd] (g2)",
     "os/kernel/wasip1-fixture": "signed wasip1 fixture: built by os/kernel/kernel/build.rs (g2)",
     "os/neuro/el0-neuro": "EL0 server: built by os/kernel/kernel/build.rs (g2)",
     "os/neuro/neuro-core": "built by os/kernel/kernel/build.rs into el0-neuro (g2); its host tests are not yet gated",

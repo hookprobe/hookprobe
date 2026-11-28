@@ -128,7 +128,7 @@ Citations give our file:line. Quotes are the comment's own words.
 | `arch-aarch64/src/sdhci.rs` | SDHCI v3 helper layer (base-parameterized) | own `cyw43.rs` (:3, :189, :251, :298, :348); Linux `sdhci_set_transfer_mode` (:340) | "a faithful TRANSCRIPTION of the metal-proven SDHCI knowledge in `cyw43.rs`" (:3); "Matches Linux `sdhci_set_transfer_mode`" (:340) | `sdhci.c` GPL-2.0-or-later | C |
 | `arch-aarch64/src/semihosting.rs` | Arm semihosting exit (QEMU) | Arm semihosting; PSCI | specification facts | — | A |
 | `arch-aarch64/src/smccc.rs` | SMCCC over HVC: PSCI, TRNG (cloud tier) | Arm DEN0098 (:2); Linux `smccc_trng` (:3); Linux `psci_init_smccc` (:15) | "(the Linux `psci_init_smccc` procedure)" (:15) | `psci.c` GPL-2.0-only; `smccc.c` GPL-2.0-only | C |
-| `arch-aarch64/src/smp.rs` | Secondary-core start (PSCI `CPU_ON` over HVC) and worker-core private stage-1 tables, GICv2 SGI doorbell glue (ADR 0060 S0a/S1) | Arm PSCI (DEN0022), Arm VMSAv8-64 descriptor formats, Arm GICv2 register layout | specification facts; no external code cited | — | A |
+| `arch-aarch64/src/smp.rs` | Secondary-core start (PSCI `CPU_ON` over HVC), worker-core private stage-1 tables, GICv2 SGI doorbell glue, worker engine image load and mapping (ADR 0060 S0a/S1/S2) | Arm PSCI (DEN0022), Arm VMSAv8-64 descriptor formats, Arm GICv2 register layout | specification facts; no external code cited | — | A |
 | `arch-aarch64/src/syscall.rs` | EL0 entry / kernel resume glue | none | no external source cited | — | A |
 | `arch-aarch64/src/thread.rs` | Thread trap-frame context | none | no external source cited | — | A |
 | `arch-aarch64/src/timer.rs` | Arm generic timer | Arm architecture | register facts | — | A |
