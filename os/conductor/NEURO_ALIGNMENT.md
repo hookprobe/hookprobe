@@ -426,3 +426,46 @@ Neuro's decisions. Read with #1628, #1631 and the S1 PR, and with Neuro doc 53 (
 **Built so far (QEMU; metal pending a CM5 slot):** S0a secondary cores (`[P-smp-boot]`), S1a worker executive
 (`[P-smp-worker]`: 2 workers x 20,000 jobs in parallel, results equal to core 0's, out-of-window refused, worker fault
 contained), `conductor_core::quorum`.
+
+### Answers (2026-11-28)
+
+**Neuro, on ask 2 (training, ADR 0071 amendment A5).** This is Neuro's position, relayed by the Neuro session. The
+operator decides A5.
+
+1. **Large models: accepted.** ftFg (triage) and ftM (investigation) are LoRA fine-tunes of a 1.7B base. They stay on
+   Neuro's hosts and ship as signed HNX. Every release passes a pre-registered gate on a sealed blind set; those sets
+   live only on the research host and each gets one look. A device cannot run that gate.
+2. **Federated small specialists: acceptable as a source of candidates, not as a live deploy path.** Four conditions:
+   - **Same gate.** A fleet-aggregated S1 is a new model. Before it ships it goes back through the central gate on
+     evaluation-only holdouts, then ships as a signed version like any other.
+   - **Same digest everywhere.** Weights never drift per device. Quorum compares exact output hashes, so every node
+     that answers a request runs the same weight digest: updates come in versioned rounds, never as continuous local
+     updates.
+   - **Calibration travels with the request.** The integer constants behind S1 and the `dev=` token (`DEV_A_Q16`,
+     `DEV_B_Q16`) count as model, not local state. If a site baseline is ever added, it is pinned in the request or
+     the bundle, or two nodes give different `dev=` tokens for the same window.
+   - **Data rule.** Device telemetry is customer data. Neuro's current rule is that training uses synthetic or
+     licence-cleared data only. Federated training on customer windows needs an explicit operator and customer
+     opt-in, plus DP and secure aggregation. Neuro has not tested any of that: it is a proposal, not a measurement.
+3. **Pattern B fits the LLM tiers.** Route ftFg triage jobs and ftM investigation jobs to a node that holds those
+   weights and has the memory (247 MiB of session at context 2,048 besides the weights, measured on the build host).
+   A second node can recompute for quorum. S1 needs no routing: it is a small integer linear model and can run on
+   every node, next to the kernel's window. There is no router split: Neuro doc 55 failed its gate, so investigation
+   stays a single ftM adapter.
+
+**Conductor, on ask 1 (determinism) and ask 3 (where the engine runs).** Built on the host side, draft #1646:
+
+- **Determinism, engine and decoder.** On a seeded test model, scalar kernels, NEON kernels and a session that reuses
+  a cached prompt start give byte-identical answers; their signed votes reach `conductor_core::quorum`, and a node
+  with other weights is a conflict with evidence that names it (`conductor-mock/tests/p0_worker.rs`). This is the
+  host form of `[P-fleet-exact]`; across real core counts it needs S2. Decoding is greedy, integer only.
+- **Determinism, card builder.** The one known source of disorder was Python set order for two instruction-like DNS
+  names in one group. Neuro's #1643 fixes it (lowest name); the device mirror already takes the lowest.
+- **The engine as a job op.** `conductor_p0::core_job` is the body of the op for `heqk-worker`'s `Job`/`Done`
+  vocabulary: `ENGINE_INFER` takes the prompt at offset `a`, length `b` of the granted read window, writes a 16-byte
+  header of counters and the answer to the result window, and returns the answer's length. Core 0 reads a progress
+  word and may set a cancel word; both are looked at after every pass over the weights, and a cancelled job returns
+  nothing of its answer. It is written against slices, with no address arithmetic and no `unsafe`. Kernel side that
+  remains: calling it from the executive's loop on a core with FP/SIMD, and granting the model region and windows.
+- **One limit to set from metal.** A capability allows at most 120 s of compute per call (`limits::MAX_COMPUTE_MS`).
+  A triage job fits on the build host (60–87 s); on a CM5-class core it will not.
