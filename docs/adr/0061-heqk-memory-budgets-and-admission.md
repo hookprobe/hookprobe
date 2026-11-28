@@ -88,7 +88,10 @@ allocation.
   at 4 GiB; core 0 reads its header through a one-page window of its own tables (VA 0x6_0000_0000) only after
   discovery proved the RAM, and registers it; every worker maps it read-only with 2 MiB blocks; the engine loads
   from it (`[P-mem-model]`, `[P-smp-engine]`). The kernel's own map and frame pool still cover the first GiB only.
-  **Not yet:** filling the region from storage, the CM5 map above 4 GiB, budgets.
+- **Model from storage, QEMU (built):** a model disk is identified by its `HQMODEL1` header; `virtio_blk::open()` skips
+  model disks (the data-disk users never see one) and `open_model()` finds it; core 0 streams the container into the
+  region through its window and the engine answers from it (`[P-mem-model]`). eMMC/NVMe are the metal slot-ins.
+  **Not yet:** the CM5 map above 4 GiB, block mappings for a GiB-scale window, budgets, verification in the kernel (R5).
 
 ## Consequences
 

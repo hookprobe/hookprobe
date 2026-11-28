@@ -63,14 +63,40 @@ fn barrier() {
     unsafe { core::arch::asm!("dsb sy") };
 }
 
-fn find() -> Option<usize> {
-    for i in 0..MMIO_COUNT {
-        let base = MMIO_BASE + i * MMIO_STRIDE;
-        unsafe {
-            if r(base, MAGIC) == 0x7472_6976 && r(base, DEVICE_ID) == VIRTIO_ID_BLOCK {
-                return Some(base);
+/// The virtio-blk transports, in slot order.
+fn blk_slots() -> impl Iterator<Item = (usize, usize)> {
+    (0..MMIO_COUNT).map(|i| (i, MMIO_BASE + i * MMIO_STRIDE)).filter(|&(_, base)| unsafe {
+        r(base, MAGIC) == 0x7472_6976 && r(base, DEVICE_ID) == VIRTIO_ID_BLOCK
+    })
+}
+
+/// ADR 0061: a disk whose LBA 0 starts with this is a MODEL disk (a signed-model container), never a data disk:
+/// `open()` skips it, `open_model()` finds it. Slots are probed once (bring-up reserves ring memory for good).
+pub const MODEL_MAGIC: &[u8; 8] = b"HQMODEL1";
+static SCANNED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+static MODEL_SLOTS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// The first block device whose "is a model disk" answer is `want`, probing each slot at most once.
+fn open_kind(want: bool) -> Option<VirtioBlk> {
+    use core::sync::atomic::Ordering::Relaxed;
+    for (i, base) in blk_slots() {
+        let bit = 1u32 << i;
+        if SCANNED.load(Relaxed) & bit != 0 && (MODEL_SLOTS.load(Relaxed) & bit != 0) != want {
+            continue;
+        }
+        let dev = VirtioBlk::bring_up(base)?;
+        if SCANNED.load(Relaxed) & bit == 0 {
+            let mut s = [0u8; 512];
+            let is_model = dev.read_block(0, &mut s).is_ok() && &s[..8] == MODEL_MAGIC;
+            if is_model {
+                MODEL_SLOTS.fetch_or(bit, Relaxed);
+            }
+            SCANNED.fetch_or(bit, Relaxed);
+            if is_model != want {
+                continue;
             }
         }
+        return Some(dev);
     }
     None
 }
@@ -92,10 +118,18 @@ pub struct VirtioBlk {
 }
 
 impl VirtioBlk {
-    /// Discover + bring up the first virtio-blk device. Returns None if QEMU
+    /// Discover + bring up the first virtio-blk DATA device (a model disk, ADR 0061, is skipped). Returns None if QEMU
     /// attached no `-drive`/`virtio-blk-device` (so a diskless boot skips cleanly).
     pub fn open() -> Option<VirtioBlk> {
-        let base = find()?;
+        open_kind(false)
+    }
+
+    /// ADR 0061: the first model disk (LBA 0 starts with [`MODEL_MAGIC`]), read-only by use.
+    pub fn open_model() -> Option<VirtioBlk> {
+        open_kind(true)
+    }
+
+    fn bring_up(base: usize) -> Option<VirtioBlk> {
         unsafe {
             // Reset -> ACKNOWLEDGE -> DRIVER.
             w(base, STATUS, 0);

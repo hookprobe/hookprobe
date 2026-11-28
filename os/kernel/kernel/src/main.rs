@@ -18072,9 +18072,54 @@ fn p_mem_model(inv: Option<&boot_abi::fdt::Inventory>) {
         arch_aarch64::semihosting::exit(1);
     }
     let h = unsafe { core::slice::from_raw_parts(WINDOW_VA as *const u8, 64) };
+    let mut source = "a loader";
+    let mut stream_note = (0u64, 0u64); // (sectors, ms)
     if &h[..8] != b"HQMODEL1" {
-        kprint!(" [P-mem-model] SKIP no model container at 4 GiB (RAM above 4 GiB exists: {} MiB)\n", (ram_end - MODEL_PA) >> 20);
-        return;
+        // Nothing placed at 4 GiB: stream the container from a model disk (virtio-blk here; eMMC/NVMe on metal).
+        let Some(disk) = arch_aarch64::virtio_blk::VirtioBlk::open_model() else {
+            kprint!(" [P-mem-model] SKIP no model container at 4 GiB and no model disk (RAM above 4 GiB exists: {} MiB)\n", (ram_end - MODEL_PA) >> 20);
+            return;
+        };
+        use hal::BlockDev as _;
+        let mut sec = [0u8; 512];
+        if disk.read_block(0, &mut sec).is_err() {
+            kprint!(" [P-mem-model] FAIL the model disk's first sector could not be read\n");
+            arch_aarch64::semihosting::exit(1);
+        }
+        let total = u64::from_le_bytes([sec[40], sec[41], sec[42], sec[43], sec[44], sec[45], sec[46], sec[47]]);
+        let sectors = total.div_ceil(512);
+        if total < 64 || sectors > disk.block_count() || MODEL_PA.checked_add(total).is_none_or(|e| e > ram_end) {
+            kprint!(" [P-mem-model] FAIL the model disk declares {} B (disk {} sectors, RAM to {:#x})\n", total, disk.block_count(), ram_end);
+            arch_aarch64::semihosting::exit(1);
+        }
+        // Map the whole region into core 0's window (4 KiB pages; a GiB-scale model will want blocks) and fill it.
+        for off in (4096..(sectors * 512) as usize).step_by(4096) {
+            if !mmu.map_page(WINDOW_VA + off, MODEL_PA as usize + off, false) {
+                kprint!(" [P-mem-model] FAIL could not map the region window\n");
+                arch_aarch64::semihosting::exit(1);
+            }
+        }
+        let freq: u64 = {
+            let f: u64;
+            unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
+            f
+        };
+        let now = || -> u64 {
+            let c: u64;
+            unsafe { core::arch::asm!("isb", "mrs {}, cntpct_el0", out(reg) c, options(nomem, nostack)) };
+            c
+        };
+        let t0 = now();
+        for lba in 0..sectors {
+            if disk.read_block(lba, &mut sec).is_err() {
+                kprint!(" [P-mem-model] FAIL read error at sector {}\n", lba);
+                arch_aarch64::semihosting::exit(1);
+            }
+            let dst = (WINDOW_VA + (lba as usize) * 512) as *mut u8;
+            unsafe { core::ptr::copy_nonoverlapping(sec.as_ptr(), dst, 512) };
+        }
+        stream_note = (sectors, now().wrapping_sub(t0) * 1000 / freq.max(1));
+        source = "the model disk (virtio-blk, read-only)";
     }
     let word = |i: usize| u64::from_le_bytes([h[8 + i * 8], h[9 + i * 8], h[10 + i * 8], h[11 + i * 8], h[12 + i * 8], h[13 + i * 8], h[14 + i * 8], h[15 + i * 8]]);
     let (p_off, p_len, b_off, b_len, total) = (word(0), word(1), word(2), word(3), word(4));
@@ -18088,7 +18133,9 @@ fn p_mem_model(inv: Option<&boot_abi::fdt::Inventory>) {
         slot.store(v, Ordering::Relaxed);
     }
     kprint!(
-        " [P-mem-model] PASS model container at {:#x} (above 4 GiB, outside the kernel's map and frame pool): header read through a core-0 window at {:#x}, prefix {} B + bundle {} B, {} B registered as the read-only worker model region (2 MiB blocks); {} MiB of RAM above 4 GiB discovered\n",
-        MODEL_PA, WINDOW_VA, p_len, b_len, total, (ram_end - MODEL_PA) >> 20
+        " [P-mem-model] PASS model container at {:#x} (above 4 GiB, outside the kernel's map and frame pool) from {}{}: header checked through a core-0 window at {:#x}, prefix {} B + bundle {} B, {} B registered as the read-only worker model region (2 MiB blocks); {} MiB of RAM above 4 GiB discovered\n",
+        MODEL_PA, source,
+        if stream_note.0 > 0 { alloc::format!(" ({} sectors in {} ms, emulated)", stream_note.0, stream_note.1) } else { alloc::string::String::new() },
+        WINDOW_VA, p_len, b_len, total, (ram_end - MODEL_PA) >> 20
     );
 }
