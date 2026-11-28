@@ -352,7 +352,8 @@ def rep_cards(events, baseline, intern=True):
             w += 2
         odd = [q for q in names if INSTRUCTION_LIKE.search(q)]
         if odd:
-            flags.append("qname=%s" % quote_untrusted(odd[0]))
+            # min(), not odd[0]: `names` is a set, so odd[0] followed PYTHONHASHSEED (Conductor mirror, 2026-11-28)
+            flags.append("qname=%s" % quote_untrusted(min(odd)))
             w += 3.0  # instruction-like text in telemetry is itself a signal: someone is aiming at the AI
         novel = suf not in baseline["suffixes"]
         note, dw, hits = det_note(src, "", 53)
