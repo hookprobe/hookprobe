@@ -23,3 +23,5 @@ pub mod ring;
 
 #[cfg(target_arch = "aarch64")]
 pub mod gic;
+#[cfg(target_arch = "aarch64")]
+pub mod timer;

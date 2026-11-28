@@ -31,7 +31,7 @@ pub const ST_FAULT: u64 = 3;
 
 /// Maximum cores this stage handles (QEMU gate uses 4; CM5 has 4).
 pub const MAX_CORES: usize = 8;
-const STACK_SIZE: usize = 16 * 1024;
+const STACK_SIZE: usize = 64 * 1024; // S2b: the engine's load path (verify + admit) runs here too
 
 /// Per-core start block. Read by the secondary with its MMU and caches OFF, so core 0
 /// cleans it to the point of coherency before `CPU_ON`. Field offsets are used by the
@@ -395,9 +395,21 @@ unsafe fn map_to(l1: *mut u64, va: usize, pa: usize, len: usize, attrs: u64) -> 
 // so core 0 cannot execute the engine, and the engine has no writable segment (refused here, and asserted by its
 // link map), so one copy serves every worker.
 
+/// S2b: per-worker memory for the engine (model copy, session, executor state) and its answers. Only the first
+/// ARENA_CORES cores get one (the QEMU gate uses cores 2 and 3).
+const ARENA_CORES: usize = 4;
+pub const ARENA_BYTES: usize = 4 * 1024 * 1024;
+pub const RESULT_BYTES: usize = 64 * 1024;
+#[repr(C, align(4096))]
+struct Arena {
+    mem: [u8; ARENA_BYTES],
+    result: [u8; RESULT_BYTES],
+}
+static mut ARENAS: [Arena; ARENA_CORES] = [const { Arena { mem: [0; ARENA_BYTES], result: [0; RESULT_BYTES] } }; ARENA_CORES];
+
 /// Link VA of the engine image (see `os/kernel/worker-engine/link.ld`).
 pub const ENGINE_VA: usize = 0xB000_0000;
-const ENGINE_MAX: usize = 512 * 1024;
+const ENGINE_MAX: usize = 2 * 1024 * 1024;
 const ENGINE_MAX_SEGS: usize = 8;
 
 #[repr(C, align(4096))]
@@ -492,6 +504,13 @@ fn build_worker_tables(idx: usize) -> Option<u64> {
                 return None;
             }
         }
+        // S2b: this worker's own arena + result region, read-write, mapped for no other core's tables.
+        if idx < ARENA_CORES {
+            let ar = core::ptr::addr_of!(ARENAS[idx]) as usize;
+            if !map_range(l1, ar, ar + core::mem::size_of::<Arena>(), RW_DATA) {
+                return None;
+            }
+        }
         let ok = map_range(l1, text.0, text.1, TEXT)
             && map_range(l1, text.1, rodata_end, RODATA)
             && map_range(l1, area, area + core::mem::size_of::<CoreShared>(), RW_DATA)
@@ -525,6 +544,8 @@ pub const SGI_DOORBELL: u32 = 1;
 /// QEMU `virt` GICv2 bases (`smpboot` is refused with `cm5`; CM5 gets its own in S0b/S1 metal).
 const GICD: usize = 0x0800_0000;
 const GICC: usize = 0x0801_0000;
+/// S1c: worker timer rate = counter frequency / this (1 kHz heartbeat).
+const TICK_PERIOD_DIV: Option<u64> = Some(1000);
 /// Words in the shared read-only data window.
 pub const WINDOW_WORDS: usize = 8192;
 
@@ -572,6 +593,16 @@ impl Port {
                 engine: ENGINE_ENTRY.load(Ordering::Relaxed),
                 cpacr: AtomicU64::new(0),
                 isar0: AtomicU64::new(0),
+                tick_period: TICK_PERIOD_DIV.map_or(0, |d| heqk_worker::timer::freq() / d),
+                ticks: AtomicU64::new(0),
+                last_tick: AtomicU64::new(0),
+                busy_since: AtomicU64::new(0),
+                arena: if idx < ARENA_CORES { core::ptr::addr_of!(ARENAS[idx].mem) as u64 } else { 0 },
+                arena_len: if idx < ARENA_CORES { ARENA_BYTES as u64 } else { 0 },
+                result: if idx < ARENA_CORES { core::ptr::addr_of!(ARENAS[idx].result) as u64 } else { 0 },
+                result_len: if idx < ARENA_CORES { RESULT_BYTES as u64 } else { 0 },
+                progress: core::sync::atomic::AtomicU32::new(0),
+                cancel: core::sync::atomic::AtomicBool::new(false),
             }) as *mut Ctx
         };
         Some(Port { idx, jobs: jp, done: dc, ctx })
@@ -610,6 +641,40 @@ impl Port {
                 (*core::ptr::addr_of!((*self.ctx).isar0)).load(Ordering::Relaxed),
             )
         }
+    }
+
+    /// S1c heartbeat: (timer ticks handled while idle, counter at the last one, counter when the current job
+    /// started or 0 when idle).
+    pub fn heartbeat(&self) -> (u64, u64, u64) {
+        // SAFETY: only atomic fields are read.
+        unsafe {
+            (
+                (*core::ptr::addr_of!((*self.ctx).ticks)).load(Ordering::Acquire),
+                (*core::ptr::addr_of!((*self.ctx).last_tick)).load(Ordering::Relaxed),
+                (*core::ptr::addr_of!((*self.ctx).busy_since)).load(Ordering::Acquire),
+            )
+        }
+    }
+
+    /// S2b: the engine's answer-token counter for the job in flight.
+    pub fn progress(&self) -> u32 {
+        // SAFETY: only the atomic field is read.
+        unsafe { (*core::ptr::addr_of!((*self.ctx).progress)).load(Ordering::Acquire) }
+    }
+
+    /// S2b: ask the engine to stop the job in flight (read after every pass over the weights).
+    pub fn set_cancel(&self, on: bool) {
+        // SAFETY: only the atomic field is written.
+        unsafe { (*core::ptr::addr_of!((*self.ctx).cancel)).store(on, Ordering::Release) }
+    }
+
+    /// S2b: this worker's result region (read by core 0 after the job's Done; the ring's acquire orders it).
+    pub fn result(&self) -> Option<&'static mut [u8]> {
+        if self.idx >= ARENA_CORES {
+            return None;
+        }
+        // SAFETY: core 0 reads/clears it only between jobs.
+        Some(unsafe { core::slice::from_raw_parts_mut(core::ptr::addr_of_mut!(ARENAS[self.idx].result) as *mut u8, RESULT_BYTES) })
     }
 
     pub fn served(&self) -> u64 {

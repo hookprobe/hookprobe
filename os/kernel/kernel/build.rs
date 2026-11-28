@@ -66,6 +66,7 @@ fn main() {
     // nested build, target aarch64-unknown-none (NEON), mapped only in worker cores' private tables.
     if std::env::var("CARGO_FEATURE_SMPBOOT").is_ok() {
         build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "worker-engine", "workerengine-target", None, "worker_engine.elf");
+        build_worker_engine_model(&dir, &std::env::var("OUT_DIR").unwrap());
     }
     if std::env::var("CARGO_FEATURE_MCTLS").is_ok() {
         build_el0_tlshost(&dir, &std::env::var("OUT_DIR").unwrap());
@@ -295,6 +296,55 @@ fn build_el0_tlshost(kernel_manifest_dir: &str, out_dir: &str) {
     println!("cargo:rerun-if-changed={}", dir.join("../hal/src/tlsabi.rs").display());
     // ADR 0050 D4 step 1: the EL0 server compiles the kernel's own request parser (#[path])
     println!("cargo:rerun-if-changed={}", dir.join("src/httpreq.rs").display());
+}
+
+// ADR 0060 S2b — the [P-smp-engine] gate's model: a build-HOST tool (tools/build/worker-engine-model) builds the
+// Conductor's tiny seeded model as a signed HNX bundle, answers the gate's prompt on this host with scalar kernels,
+// and writes model.prefix / model.bundle / model.pk / prompt.bin / golden.bin / status_cancelled.bin to OUT_DIR.
+// The kernel embeds them; the gate requires the worker core's answer to equal this host's byte for byte.
+// Fail-closed like the EL0 builds: no model, no smpboot kernel.
+fn build_worker_engine_model(kernel_manifest_dir: &str, out_dir: &str) {
+    use std::path::Path;
+    use std::process::Command;
+    let tool = Path::new(kernel_manifest_dir).join("../../../tools/build/worker-engine-model");
+    let tool = tool.canonicalize().expect("tools/build/worker-engine-model missing");
+    let conductor = Path::new(kernel_manifest_dir).join("../../conductor").canonicalize().expect("os/conductor missing");
+    println!("cargo:rerun-if-changed={}", tool.join("src").display());
+    println!("cargo:rerun-if-changed={}", tool.join("Cargo.toml").display());
+    println!("cargo:rerun-if-changed={}", tool.join("Cargo.lock").display());
+    for c in ["conductor-core", "conductor-p0", "neuro-contract", "neuro-gguf", "neuro-hnx", "neuro-kernels", "neuro-lm", "tok-build"] {
+        println!("cargo:rerun-if-changed={}", conductor.join(c).join("src").display());
+    }
+    let target = Path::new(out_dir).join("wem-target");
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build").arg("--release").arg("--manifest-path").arg(tool.join("Cargo.toml")).arg("--target-dir").arg(&target).current_dir(&tool);
+    for (k, _) in std::env::vars() {
+        if k == "RUSTFLAGS"
+            || k == "CARGO_ENCODED_RUSTFLAGS"
+            || k == "RUSTC"
+            || k == "RUSTC_WRAPPER"
+            || k == "RUSTC_WORKSPACE_WRAPPER"
+            || k == "CARGO"
+            || k == "CARGO_TARGET_DIR"
+            || k == "CARGO_BUILD_TARGET"
+            || k == "OUT_DIR"
+            || k == "TARGET"
+            || k == "HOST"
+            || k == "NUM_JOBS"
+            || k == "CARGO_MANIFEST_DIR"
+            || k == "CARGO_MANIFEST_LINKS"
+            || k == "CARGO_PRIMARY_PACKAGE"
+            || k.starts_with("CARGO_FEATURE_")
+            || k.starts_with("CARGO_CFG_")
+            || k.starts_with("CARGO_PKG_")
+        {
+            cmd.env_remove(k);
+        }
+    }
+    let ok = cmd.status().map(|s| s.success()).unwrap_or(false);
+    assert!(ok, "worker-engine-model build FAILED: the smpboot kernel cannot embed its gate model");
+    let ok = Command::new(target.join("release/worker-engine-model")).arg(out_dir).status().map(|s| s.success()).unwrap_or(false);
+    assert!(ok, "worker-engine-model run FAILED");
 }
 
 fn build_el0_crate(kernel_manifest_dir: &str, out_dir: &str, name: &str, tdir: &str, feature: Option<&str>, dest_name: &str) {

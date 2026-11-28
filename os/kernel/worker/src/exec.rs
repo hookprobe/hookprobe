@@ -25,12 +25,29 @@ pub struct Ctx {
     /// Published by the worker: CPACR_EL1 after it enabled FP/SIMD for itself, and ID_AA64ISAR0_EL1.
     pub cpacr: AtomicU64,
     pub isar0: AtomicU64,
+    /// S1c: this core's timer period in counter ticks (0 = no timer). Set by core 0 before start.
+    pub tick_period: u64,
+    /// Published by the worker: timer expiries handled while idle (a heartbeat), and the counter value at the
+    /// last one. A worker that stops ticking while idle is dead or wedged.
+    pub ticks: AtomicU64,
+    pub last_tick: AtomicU64,
+    /// Published by the worker: the counter value when the current job started, 0 when idle. A busy worker does not
+    /// tick (IRQs stay masked during a job), so core 0 tells "long job" from "dead" with this.
+    pub busy_since: AtomicU64,
+    /// S2b: this worker's arena and result region (read-write, mapped only for this worker), set by core 0.
+    pub arena: u64,
+    pub arena_len: u64,
+    pub result: u64,
+    pub result_len: u64,
+    /// S2b: written by the engine after every pass / set by core 0 to stop the job in flight.
+    pub progress: core::sync::atomic::AtomicU32,
+    pub cancel: core::sync::atomic::AtomicBool,
 }
 
 /// Execute one job. Pure except for the deliberate fault and the reads inside the granted window.
 /// `engine` is the entry of the hard-float engine image (0 = none); it is only called on a worker core that has
 /// enabled FP/SIMD for itself.
-pub fn execute(j: &Job, window_base: u64, window_len: u64, engine: usize) -> Done {
+pub fn execute(j: &Job, window_base: u64, window_len: u64, engine: usize, clock: fn() -> u64, env: &job::EngineEnv) -> Done {
     let (st, value) = match j.op {
         op::ECHO => (status::OK, j.a ^ j.b),
         op::SUM64 => {
@@ -69,14 +86,23 @@ pub fn execute(j: &Job, window_base: u64, window_len: u64, engine: usize) -> Don
             unsafe { core::ptr::write_volatile(j.a as usize as *mut u64, j.b) };
             (status::OK, 0)
         }
-        op::GEMV_I8 => gemv(j, window_base, window_len, engine),
+        op::GEMV_I8 => gemv(j, window_base, window_len, engine, env),
+        op::ENGINE_LOAD => {
+            if !job::in_window(j.a, core::mem::size_of::<job::EngineLoad>() as u64, 8, window_base, window_len) {
+                return done(j, status::OUT_OF_WINDOW, 0);
+            }
+            call_engine(engine, op::ENGINE_LOAD, j.a, 0, env)
+        }
+        // The prompt's range is an offset/length INSIDE the window; the engine bounds it (core_job::run).
+        op::ENGINE_INFER => call_engine(engine, op::ENGINE_INFER, j.a, j.b, env),
+        op::SPIN => spin(j.a, j.b, clock),
         _ => (status::UNKNOWN_OP, 0),
     };
     done(j, st, value)
 }
 
 /// GEMV_I8: the parameter block, W and x must all lie in the read-only window; y lives on this core's stack.
-fn gemv(j: &Job, window_base: u64, window_len: u64, engine: usize) -> (u32, u64) {
+fn gemv(j: &Job, window_base: u64, window_len: u64, engine: usize, env: &job::EngineEnv) -> (u32, u64) {
     let psz = core::mem::size_of::<job::GemvParams>() as u64;
     if !job::in_window(j.a, psz, 8, window_base, window_len) {
         return (status::OUT_OF_WINDOW, 0);
@@ -102,19 +128,43 @@ fn gemv(j: &Job, window_base: u64, window_len: u64, engine: usize) -> (u32, u64)
         };
         job::gemv_i8_scalar(w, x, rows, cols, &mut y);
         status::OK
-    } else if engine != 0 {
-        // SAFETY: `engine` is the entry core 0 mapped into this worker's tables; FP/SIMD is enabled on this core
-        // (`run`); the parameter block, W and x were checked against the window; y holds GEMV_MAX_ROWS.
-        let f: job::EngineEntry = unsafe { core::mem::transmute::<usize, job::EngineEntry>(engine) };
-        let params = j.a as usize as *const job::GemvParams;
-        unsafe { f(op::GEMV_I8, params, y.as_mut_ptr(), y.len()) }
     } else {
-        status::UNSUPPORTED
+        // The engine computes y into this call's scratch (the parameter block, W and x were checked above).
+        let e = job::EngineEnv { scratch: y.as_mut_ptr() as u64, scratch_len: y.len() as u64, ..*env };
+        call_engine(engine, op::GEMV_I8, j.a, 0, &e).0
     };
     if st != status::OK {
         return (st, 0);
     }
     (status::OK, job::hash_i32(&y[..rows]))
+}
+
+/// Call the hard-float engine image (S2a/S2b). UNSUPPORTED when this worker has none.
+fn call_engine(engine: usize, opc: u32, a: u64, b: u64, env: &job::EngineEnv) -> (u32, u64) {
+    if engine == 0 {
+        return (status::UNSUPPORTED, 0);
+    }
+    // SAFETY: `engine` is the entry core 0 mapped executable in this worker's private tables; FP/SIMD is enabled
+    // on this core (`run`); every address in `env` lies in a region core 0 mapped for this worker.
+    let f: job::EngineEntry = unsafe { core::mem::transmute::<usize, job::EngineEntry>(engine) };
+    let mut value = 0u64;
+    let st = unsafe { f(opc, a, b, env, &mut value) };
+    (st, value)
+}
+
+/// SPIN: `iters` rounds of an integer mix, checking the clock every 1024 rounds against `budget` ticks.
+fn spin(iters: u64, budget: u64, clock: fn() -> u64) -> (u32, u64) {
+    let start = clock();
+    let mut h: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut i = 0u64;
+    while i < iters {
+        h = (h ^ i).wrapping_mul(0x0000_0100_0000_01b3).rotate_left(17);
+        i += 1;
+        if i % 1024 == 0 && clock().wrapping_sub(start) > budget {
+            return (status::DEADLINE, i);
+        }
+    }
+    (status::OK, h)
 }
 
 fn done(j: &Job, status: u32, value: u64) -> Done {
@@ -147,10 +197,30 @@ pub unsafe fn run(ctx: &mut Ctx) -> ! {
     };
     ctx.cpacr.store(cpacr, Ordering::Relaxed);
     ctx.isar0.store(isar0, Ordering::Relaxed);
+    // S1c: this core's own timer, a heartbeat while idle.
+    if ctx.tick_period != 0 {
+        // SAFETY: GICD base from core 0; banked PPI of this core.
+        unsafe { crate::gic::enable_ppi(ctx.gicd, crate::timer::INTID) };
+        crate::timer::arm(ctx.tick_period);
+    }
     ctx.cpu_mask.store(mask, Ordering::Release);
     loop {
         while let Some(j) = ctx.jobs.pop() {
-            let d = execute(&j, ctx.window_base, ctx.window_len, ctx.engine);
+            ctx.busy_since.store(crate::timer::now().max(1), Ordering::Release);
+            let env = job::EngineEnv {
+                window: ctx.window_base,
+                window_len: ctx.window_len,
+                arena: ctx.arena,
+                arena_len: ctx.arena_len,
+                result: ctx.result,
+                result_len: ctx.result_len,
+                scratch: 0,
+                scratch_len: 0,
+                progress: &ctx.progress as *const _ as u64,
+                cancel: &ctx.cancel as *const _ as u64,
+            };
+            let d = execute(&j, ctx.window_base, ctx.window_len, ctx.engine, crate::timer::now, &env);
+            ctx.busy_since.store(0, Ordering::Release);
             while !ctx.done.push(d) {
                 core::hint::spin_loop(); // core 0 drains results; the ring is sized for a burst
             }
@@ -160,26 +230,52 @@ pub unsafe fn run(ctx: &mut Ctx) -> ! {
         }
         // SAFETY: after enable_doorbell on this core. A doorbell rung while we were draining is
         // still pending, so this returns at once: no lost wake-up.
-        unsafe { crate::gic::wait(ctx.gicc) };
+        let (period, ticks, last) = (ctx.tick_period, &ctx.ticks, &ctx.last_tick);
+        unsafe {
+            crate::gic::wait(ctx.gicc, |id| {
+                if id == crate::timer::INTID && period != 0 {
+                    // Re-arm before EOI (the timer is level-sensitive), then publish the heartbeat.
+                    crate::timer::arm(period);
+                    last.store(crate::timer::now(), Ordering::Relaxed);
+                    ticks.fetch_add(1, Ordering::Release);
+                }
+            })
+        };
     }
 }
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use super::*;
+
+    static CLOCK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    /// Advances by 1 on every read: a budget of N ticks lets about N*1024 rounds run.
+    fn fake_clock() -> u64 {
+        CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[test]
+    fn spin_stops_at_its_budget() {
+        let done = execute(&Job { id: 1, op: op::SPIN, a: 1 << 40, b: 10 }, 0, 0, 0, fake_clock, &job::EngineEnv::default());
+        assert_eq!(done.status, status::DEADLINE);
+        assert!(done.value >= 10 * 1024 && done.value <= 13 * 1024, "{}", done.value);
+        let small = execute(&Job { id: 2, op: op::SPIN, a: 100, b: 10 }, 0, 0, 0, fake_clock, &job::EngineEnv::default());
+        assert_eq!(small.status, status::OK);
+    }
 
     #[test]
     fn execute_checks_the_window() {
         static DATA: [u64; 4] = [1, 2, 3, u64::MAX];
         let base = DATA.as_ptr() as u64;
-        let ok = execute(&Job { id: 7, op: op::SUM64, a: base, b: 4 }, base, 32, 0);
+        let ok = execute(&Job { id: 7, op: op::SUM64, a: base, b: 4 }, base, 32, 0, fake_clock, &job::EngineEnv::default());
         assert_eq!(ok, Done { id: 7, status: status::OK, value: 5 }); // wraps
-        let out = execute(&Job { id: 8, op: op::SUM64, a: base, b: 5 }, base, 32, 0);
+        let out = execute(&Job { id: 8, op: op::SUM64, a: base, b: 5 }, base, 32, 0, fake_clock, &job::EngineEnv::default());
         assert_eq!(out.status, status::OUT_OF_WINDOW);
-        let huge = execute(&Job { id: 9, op: op::SUM64, a: base, b: u64::MAX }, base, 32, 0);
+        let huge = execute(&Job { id: 9, op: op::SUM64, a: base, b: u64::MAX }, base, 32, 0, fake_clock, &job::EngineEnv::default());
         assert_eq!(huge.status, status::OUT_OF_WINDOW);
-        assert_eq!(execute(&Job { id: 1, op: op::ECHO, a: 5, b: 3 }, 0, 0, 0).value, 6);
-        assert_eq!(execute(&Job { id: 2, op: 42, a: 0, b: 0 }, 0, 0, 0).status, status::UNKNOWN_OP);
+        assert_eq!(execute(&Job { id: 1, op: op::ECHO, a: 5, b: 3 }, 0, 0, 0, fake_clock, &job::EngineEnv::default()).value, 6);
+        assert_eq!(execute(&Job { id: 2, op: 42, a: 0, b: 0 }, 0, 0, 0, fake_clock, &job::EngineEnv::default()).status, status::UNKNOWN_OP);
     }
 
     #[test]
@@ -194,7 +290,7 @@ mod tests {
         let (rows, cols) = (8u32, 32u32);
         let p = job::GemvParams { w: base + 64, x: base + 64 + 256, rows, cols, path: job::path::SCALAR, _pad: 0 };
         unsafe { core::ptr::write(win.0.as_mut_ptr() as *mut job::GemvParams, p) };
-        let d = execute(&Job { id: 1, op: op::GEMV_I8, a: base, b: 0 }, base, 4096, 0);
+        let d = execute(&Job { id: 1, op: op::GEMV_I8, a: base, b: 0 }, base, 4096, 0, fake_clock, &job::EngineEnv::default());
         let w: &[i8] = unsafe { core::slice::from_raw_parts((base + 64) as *const i8, 256) };
         let x: &[i8] = unsafe { core::slice::from_raw_parts((base + 320) as *const i8, 32) };
         let mut y = [0i32; 8];
@@ -202,12 +298,12 @@ mod tests {
         assert_eq!(d, Done { id: 1, status: status::OK, value: job::hash_i32(&y) });
         // NEON without an engine image: unsupported, never computed elsewhere.
         unsafe { (*(win.0.as_mut_ptr() as *mut job::GemvParams)).path = job::path::NEON };
-        assert_eq!(execute(&Job { id: 2, op: op::GEMV_I8, a: base, b: 0 }, base, 4096, 0).status, status::UNSUPPORTED);
+        assert_eq!(execute(&Job { id: 2, op: op::GEMV_I8, a: base, b: 0 }, base, 4096, 0, fake_clock, &job::EngineEnv::default()).status, status::UNSUPPORTED);
         // W running past the window.
         unsafe { (*(win.0.as_mut_ptr() as *mut job::GemvParams)).rows = 200 };
-        assert_eq!(execute(&Job { id: 3, op: op::GEMV_I8, a: base, b: 0 }, base, 4096, 0).status, status::OUT_OF_WINDOW);
+        assert_eq!(execute(&Job { id: 3, op: op::GEMV_I8, a: base, b: 0 }, base, 4096, 0, fake_clock, &job::EngineEnv::default()).status, status::OUT_OF_WINDOW);
         // cols not a multiple of 16.
         unsafe { (*(win.0.as_mut_ptr() as *mut job::GemvParams)).cols = 30 };
-        assert_eq!(execute(&Job { id: 4, op: op::GEMV_I8, a: base, b: 0 }, base, 4096, 0).status, status::BAD_PARAMS);
+        assert_eq!(execute(&Job { id: 4, op: op::GEMV_I8, a: base, b: 0 }, base, 4096, 0, fake_clock, &job::EngineEnv::default()).status, status::BAD_PARAMS);
     }
 }
