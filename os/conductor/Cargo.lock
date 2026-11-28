@@ -105,8 +105,25 @@ name = "conductor-mock"
 version = "0.0.26"
 dependencies = [
  "conductor-core",
+ "conductor-p0",
  "conductor-worker",
  "neuro-contract",
+ "neuro-gguf",
+ "neuro-hnx",
+ "neuro-kernels",
+ "neuro-lm",
+ "tok-build",
+]
+
+[[package]]
+name = "conductor-p0"
+version = "0.0.26"
+dependencies = [
+ "conductor-core",
+ "conductor-worker",
+ "neuro-contract",
+ "neuro-gguf",
+ "neuro-lm",
 ]
 
 [[package]]

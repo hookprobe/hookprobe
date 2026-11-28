@@ -367,3 +367,81 @@ pub fn bundle(parts: [&[u8]; 4]) -> Option<Vec<u8>> {
     Some(b)
 }
 
+/// A minimal valid Qwen3 GGUF file for tests: one block, width 32, one head, every weight the same. Its
+/// vocabulary is `tokens` (the tokenizer metadata a real file has is not written: build the tokenizer tables
+/// from the same list with [`blob`]). It computes nothing meaningful; it exercises every code path a real
+/// model does.
+pub fn tiny_qwen3_gguf(tokens: &[Vec<u8>], train_ctx: u32) -> Vec<u8> {
+    fn s(v: &mut Vec<u8>, x: &[u8]) {
+        v.extend_from_slice(&(x.len() as u64).to_le_bytes());
+        v.extend_from_slice(x);
+    }
+    let vocab = tokens.len();
+    let (mut kv, mut n_kv) = (vec![], 0u64);
+    let mut put = |key: &str, ty: u32, val: &[u8]| {
+        s(&mut kv, key.as_bytes());
+        kv.extend_from_slice(&ty.to_le_bytes());
+        kv.extend_from_slice(val);
+        n_kv += 1;
+    };
+    let (u32t, f32t, strt, arrt) = (4u32, 6u32, 8u32, 9u32);
+    let mut arch = vec![];
+    s(&mut arch, b"qwen3");
+    put("general.architecture", strt, &arch);
+    for (k, v) in [("qwen3.block_count", 1u32), ("qwen3.context_length", train_ctx), ("qwen3.embedding_length", 32), ("qwen3.feed_forward_length", 32), ("qwen3.attention.head_count", 1), ("qwen3.attention.head_count_kv", 1), ("qwen3.attention.key_length", 32)] {
+        put(k, u32t, &v.to_le_bytes());
+    }
+    put("qwen3.rope.freq_base", f32t, &1e6f32.to_bits().to_le_bytes());
+    put("qwen3.attention.layer_norm_rms_epsilon", f32t, &1e-6f32.to_bits().to_le_bytes());
+    let mut toks = strt.to_le_bytes().to_vec();
+    toks.extend_from_slice(&(vocab as u64).to_le_bytes());
+    for t in tokens {
+        s(&mut toks, t);
+    }
+    put("tokenizer.ggml.tokens", arrt, &toks);
+    let q8 = |rows: usize| -> Vec<u8> {
+        let mut v = vec![];
+        for _ in 0..rows {
+            v.extend_from_slice(&0x2000u16.to_le_bytes());
+            v.extend_from_slice(&[1u8; 32]);
+        }
+        v
+    };
+    let ones: Vec<u8> = 1.0f32.to_bits().to_le_bytes().repeat(32);
+    let (mut ti, mut data, mut n_t) = (vec![], vec![], 0u64);
+    let mut tensor = |name: &str, ty: u32, dims: &[u64], bytes: &[u8]| {
+        while !data.len().is_multiple_of(32) {
+            data.push(0);
+        }
+        s(&mut ti, name.as_bytes());
+        ti.extend_from_slice(&(dims.len() as u32).to_le_bytes());
+        for d in dims {
+            ti.extend_from_slice(&d.to_le_bytes());
+        }
+        ti.extend_from_slice(&ty.to_le_bytes());
+        ti.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        data.extend_from_slice(bytes);
+        n_t += 1;
+    };
+    let (f32_tensor, q8_tensor) = (0u32, 8u32);
+    tensor("token_embd.weight", q8_tensor, &[32, vocab as u64], &q8(vocab));
+    tensor("output_norm.weight", f32_tensor, &[32], &ones);
+    for n in ["attn_norm", "attn_q_norm", "attn_k_norm", "ffn_norm"] {
+        tensor(&format!("blk.0.{n}.weight"), f32_tensor, &[32], &ones);
+    }
+    for n in ["attn_q", "attn_k", "attn_v", "attn_output", "ffn_gate", "ffn_up", "ffn_down"] {
+        tensor(&format!("blk.0.{n}.weight"), q8_tensor, &[32, 32], &q8(32));
+    }
+    let mut f = b"GGUF".to_vec();
+    f.extend_from_slice(&3u32.to_le_bytes());
+    f.extend_from_slice(&n_t.to_le_bytes());
+    f.extend_from_slice(&n_kv.to_le_bytes());
+    f.extend_from_slice(&kv);
+    f.extend_from_slice(&ti);
+    while !f.len().is_multiple_of(32) {
+        f.push(0);
+    }
+    f.extend_from_slice(&data);
+    f
+}
+

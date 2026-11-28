@@ -276,6 +276,27 @@ Still open in this path: the
 signature is Ed25519 with a test key; release signing and the hybrid scheme are the platform's. The tables are
 covered by the signature and are not re-derived: the device cannot compute a cosine.
 
+### The worker's compute is the engine (`conductor-p0`)
+
+`conductor-worker` checks the capability, makes its replay mark durable and signs the result; what it runs is an
+`Executor`. `conductor-p0::P0Executor` is that executor on a heqk node: one admitted model in one P0 session.
+
+- It serves one model digest and `infer` only. Anything else gets an ERROR frame.
+- The answer is closed over the facts and aliases of the context the device sent. The executor reads them from
+  the prompt (between the user framing's head and its question) with the device's own rule
+  (`neuro_contract::context_ids`). A prompt without that block, or with no fact, is refused: the node never
+  decodes outside the contract.
+- An answer that does not fit the output the capability allows is an error, not a cut answer.
+- The session keeps the prompt's identical start between jobs, so a second job feeds only what differs.
+
+`conductor-mock/tests/p0_worker.rs` runs the whole path with no scripted answer: the device harness, a signed
+capability, the worker, a signed bundle loaded in place and admitted, the engine session, the signed result, and
+the device's verifier. The model there is a one-block test model whose weights are all equal, so the contract
+alone shapes its answer. A job that requires no citation verifies as valid; the same answer on a job with a
+required fact is held back by the verifier as incomplete; a second job reuses the cached prompt start; another
+model digest is refused before anything is decoded. This is a host test. The node's EL0 wiring, block device
+and kernel-held key are still kernel work (below).
+
 ## neuro-lm: the language-model pieces
 
 Integer-only, `no_std`, no allocation, no `unsafe`, no float (enforced by test). Kernels in
@@ -520,6 +541,7 @@ kernel, and x86.
 | Crate | What | Target |
 |---|---|---|
 | [`conductor-core/`](conductor-core/) | protocol, HP-EXEC v1, classes, tools, strict JSON, verifier, placement, ledger, harness, worker gate; signer behind `--features signer` | `no_std`, no alloc, `forbid(unsafe_code)`; clippy denies indexing, unwrap/expect/panic, unchecked arithmetic, truncating casts |
+| [`conductor-p0/`](conductor-p0/) | the worker's `Executor` over the native engine session: a heqk node's `infer` | `no_std`, no alloc, no float, `forbid(unsafe_code)` |
 | [`conductor-mock/`](conductor-mock/) | mock kernel + mock worker, the C0 gate tests, fuzzing, host timing | host only |
 | [`el0-harness/`](el0-harness/) | the harness as an EL0 excursion server (no signer, no key) | `aarch64-unknown-none-softfloat`, pinned heqk nightly |
 
@@ -629,7 +651,8 @@ cd os/conductor && cargo run --release -p tok-build --bin fidelity -- --dir DIR 
   store (the record layer is built and power-loss tested: `durable.rs`, KR-3); broadcast epoch announcements; wire `el0-harness` behind a feature; assign its
   address range; time Ed25519 verify at opt-level "z" on CM5.
 - **Remote workers**: only as heqk-native nodes (heqk on the worker machine), after ADR 0068 and the
-  kernel requests. No Linux-hosted worker. The worker side is built (`conductor-worker`, C2 host part). The
+  kernel requests. No Linux-hosted worker. The worker side is built (`conductor-worker`, C2 host part), and its
+  compute is bound to the engine (`conductor-p0`). The
   node still needs its own EL0 wiring, its block device and its key held by its kernel.
 - Third-party applications (containers / microVMs on a companion host) are outside C0 and need their own
   ADR.

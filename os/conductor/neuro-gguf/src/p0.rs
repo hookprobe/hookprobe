@@ -272,6 +272,51 @@ impl<'a> Session<'a> {
         Ok(n)
     }
 
+    /// A whole job under the contract in one call, for a caller that owns its thread of control (a worker
+    /// answering one request). `machine` may borrow lists that live only for this call. `between` runs after
+    /// every pass with the tokens so far; returning `false` cancels. Returns the answer's tokens and counters;
+    /// read the answer with [`Session::answer`] or [`Session::answer_text`].
+    pub fn run_closed(&mut self, prompt: &[u8], cps: &mut [u32], buf: &mut [u8], machine: Machine<'_>, opts: Options, mut between: impl FnMut(usize) -> bool) -> Result<(usize, Stats), P0Error> {
+        let n = self.start(prompt, cps, buf)?;
+        if opts.max_new == 0 || opts.max_new > self.out.len() {
+            self.done = true;
+            return Err(P0Error::Mem);
+        }
+        if opts.max_new > self.ids.len().saturating_sub(n) {
+            self.done = true;
+            return Err(P0Error::Prompt);
+        }
+        let mut run = ClosedRun::in_place(n, self.reused, machine, opts, self.ids).map_err(P0Error::Engine)?;
+        let mut eog = [0u32; 2];
+        let mut k = 0usize;
+        for id in self.stop.iter().flatten() {
+            if let Some(slot) = eog.get_mut(k) {
+                *slot = *id;
+                k = k.saturating_add(1);
+            }
+        }
+        let eog = eog.get(..k).unwrap_or(&[]);
+        loop {
+            let pass = run.advance(&self.model, self.simd, &self.tok, eog, &mut self.kv, &mut self.work, self.ids, self.list, self.out);
+            // Keep the session's own view in step, so prefix reuse and `answer` work after this call.
+            self.fed = run.fed();
+            self.n = self.n_prompt.saturating_add(run.tokens());
+            match pass.map_err(|e| {
+                self.done = true;
+                P0Error::Engine(e)
+            })? {
+                Pass::Done => break,
+                _ => {
+                    if !between(run.tokens()) {
+                        break;
+                    }
+                }
+            }
+        }
+        self.done = true;
+        Ok((run.tokens(), run.stats()))
+    }
+
     /// Passes and tokens of the current job under the contract.
     pub fn closed_stats(&self) -> Option<Stats> {
         self.closed.as_ref().map(ClosedRun::stats)

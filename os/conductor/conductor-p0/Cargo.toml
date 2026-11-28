@@ -1,0 +1,18 @@
+# The worker's compute, bound to the native engine: a `conductor_worker::Executor` over a P0 session
+# (`neuro_gguf::p0`). A heqk node that serves `infer` runs this. no_std, no alloc, no unsafe, no float.
+[package]
+name = "conductor-p0"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+conductor-core = { path = "../conductor-core" }
+conductor-worker = { path = "../conductor-worker" }
+neuro-gguf = { path = "../neuro-gguf" }
+neuro-lm = { path = "../neuro-lm" }
+neuro-contract = { path = "../neuro-contract" }

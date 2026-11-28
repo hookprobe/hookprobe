@@ -1,0 +1,243 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! A worker whose compute is the native engine: the device's harness, the capability protocol, the worker
+//! (`conductor-worker`), the engine session (`neuro_gguf::p0`) bound by `conductor-p0`, and back through the
+//! verifier. No scripted answer anywhere: what comes back is what the integer engine decodes under Neuro's
+//! contract from a signed bundle.
+//!
+//! The model is `tok_build::tiny_qwen3_gguf`: one block, every weight the same. Its answers mean nothing; they
+//! are whatever the contract forces when every token scores the same (the lowest allowed token each time), which
+//! makes them deterministic and makes the contract the only thing that shapes them.
+use conductor_core::class::{DataClass, Tier};
+use conductor_core::crypto::{public_key, sign, verify};
+use conductor_core::harness::{Harness, Outcome as HOutcome};
+use conductor_core::job::Verdict;
+use conductor_core::verify::Status;
+use conductor_mock::disk::{Disk, Platter};
+use conductor_mock::*;
+use conductor_p0::{code, shown_context, P0Executor};
+use conductor_worker::{Executor, Layout, ResultKey, Worker};
+use neuro_gguf::hnx::{admit, manifest_for_bundle, Admitted};
+use neuro_gguf::p0::{self, Mem, Session};
+use neuro_hnx::{build_prefix, kind, scheme, target, Header, Loader, Platform, HEADER_LEN, LEAF_LEN, MAX_SIG};
+use neuro_kernels::Simd;
+use neuro_lm::qwen3::Layer;
+
+const LAYOUT: Layout = Layout { high_water_lo: 64, epoch_lo: 66 };
+const CTX: usize = 8192;
+/// The tiny model's tokens are bytes, so its answers are several times longer in tokens than the explainer's.
+const MAX_ANSWER: usize = 1600;
+const SIGN_SEED: [u8; 32] = [0x77; 32];
+const TAG: &[u8] = b"test/hnx";
+
+struct SeedKey([u8; 32]);
+impl ResultKey for SeedKey {
+    fn public_key(&self) -> [u8; 32] {
+        public_key(&self.0)
+    }
+    fn sign(&self, tag: &[u8], msg: &[u8]) -> Option<[u8; 64]> {
+        sign(&self.0, tag, msg)
+    }
+}
+
+struct Node;
+impl Platform for Node {
+    fn target(&self) -> u8 {
+        target::QEMU_VIRT
+    }
+    fn features(&self) -> u32 {
+        0
+    }
+    fn engine_abi(&self) -> u16 {
+        1
+    }
+    fn verify(&self, s: u8, digest: &[u8; 32], sig: &[u8]) -> bool {
+        s == scheme::ED25519 && sig.try_into().is_ok_and(|sig: &[u8; 64]| verify(&public_key(&SIGN_SEED), TAG, digest, sig))
+    }
+    fn licence_allowed(&self, spdx: &[u8]) -> bool {
+        spdx == b"AGPL-3.0-only"
+    }
+    fn min_svn(&self, _: &[u8; 16]) -> u32 {
+        1
+    }
+}
+
+/// Every byte is a token, plus the end-of-turn token the chat template uses.
+fn tokens() -> Vec<Vec<u8>> {
+    let mut t: Vec<Vec<u8>> = (0..=255u8).map(|b| vec![b]).collect();
+    t.push(b"<|im_end|>".to_vec());
+    t
+}
+
+/// The same vocabulary as a GGUF spells it: a token there is a UTF-8 string, so a byte above 127 is written as
+/// the character with that number (as byte-level vocabularies do). The engine reads only how many there are;
+/// the bytes of each token come from the tokenizer section.
+fn gguf_tokens() -> Vec<Vec<u8>> {
+    let mut t: Vec<Vec<u8>> = (0..=255u8).map(|b| char::from(b).to_string().into_bytes()).collect();
+    t.push(b"<|im_end|>".to_vec());
+    t
+}
+
+/// Build, sign, load in place and admit the tiny model as a bundle: the node's start-up.
+fn admitted() -> Admitted<'static> {
+    let toks = tokens();
+    let file = tok_build::tiny_qwen3_gguf(&gguf_tokens(), CTX as u32);
+    let tok = tok_build::blob(&tok_build::Source { tokens: toks, merges: vec![], added: vec![256] }, &tok_build::unicode_ranges(), &tok_build::nfc_tables()).unwrap();
+    let rope: Vec<u8> = (0..CTX * 16).flat_map(|i| if i % 3 == 0 { [0i32.to_le_bytes(), (1i32 << 30).to_le_bytes()].concat() } else { [(1i32 << 30).to_le_bytes(), 0i32.to_le_bytes()].concat() }).collect();
+    let bundle: &'static [u8] = tok_build::bundle([&file, &tok, &rope, &[]]).unwrap().leak();
+    let mut licence = [0u8; 32];
+    licence[..13].copy_from_slice(b"AGPL-3.0-only");
+    let mut h = Header {
+        target: target::GENERIC_INT,
+        scheme: scheme::ED25519,
+        engine_abi: 1,
+        segment_log2: 16,
+        n_segments: 0,
+        model_id: [9; 16],
+        model_svn: 1,
+        manifest: manifest_for_bundle(bundle, CTX).unwrap(),
+        licence,
+        source_sha256: [1; 32],
+        eval_sha256: [2; 32],
+        merkle_root: [0; 32],
+        payload_kind: kind::LM_BUNDLE,
+    };
+    let mut prefix = vec![0u8; HEADER_LEN + bundle.len().div_ceil(1 << 16) * LEAF_LEN + 2 + 64];
+    let n = build_prefix(&mut h, bundle, &mut prefix, |d| {
+        let mut out = [0u8; MAX_SIG];
+        out[..64].copy_from_slice(&sign(&SIGN_SEED, TAG, d)?);
+        Some((out, 64))
+    })
+    .unwrap();
+    prefix.truncate(n);
+    let prefix: &'static [u8] = prefix.leak();
+    let mut l = Loader::open(prefix, &Node).unwrap();
+    let region: &'static mut [u8] = vec![0u8; bundle.len()].leak();
+    for i in 0..l.header().n_segments {
+        let (s, e) = (i as usize * 65536, ((i as usize + 1) * 65536).min(bundle.len()));
+        region[s..e].copy_from_slice(&bundle[s..e]);
+        l.accept_in_place(i, region).unwrap();
+    }
+    admit(&l, region).unwrap()
+}
+
+type Exec = P0Executor<'static, Box<dyn FnMut() -> u64>>;
+
+/// The node's compute: one session on the admitted model, serving `model`.
+fn executor(model: [u8; 32]) -> Exec {
+    let ad: &'static Admitted<'static> = Box::leak(Box::new(admitted()));
+    let z = p0::sizes(&ad.hparams, 16);
+    let mem = Mem {
+        layers: vec![Layer::EMPTY; z.layers].leak(),
+        rope: vec![(0, 0); z.rope].leak(),
+        kv_vals: vec![0; z.kv_vals].leak(),
+        kv_shifts: vec![0; z.kv_shifts].leak(),
+        work_i64: vec![0; z.work_i64].leak(),
+        work_i8: vec![0; z.work_i8].leak(),
+        work_pairs: vec![(0, 0); z.work_pairs].leak(),
+        work_i32: vec![0; z.work_i32].leak(),
+        ids: vec![0; z.ids].leak(),
+        prev: vec![0; z.prev].leak(),
+        list: vec![0; 512].leak(),
+        out: vec![0; MAX_ANSWER].leak(),
+    };
+    let session = Session::open(ad, Simd::SCALAR, 16, mem).unwrap();
+    let mut t = 0u64;
+    let clock: Box<dyn FnMut() -> u64> = Box::new(move || {
+        t += 3;
+        t
+    });
+    P0Executor::new(session, model, vec![0u32; 1 << 15].leak(), vec![0u8; 1 << 15].leak(), clock).with_max_answer(MAX_ANSWER)
+}
+
+struct Real(Worker<Disk, SeedKey, Exec>);
+impl Remote for Real {
+    fn tier(&self) -> Tier {
+        Tier::P1
+    }
+    fn receive(&mut self, tx: &[u8], session: &[u8; 32], now_ms: u64) -> Vec<Vec<u8>> {
+        let mut v = vec![];
+        self.0.handle(tx, session, now_ms, &mut |f| v.push(f.to_vec()));
+        v
+    }
+}
+
+fn node(model: [u8; 32]) -> Real {
+    Real(Worker::boot(Disk::new(&Platter::default()), LAYOUT, SeedKey(WORKER_SEED), executor(model), public_key(&DEVICE_SEED), Tier::P1).expect("store readable"))
+}
+
+/// One device (its capability counter goes on from job to job) and one node.
+fn device() -> Kernel {
+    Kernel::new(policy_p1(), Tier::P1)
+}
+
+fn run(k: &mut Kernel, w: &mut Real, job: &JobBuilder) -> (Report, String) {
+    let mut h = Box::new(Harness::new());
+    let r = k.run(&mut h, &job.encode(), env_with(policy_p1(), public_key(&WORKER_SEED), Tier::P1), w);
+    let summary = String::from_utf8_lossy(h.summary()).into_owned();
+    (r, summary)
+}
+
+#[test]
+fn a_job_runs_on_the_native_engine_through_the_whole_protocol() {
+    let (mut k, mut w) = (device(), node(MODEL));
+    // With every token scoring the same, the contract alone shapes the answer: "benign", nothing cited. So the
+    // job here requires no citation; the next test shows the verifier holding back the same answer when it does.
+    let evidence = vec![Ev { id: 1, class: DataClass::Public, required: false, text: "42 connections to 203.0.113.9:443 in 10 min".into() }];
+    let job = JobBuilder { tools: 0, l0: Verdict::Benign as u8, out_total: 4096, compute_total: 600_000, per_call: 120_000, evidence, ..Default::default() };
+    let (r, summary) = run(&mut k, &mut w, &job);
+    let Some(HOutcome::Verified(v)) = r.outcome else { panic!("expected a verified answer, got {:?}", r.outcome) };
+    assert_eq!((v.status, v.model_verdict, v.l0_decided), (Status::Valid, Some(Verdict::Benign), true));
+    assert!(!summary.is_empty());
+    assert_eq!(r.leases_started, r.leases_ended);
+    // The engine really ran: prompt passes, answer passes, an answer that ended by itself within its bound.
+    let st = w.0.executor().last_stats();
+    assert!(st.prefill_passes > 50 && st.passes > 100, "{st:?}");
+    assert!((st.tokens as usize) < MAX_ANSWER, "the answer closed under the contract before the bound: {st:?}");
+
+    // A second job on the same node: a new capability, a new counter, and the prompt's identical start is not
+    // fed again.
+    let (r2, _) = run(&mut k, &mut w, &JobBuilder { job_id: [8; 16], ..job.clone() });
+    assert!(matches!(r2.outcome, Some(HOutcome::Verified(v)) if v.status == Status::Valid), "{:?}", r2.outcome);
+    assert!(w.0.executor().last_reused() > 100, "reused {}", w.0.executor().last_reused());
+    assert!(w.0.executor().last_stats().prefill_passes < st.prefill_passes);
+    assert_eq!(w.0.high_water(), 2);
+}
+
+#[test]
+fn the_verifier_holds_back_an_engine_answer_that_cites_nothing_required() {
+    // The default job marks a fact as required. The tiny model cites nothing, and no engine output is trusted for
+    // being well formed: the device's verifier reports the answer incomplete.
+    let (mut k, mut w) = (device(), node(MODEL));
+    let job = JobBuilder { tools: 0, l0: Verdict::Benign as u8, out_total: 4096, compute_total: 600_000, per_call: 120_000, ..Default::default() };
+    let (r, _) = run(&mut k, &mut w, &job);
+    assert!(matches!(r.outcome, Some(HOutcome::Verified(v)) if v.status == Status::Incomplete), "{:?}", r.outcome);
+}
+
+#[test]
+fn the_node_refuses_what_it_does_not_serve() {
+    // Another model digest than the one this node admitted: an ERROR frame, and the device aborts the job.
+    let (mut k, mut w) = (device(), node([0x99; 32]));
+    let job = JobBuilder { tools: 0, out_total: 4096, compute_total: 600_000, per_call: 120_000, ..Default::default() };
+    let (r, _) = run(&mut k, &mut w, &job);
+    assert!(matches!(r.outcome, Some(HOutcome::Aborted(_))), "{:?}", r.outcome);
+    assert_eq!(w.0.executor().last_stats().tokens, 0, "nothing was decoded");
+
+    // The executor alone: not `infer`; a prompt with no context block; a context with no fact.
+    let mut e = executor(MODEL);
+    let mut out = [0u8; 256];
+    assert_eq!(e.run(conductor_core::cap::op::EMBED, &MODEL, b"x", &mut out).err(), Some(code::UNSUPPORTED));
+    assert_eq!(e.run(conductor_core::cap::op::INFER, &MODEL, b"tell me a story", &mut out).err(), Some(code::PROMPT));
+    let no_fact = format!("{}REST 0 more cards omitted{}Assess this window.", neuro_contract::USER_HEAD, neuro_contract::USER_MID);
+    assert_eq!(e.run(conductor_core::cap::op::INFER, &MODEL, no_fact.as_bytes(), &mut out).err(), Some(code::PROMPT));
+    // An answer that does not fit the output the capability allows.
+    let ok = format!("{}F1 H1->R1:443 n=3{}Assess this window.", neuro_contract::USER_HEAD, neuro_contract::USER_MID);
+    assert_eq!(shown_context(ok.as_bytes()), Some(&b"F1 H1->R1:443 n=3"[..]));
+    assert_eq!(e.run(conductor_core::cap::op::INFER, &MODEL, ok.as_bytes(), &mut [0u8; 8]).err(), Some(code::OUTPUT));
+    let mut big = vec![0u8; 8192];
+    let run = e.run(conductor_core::cap::op::INFER, &MODEL, ok.as_bytes(), &mut big).unwrap();
+    let text = std::str::from_utf8(&big[..run.len]).unwrap();
+    // Tabs wherever the grammar allows white space (the lowest allowed token), and still one whole answer.
+    let dense: String = text.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    assert!(dense.starts_with("{\"verdict\":\"benign\"") && dense.ends_with('}'), "{text}");
+    assert!(run.compute_ms > 0 && run.ttft_ms > 0 && run.ttft_ms <= run.compute_ms);
+}
