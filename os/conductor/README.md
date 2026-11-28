@@ -210,11 +210,36 @@ The context is the lever on memory: Neuro's cards are budgeted at 512 tokens, so
 1,024 with room for the system prompt and the answer only if that prompt is short; the right cap is to be set
 with Neuro, not assumed.
 
-Decoding under the answer grammar is resumable too: `neuro_lm::decode::ClosedRun` makes at most one pass per
-call, with the pruned head and verified drafts, and `generate_closed` is now that run looped to the end, so
-every earlier test of it stands (`tok-build/tests/decode.rs` also drives it pass by pass: same tokens and
-counters in five option sets). Not done: `p0::Session` does not yet wrap `ClosedRun` (it decodes greedily
-without the grammar), and neither uses the packed layout.
+**Under the answer contract, pass by pass.** `neuro_lm::decode::ClosedRun` makes at most one pass per call, with
+the pruned head and verified drafts; `generate_closed` is now that run looped to the end, so every earlier test
+of it stands, and `tok-build/tests/decode.rs` also drives it pass by pass (same tokens and counters in five
+option sets). `p0::Session::start_closed` runs such a job in the session's memory (tested against
+`generate_closed` on a tiny model).
+
+**One triage job as the device runs it (`hnx-lm triage`), ftFg on the build host.** One of Neuro's synthetic
+windows (10 fact cards, 1,202 bytes of context) through guard A, Neuro's contract prompt, the session under the
+contract, and back through the contract parser and guard E:
+
+| | Plain | Pruned head + drafts |
+|---|---|---|
+| Answer | 236 tokens; verdict `suspicious`, 8 facts and 8 aliases cited; **valid under the contract**; guard E finds no carried text | the same count |
+| Prompt | 1,115 tokens in 70 passes, 88 s | the same |
+| Answer passes over the weights | 235 | 168 (20 with a pruned head; 67 of 260 drafts accepted) |
+| One pass | median 140 ms, p99 149 ms, max 156 ms | median 140 ms, p99 1,084 ms (a draft pass computes eight full heads) |
+| Whole job | 121 s | 145 s |
+
+Apple M5 Pro with NEON, a test key, not a device number. What it shows that a device number will not change:
+- **The prompt is most of the job.** 1,115 tokens for 1,202 bytes of context: Neuro's system prompt and the
+  closed schema with its id lists. About 264 of them come before the first per-request id and are the same in
+  every job, so their KV state could be computed once and kept. The rest is per request. Any change to the
+  prompt is Neuro's, because the prompt is what was measured.
+- **A pass costs more as the context fills** (67 ms at 24 tokens of context, 140 ms at about 1,200): attention
+  reads the KV cache.
+- **Drafts cost more than they save where compute is the limit**, as measured before on x86, and they make one
+  pass eight times longer. For a job that must be paced between passes, the plain mode has the tight bound.
+  Whether drafts pay on a memory-bound A76 is still to be measured there.
+
+Not done: the packed layout in a session.
 
 Still host-side in this path: the packed layout is produced after load and should be the stored form. The
 signature is Ed25519 with a test key; release signing and the hybrid scheme are the platform's. The tables are

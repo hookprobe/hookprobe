@@ -458,6 +458,7 @@ name = "neuro-gguf"
 version = "0.0.26"
 dependencies = [
  "ed25519-compact",
+ "neuro-contract",
  "neuro-hnx",
  "neuro-kernels",
  "neuro-lm",

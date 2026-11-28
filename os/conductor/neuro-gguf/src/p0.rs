@@ -11,12 +11,15 @@
 //!   token generated. The caller decides between calls whether to go on, so a job can be preempted, paced by
 //!   the packet path, or cancelled, at a granularity of one pass.
 //!
-//! Decoding is greedy (temperature 0, as Neuro measured), and gives the tokens `Model::generate` gives.
-//! Not here yet: decoding under the answer grammar (`neuro_lm::decode`) one pass at a time.
+//! Decoding is greedy (temperature 0, as Neuro measured). A job is plain ([`Session::start`]: the tokens
+//! `Model::generate` gives) or under the answer contract ([`Session::start_closed`]: the tokens
+//! `neuro_lm::decode::generate_closed` gives, with its pruned head and verified drafts).
 
 use crate::hnx::Admitted;
 use crate::qwen3::{layer, model, BindError, Hparams};
 use neuro_kernels::{hp, Simd};
+use neuro_contract::Machine;
+use neuro_lm::decode::{ClosedRun, Options, Pass, Stats};
 use neuro_lm::qwen3::{Head, Kv, Layer, Model, Work, MAX_BATCH};
 use neuro_lm::tok::Tokenizer;
 use neuro_lm::LmError;
@@ -85,6 +88,10 @@ pub struct Mem<'a> {
     pub work_pairs: &'a mut [(i32, i32)],
     pub work_i32: &'a mut [i32],
     pub ids: &'a mut [u32],
+    /// For jobs under the answer contract: scratch for the allowed-token list (its length bounds head
+    /// pruning) and the answer's tokens (its length bounds the answer). Both may be empty for plain jobs.
+    pub list: &'a mut [u32],
+    pub out: &'a mut [u32],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,6 +100,9 @@ pub enum Progress {
     Prefill { fed: usize, total: usize },
     /// One token of the answer. `last`: a stop token, or the context is full; the next call returns `Done`.
     Token { id: u32, last: bool },
+    /// A pass of a job under the contract: this many tokens joined the answer (more than one when drafts
+    /// were confirmed).
+    Tokens { count: usize },
     Done,
 }
 
@@ -102,6 +112,9 @@ pub struct Session<'a> {
     kv: Kv<'a>,
     work: Work<'a>,
     ids: &'a mut [u32],
+    list: &'a mut [u32],
+    out: &'a mut [u32],
+    closed: Option<ClosedRun<'a>>,
     simd: Simd,
     batch: usize,
     stop: [Option<u32>; 2],
@@ -122,7 +135,7 @@ impl<'a> Session<'a> {
         }
         let (g, h) = (&ad.gguf, &ad.hparams);
         let need = sizes(h, batch);
-        let Mem { layers, rope, kv_vals, kv_shifts, work_i64, work_i8, work_pairs, work_i32, ids } = mem;
+        let Mem { layers, rope, kv_vals, kv_shifts, work_i64, work_i8, work_pairs, work_i32, ids, list, out } = mem;
         let layers = layers.get_mut(..need.layers).ok_or(P0Error::Mem)?;
         for (i, slot) in layers.iter_mut().enumerate() {
             *slot = layer(g, h, i).map_err(P0Error::Bind)?;
@@ -144,7 +157,7 @@ impl<'a> Session<'a> {
         let tok = Tokenizer::new(tables.tokenizer).map_err(|_| P0Error::NoTables)?;
         let stop = [tok.added_id(b"<|im_end|>"), tok.added_id(b"<|endoftext|>")];
         let ids = ids.get_mut(..need.ids).ok_or(P0Error::Mem)?;
-        Ok(Self { model, tok, kv, work, ids, simd, batch, stop, n_prompt: 0, n: 0, fed: 0, next: None, done: true })
+        Ok(Self { model, tok, kv, work, ids, list, out, closed: None, simd, batch, stop, n_prompt: 0, n: 0, fed: 0, next: None, done: true })
     }
 
     pub fn tokenizer(&self) -> &Tokenizer<'a> {
@@ -174,13 +187,54 @@ impl<'a> Session<'a> {
             return Err(P0Error::Prompt);
         }
         (self.n_prompt, self.n, self.fed, self.next, self.done) = (n, n, 0, None, false);
+        self.closed = None;
         Ok(n)
+    }
+
+    /// Begin a job whose answer must follow the contract: `machine` is the answer automaton for this request's
+    /// facts and aliases. The answer is at most `opts.max_new` tokens, and never more than `Mem::out` holds or
+    /// the context has room for.
+    pub fn start_closed(&mut self, prompt: &[u8], cps: &mut [u32], buf: &mut [u8], machine: Machine<'a>, opts: Options) -> Result<usize, P0Error> {
+        let n = self.start(prompt, cps, buf)?;
+        let room = self.ids.len().saturating_sub(n).min(self.out.len());
+        let opts = Options { max_new: opts.max_new.min(room), ..opts };
+        if opts.max_new == 0 {
+            self.done = true;
+            return Err(P0Error::Mem);
+        }
+        self.closed = Some(ClosedRun::in_place(n, machine, opts, self.ids).map_err(P0Error::Engine)?);
+        Ok(n)
+    }
+
+    /// Passes and tokens of the current job under the contract.
+    pub fn closed_stats(&self) -> Option<Stats> {
+        self.closed.as_ref().map(ClosedRun::stats)
     }
 
     /// One forward pass over the weights.
     pub fn advance(&mut self) -> Result<Progress, P0Error> {
         if self.done {
             return if self.n_prompt == 0 { Err(P0Error::NotStarted) } else { Ok(Progress::Done) };
+        }
+        if let Some(run) = self.closed.as_mut() {
+            let mut eog = [0u32; 2];
+            let mut k = 0usize;
+            for id in self.stop.iter().flatten() {
+                if let Some(slot) = eog.get_mut(k) {
+                    *slot = *id;
+                    k = k.saturating_add(1);
+                }
+            }
+            let pass = run.advance(&self.model, self.simd, &self.tok, eog.get(..k).unwrap_or(&[]), &mut self.kv, &mut self.work, self.ids, self.list, self.out).map_err(P0Error::Engine)?;
+            self.n = self.n_prompt.saturating_add(run.tokens());
+            return Ok(match pass {
+                Pass::Prefill { fed, total } => Progress::Prefill { fed, total },
+                Pass::Tokens(count) => Progress::Tokens { count },
+                Pass::Done => {
+                    self.done = true;
+                    Progress::Done
+                }
+            });
         }
         let vocab = self.model.dims.vocab;
         if self.fed < self.n_prompt {

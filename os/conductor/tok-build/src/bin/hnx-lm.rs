@@ -11,6 +11,10 @@
 //! Usage:
 //!   hnx-lm pack --gguf MODEL.gguf --out MODEL.hnx --key SEED.hex --eval REPORT [--ctx 4096] [--licence Apache-2.0] [--svn 1] [--bare]
 //!   hnx-lm run  --hnx MODEL.hnx --pub PUBKEY.hex --ask "question" [--max-new 64] [--scalar] [--packed] [--batch 16]
+//!   hnx-lm triage --hnx MODEL.hnx --pub PUBKEY.hex --context WINDOW.txt [--ask "Assess this window."] [--max-new 300] [--plain]
+//!
+//! `triage` is one explainer job as the device runs it: the window's context (as `neuro_contract::cards` writes it),
+//! guard A, Neuro's contract prompt, an answer decoded under the contract one pass at a time, read back and checked.
 //!
 //! A bundle in the GGUF layout runs as a P0 session (`neuro_gguf::p0`): one forward pass per call, in memory
 //! sized by `p0::sizes`, as a worker core would drive it. The time of every pass is reported.
@@ -163,10 +167,9 @@ fn simd(scalar: bool) -> Simd {
     Simd::SCALAR
 }
 
-fn run(args: &[String]) {
+/// What a heqk server does before any job: open, verify, read in place, admit.
+fn admitted(args: &[String]) -> neuro_gguf::hnx::Admitted<'static> {
     let path = need(args, "--hnx");
-    let question = need(args, "--ask");
-    let max_new: usize = arg(args, "--max-new").map_or(64, |v| v.parse().unwrap_or_else(|_| die("--max-new")));
     let host = Host { pk: ed25519_compact::PublicKey::from_slice(&hex32(&need(args, "--pub"))).unwrap_or_else(|_| die("--pub")), licences: vec![arg(args, "--allow-licence").unwrap_or_else(|| "Apache-2.0".into())] };
     let mut f = std::fs::File::open(&path).unwrap_or_else(|e| die(&format!("open {path}: {e}")));
 
@@ -182,7 +185,8 @@ fn run(args: &[String]) {
     let at = prefix.len();
     prefix.resize(at + sig_len.min(MAX_SIG), 0);
     f.read_exact(&mut prefix[at..]).unwrap_or_else(|e| die(&format!("read the signature: {e}")));
-    let mut loader = Loader::open(&prefix, &host).unwrap_or_else(|e| die(&format!("container refused: {e:?}")));
+    let prefix: &'static [u8] = prefix.leak();
+    let mut loader = Loader::open(prefix, &host).unwrap_or_else(|e| die(&format!("container refused: {e:?}")));
     let m = loader.header().manifest;
     println!("opened {path} in {:?}: signature and segment table verified; {} segments, payload {} bytes", t0.elapsed(), h.n_segments, m.payload_bytes);
 
@@ -209,6 +213,13 @@ fn run(args: &[String]) {
     // 5: the manifest must be what the file needs; then the engine binds the verified bytes.
     let region: &'static [u8] = region.leak();
     let ad = admit(&loader, region).unwrap_or_else(|e| die(&format!("admission refused: {e:?}")));
+    ad
+}
+
+fn run(args: &[String]) {
+    let question = need(args, "--ask");
+    let max_new: usize = arg(args, "--max-new").map_or(64, |v| v.parse().unwrap_or_else(|_| die("--max-new")));
+    let ad = admitted(args);
     if ad.bundle.is_some() && !args.iter().any(|a| a == "--packed") {
         return session(args, &ad, &question, max_new);
     }
@@ -281,6 +292,8 @@ fn session(args: &[String], ad: &neuro_gguf::hnx::Admitted<'static>, question: &
         work_pairs: vec![(0, 0); z.work_pairs].leak(),
         work_i32: vec![0; z.work_i32].leak(),
         ids: vec![0; z.ids].leak(),
+        list: &mut [],
+        out: &mut [],
     };
     let sd = simd(args.iter().any(|a| a == "--scalar"));
     let mut s = Session::open(ad, sd, batch, mem).unwrap_or_else(|e| die(&format!("session: {e:?}")));
@@ -303,7 +316,7 @@ fn session(args: &[String], ad: &neuro_gguf::hnx::Admitted<'static>, question: &
                     break;
                 }
             }
-            Progress::Done => break,
+            Progress::Tokens { .. } | Progress::Done => break,
         }
     }
     let secs = t_all.elapsed().as_secs_f64();
@@ -318,11 +331,113 @@ fn session(args: &[String], ad: &neuro_gguf::hnx::Admitted<'static>, question: &
     println!("one pass per generated token: median {:.1} ms, p99 {:.1} ms, max {:.1} ms; whole job {secs:.2} s (build host, not a device number)", pct(&gen, 50), pct(&gen, 99), gen.last().copied().unwrap_or(0.0));
 }
 
+/// One triage job the way the device runs it: the window's context in, Neuro's contract prompt, an answer
+/// decoded under the contract from the signed bundle one pass at a time, then read back and checked.
+fn triage(args: &[String]) {
+    use neuro_contract::{context_ids, guard, write_system, Allowed, IdList, Lang, Machine, Out, CHAT_ASSISTANT, CHAT_SYSTEM, CHAT_USER, USER_HEAD, USER_MID};
+    use neuro_gguf::p0::{self, Mem, Progress, Session};
+    use neuro_lm::decode::Options;
+    let context = std::fs::read(need(args, "--context")).unwrap_or_else(|e| die(&format!("read the context: {e}")));
+    let context = String::from_utf8(context).unwrap_or_else(|_| die("the context is not UTF-8"));
+    let context = context.trim_end_matches('\n');
+    let question = arg(args, "--ask").unwrap_or_else(|| "Assess this window.".into());
+    let max_new: usize = arg(args, "--max-new").map_or(300, |v| v.parse().unwrap_or_else(|_| die("--max-new")));
+    let ad = admitted(args);
+    if ad.bundle.is_none() {
+        die("this container is a bare GGUF payload; a device needs the bundle");
+    }
+    // The prompt: guard A on the context, the ids of what is shown, Neuro's system prompt with the closed schema.
+    let mut shown = vec![0u8; context.len() * 4 + 256];
+    let mut o = Out::new(&mut shown);
+    guard::guard_a(context.as_bytes(), &mut o).unwrap_or_else(|e| die(&format!("guard A: {e:?}")));
+    let n_shown = o.n;
+    let shown = &shown[..n_shown];
+    let (facts, ents): (&'static mut IdList, &'static mut IdList) = (Box::leak(Box::new(IdList::new())), Box::leak(Box::new(IdList::new())));
+    context_ids(shown, facts, ents).unwrap_or_else(|e| die(&format!("context ids: {e:?}")));
+    if facts.is_empty() {
+        die("the window has no fact card: the device does not ask a model about it (Refused: NoEvidence)");
+    }
+    let (facts, ents): (&'static IdList, &'static IdList) = (facts, ents);
+    let mut pbuf = vec![0u8; 1 << 16];
+    let mut p = Out::new(&mut pbuf);
+    let put = |p: &mut Out, b: &[u8]| p.put(b).unwrap_or_else(|_| die("the prompt is too large"));
+    put(&mut p, CHAT_SYSTEM.as_bytes());
+    write_system(Lang::En, facts, ents, true, &mut p).unwrap_or_else(|e| die(&format!("system prompt: {e:?}")));
+    put(&mut p, CHAT_USER.as_bytes());
+    put(&mut p, USER_HEAD.as_bytes());
+    put(&mut p, shown);
+    put(&mut p, USER_MID.as_bytes());
+    put(&mut p, question.as_bytes());
+    put(&mut p, CHAT_ASSISTANT.as_bytes());
+    let pn = p.n;
+    let prompt = &pbuf[..pn];
+
+    let batch: usize = arg(args, "--batch").map_or(MAX_BATCH, |v| v.parse().unwrap_or_else(|_| die("--batch")));
+    let z = p0::sizes(&ad.hparams, batch);
+    let opts = if args.iter().any(|a| a == "--plain") { Options { prune_max: 0, draft_max: 0, max_new } } else { Options { prune_max: 8192, draft_max: 7, max_new } };
+    let mem = Mem {
+        layers: vec![Layer::EMPTY; z.layers].leak(),
+        rope: vec![(0, 0); z.rope].leak(),
+        kv_vals: vec![0; z.kv_vals].leak(),
+        kv_shifts: vec![0; z.kv_shifts].leak(),
+        work_i64: vec![0; z.work_i64].leak(),
+        work_i8: vec![0; z.work_i8].leak(),
+        work_pairs: vec![(0, 0); z.work_pairs].leak(),
+        work_i32: vec![0; z.work_i32].leak(),
+        ids: vec![0; z.ids].leak(),
+        list: vec![0; 8192].leak(),
+        out: vec![0; max_new].leak(),
+    };
+    let sd = simd(args.iter().any(|a| a == "--scalar"));
+    let mut s = Session::open(&ad, sd, batch, mem).unwrap_or_else(|e| die(&format!("session: {e:?}")));
+    let (mut cps, mut buf) = (vec![0u32; 1 << 17], vec![0u8; 1 << 17]);
+    let machine = Machine::new(Allowed { facts, entities: ents, closed: true });
+    let n = s.start_closed(prompt, &mut cps, &mut buf, machine, opts).unwrap_or_else(|e| die(&format!("prompt: {e:?}")));
+    println!("context: {} bytes, {} facts, {} aliases; prompt {n} tokens; context length {}", context.len(), facts.len(), ents.len(), ad.hparams.dims.max_ctx);
+    // How much of the prompt is the same for every job: the tokens before the first per-request id.
+    {
+        let mark = b"\"enum\": [\"F";
+        let fixed = prompt.windows(mark.len()).position(|w| w == mark).unwrap_or(0);
+        let mut ids = vec![0u32; 1 << 14];
+        let k = s.tokenizer().encode_nfc(&prompt[..fixed], &mut ids, &mut cps, &mut buf).unwrap_or(0);
+        println!("of those, about {k} tokens come before the first per-request id (the same text in every job)");
+    }
+    let (mut prefill, mut passes): (Vec<f64>, Vec<f64>) = (vec![], vec![]);
+    let t_all = Instant::now();
+    loop {
+        let t = Instant::now();
+        let pr = s.advance().unwrap_or_else(|e| die(&format!("advance: {e:?}")));
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        match pr {
+            Progress::Prefill { .. } => prefill.push(ms),
+            Progress::Tokens { .. } | Progress::Token { .. } => passes.push(ms),
+            Progress::Done => break,
+        }
+    }
+    let secs = t_all.elapsed().as_secs_f64();
+    let st = s.closed_stats().unwrap_or_default();
+    let mut text = vec![0u8; 1 << 16];
+    let tn = s.answer_text(&mut text).unwrap_or_else(|e| die(&format!("decode: {e:?}")));
+    let answer = &text[..tn];
+    println!("answer: {}", String::from_utf8_lossy(answer));
+    // Read it back as the verifier does, and run guard E against the context as the device wrote it.
+    match neuro_contract::parse(answer, facts, ents) {
+        Ok(_) => println!("contract: VALID (every fact id and alias is one of the shown context)"),
+        Err(e) => println!("contract: REFUSED ({e:?})"),
+    }
+    println!("guard E: {}", if guard::echoes(context.as_bytes(), answer) { "the answer repeats carried text; the device would replace the prose" } else { "no carried text repeated" });
+    passes.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let pct = |v: &[f64], q: usize| v.get(v.len().saturating_sub(1) * q / 100).copied().unwrap_or(0.0);
+    println!("{} prompt passes ({:.0} ms each); {} tokens in {} passes over the weights ({} with a pruned head, {} of {} drafts accepted)", prefill.len(), prefill.iter().sum::<f64>() / prefill.len().max(1) as f64, st.tokens, st.passes, st.pruned_passes, st.accepted, st.drafted);
+    println!("per pass: median {:.1} ms, p99 {:.1} ms, max {:.1} ms; whole job {secs:.1} s, {:.1} tokens/s after the prompt (build host, not a device number)", pct(&passes, 50), pct(&passes, 99), passes.last().copied().unwrap_or(0.0), f64::from(st.tokens) / passes.iter().sum::<f64>().max(1e-9) * 1000.0);
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("pack") => pack(&args),
         Some("run") => run(&args),
-        _ => die("usage: hnx-lm pack|run …; see the top of hnx-lm.rs"),
+        Some("triage") => triage(&args),
+        _ => die("usage: hnx-lm pack|run|triage …; see the top of hnx-lm.rs"),
     }
 }

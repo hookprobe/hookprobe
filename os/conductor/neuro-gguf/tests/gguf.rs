@@ -642,7 +642,7 @@ mod container {
     }
 
     fn mem<'a>(o: &'a mut Owned) -> Mem<'a> {
-        Mem { layers: layer_table(o.layers.len()), rope: &mut o.rope, kv_vals: &mut o.kv_vals, kv_shifts: &mut o.kv_shifts, work_i64: &mut o.wa, work_i8: &mut o.wb, work_pairs: &mut o.wc, work_i32: &mut o.we, ids: &mut o.ids }
+        Mem { layers: layer_table(o.layers.len()), rope: &mut o.rope, kv_vals: &mut o.kv_vals, kv_shifts: &mut o.kv_shifts, work_i64: &mut o.wa, work_i8: &mut o.wb, work_pairs: &mut o.wc, work_i32: &mut o.we, ids: &mut o.ids, list: &mut [], out: &mut [] }
     }
 
     /// A layer table of the borrow's lifetime. (A `&mut [Layer<'static>]` cannot be lent as `&mut [Layer<'a>]`:
@@ -701,6 +701,7 @@ mod container {
                             break;
                         }
                     }
+                    Progress::Tokens { .. } => panic!("a contract pass in a plain job"),
                     Progress::Done => panic!("done before a last token"),
                 }
             }
@@ -774,5 +775,70 @@ mod container {
         let ad2 = admit(&l2, &region2).unwrap();
         let mut o = owned(&z);
         assert_eq!(Session::open(&ad2, Simd::SCALAR, 2, mem(&mut o)).err(), Some(P0Error::NoTables));
+    }
+
+    #[test]
+    fn a_session_under_the_contract_equals_generate_closed() {
+        use neuro_contract::{context_ids, Allowed, IdList, Machine};
+        use neuro_lm::decode::{generate_closed, Options};
+        let file = qwen3_file_v("qwen3", tt::Q8_0, 64, 256);
+        let rope = turned_rope(CTX * 16);
+        let b = bundle_of(&file, &tok_blob(256), &rope_bytes(&rope));
+        let prefix = pack_as(&b, kind::LM_BUNDLE, manifest_for_bundle(&b, CTX).unwrap(), |_| {});
+        let mut region = vec![];
+        let l = load(&prefix, &b, &mut region);
+        let ad = admit(&l, &region).unwrap();
+        let (facts, ents): (&'static mut IdList, &'static mut IdList) = (Box::leak(Box::new(IdList::new())), Box::leak(Box::new(IdList::new())));
+        context_ids(b"F1 H1->R1:443 n=3", facts, ents).unwrap();
+        let (facts, ents): (&'static IdList, &'static IdList) = (facts, ents);
+        let machine = || Machine::new(Allowed { facts, entities: ents, closed: true });
+        let prompt = b"hi";
+
+        for (opts, batch) in [(Options { prune_max: 0, draft_max: 0, max_new: 6 }, 1usize), (Options { prune_max: 64, draft_max: 0, max_new: 6 }, 2), (Options { prune_max: 64, draft_max: 3, max_new: 5 }, 4)] {
+            // The reference: the whole answer in one call, on the model bound by hand.
+            let d = ad.hparams.dims;
+            let layers = vec![layer(&ad.gguf, &ad.hparams, 0).unwrap()];
+            let m = model(&ad.gguf, &ad.hparams, &layers, &rope).unwrap();
+            let tb = tok_blob(256);
+            let tok = Tokenizer::new(&tb).unwrap();
+            let mut ids = [0u32; 8];
+            let np = tok.encode(prompt, &mut ids).unwrap();
+            let (kvn, kvs) = d.kv_len();
+            let (mut vals, mut shifts) = (vec![0i16; kvn], vec![0u8; kvs]);
+            let (a, bb, c, e) = Work::lens(&d, batch);
+            let (mut wa, mut wb, mut wc, mut we) = (vec![0i64; a], vec![0i8; bb], vec![(0, 0); c], vec![0i32; e]);
+            let mut work = Work::new(&d, batch, &mut wa, &mut wb, &mut wc, &mut we).unwrap();
+            let (mut hist, mut list, mut out) = (vec![0u32; CTX], vec![0u32; 64], vec![0u32; opts.max_new]);
+            let (n, st) = generate_closed(&m, Simd::SCALAR, &tok, &ids[..np], &[], machine(), &mut Kv { vals: &mut vals, shifts: &mut shifts }, &mut work, &mut hist, &mut list, opts, &mut out).unwrap();
+            assert_eq!(n, opts.max_new, "no end token in this vocabulary: the answer runs to its bound");
+
+            let z = p0::sizes(&ad.hparams, batch);
+            let mut o = owned(&z);
+            let (mut slist, mut sout) = (vec![0u32; 64], vec![0u32; opts.max_new]);
+            let mut sm = mem(&mut o);
+            (sm.list, sm.out) = (&mut slist, &mut sout);
+            let mut s = Session::open(&ad, Simd::SCALAR, batch, sm).unwrap();
+            let (mut cps, mut buf) = (vec![0u32; 64], vec![0u8; 64]);
+            assert_eq!(s.start_closed(prompt, &mut cps, &mut buf, machine(), opts), Ok(np));
+            let (mut passes, mut got) = (0u32, 0usize);
+            loop {
+                match s.advance().unwrap() {
+                    Progress::Prefill { .. } => {}
+                    Progress::Tokens { count } => got += count,
+                    Progress::Token { .. } => panic!("a plain token in a job under the contract"),
+                    Progress::Done => break,
+                }
+                passes += 1;
+            }
+            assert_eq!(s.answer(), &out[..n], "{opts:?} batch {batch}");
+            assert_eq!((got, s.closed_stats()), (n, Some(st)));
+            assert!(passes >= st.prefill_passes + st.passes && passes <= st.prefill_passes + st.passes + 1);
+        }
+        // No room for an answer under the contract without the caller's `out`.
+        let z = p0::sizes(&ad.hparams, 1);
+        let mut o = owned(&z);
+        let mut s = Session::open(&ad, Simd::SCALAR, 1, mem(&mut o)).unwrap();
+        let (mut cps, mut buf) = (vec![0u32; 64], vec![0u8; 64]);
+        assert_eq!(s.start_closed(prompt, &mut cps, &mut buf, machine(), Options { prune_max: 0, draft_max: 0, max_new: 4 }).err(), Some(P0Error::Mem));
     }
 }
