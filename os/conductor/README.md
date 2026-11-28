@@ -340,6 +340,43 @@ Three things for the kernel side to know:
   hashing must stay on core 0 or the crate needs `force-soft`. The engine job itself does not hash.
 - The result cannot go to the shared data window as S1b maps it; see the table.
 
+**One call over raw regions (`conductor-engine-entry`, ADR 0060 S2b).** S2a (#1656) runs a separate hard-float
+engine image on a worker core: no `.data`, no `.bss`, one C-ABI entry, integers and pointers only. HomePods asked
+what `core_job` needs passed in and whether it can be such an image. This crate is the answer in code. `run` takes
+the regions as slices; `engine_infer` takes them as pointer and length (`InferArgs`, `repr(C)`) for the image's
+entry stub:
+
+| Passed in | Access | Notes |
+|---|---|---|
+| model region | read | the bundle payload core 0 verified and admitted; it already holds the tokenizer tables and RoPE pairs, so there is no separate table region |
+| arena | read, write | all of the engine's memory as **one** byte region; `arena_need(model, limits)` gives its size with integer arithmetic, so core 0 can call it before granting; contents on entry and alignment do not matter |
+| window, `a`, `b` | read | the prompt |
+| result | write | 16-byte header, then the answer |
+| progress, cancel, value | words | answer tokens so far; stop request; the job's value |
+| limits, op, path | integers | admitted context, answer bound, the job op, the kernel set (0 scalar, 2 SDOT, as `heqk_worker::job::path`) |
+
+Each call reads the model's structure again from the region and starts from an empty cache, so it depends on
+nothing but its arguments. The only `unsafe` on the Conductor's engine path is in this crate: pointers to slices,
+and the arena's bytes to their types.
+
+| Gate | Result |
+|---|---|
+| Through the C entry, scalar and SDOT, arena filled with junk and started at an odd address: the same bytes as the capability path | pass |
+| Refused with a status and value 0, no answer written: arena too small or empty, a cut model region, a region that is not a bundle, another context than the tables fit, an answer bound out of range, an unknown kernel set, bytes that are not a prompt, a null argument block | pass |
+| Unknown op; a job core 0 had already cancelled | `UNKNOWN_OP`; cancelled, nothing written |
+| Stack of the whole entry (opening the model and the session included), optimised aarch64 build, test model: about 8.0 KiB of the worker's 16 KiB, against the 12 KiB budget | pass |
+| In the no-Linux gate and the no-writable-globals gate | pass |
+
+ftFg through the entry on the build host (`hnx-lm entry`, packed bundle, context 2,048, test key, one synthetic
+window): model region 1,947 MB read-only; arena 247.7 MiB; reading the model's structure again takes 88 ms; the
+job 34.3 s against 34.0 s on a node's open session; **the same 818 bytes from both**. Host numbers, not device
+numbers.
+
+Not in this stage: keeping the cache between jobs (prefix reuse saved 293 to 453 prompt tokens per job on a node),
+which needs state that outlives the call. Not done on this host: the bare-metal build (no `aarch64-unknown-none`
+target installed here); the crate is `no_std` with no allocation and no globals, and S2a's link map is the check
+that counts.
+
 **Exact agreement, with the real engine.** The fleet's verified redundancy (`conductor_core::quorum`, ADR 0071
 amendment A3) compares signed output hashes for equality, so it stands on nodes giving the same bytes. The same
 file checks that on a test model with seeded weights (tokens score differently, so the answer depends on every
@@ -624,6 +661,7 @@ kernel, and x86.
 |---|---|---|
 | [`conductor-core/`](conductor-core/) | protocol, HP-EXEC v1, classes, tools, strict JSON, verifier, placement, ledger, harness, worker gate; signer behind `--features signer` | `no_std`, no alloc, `forbid(unsafe_code)`; clippy denies indexing, unwrap/expect/panic, unchecked arithmetic, truncating casts |
 | [`conductor-p0/`](conductor-p0/) | the worker's `Executor` over the native engine session: a heqk node's `infer` | `no_std`, no alloc, no float, `forbid(unsafe_code)` |
+| [`engine-entry/`](engine-entry/) | the engine job as one call over raw regions, safe (`run`) and C ABI (`engine_infer`): what a worker-core engine image links | `no_std`, no alloc, no float; the one place with `unsafe` (pointers to slices, arena bytes to types) |
 | [`conductor-mock/`](conductor-mock/) | mock kernel + mock worker, the C0 gate tests, fuzzing, host timing | host only |
 | [`el0-harness/`](el0-harness/) | the harness as an EL0 excursion server (no signer, no key) | `aarch64-unknown-none-softfloat`, pinned heqk nightly |
 

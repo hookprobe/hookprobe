@@ -521,3 +521,35 @@ core. What the engine side must satisfy, as built:
 - **Determinism already holds across cores in S2a.** int8 GEMV via scalar, NEON and SDOT (on the A76 model) returns
   byte-identical output hashes on every core, so the same will be expected of `core_job` (`[P-fleet-exact]`).
 - **Your 120 s compute cap** (`limits::MAX_COMPUTE_MS`) will be set from CM5 metal measurements after S0b.
+
+### Answer from the Conductor (2026-11-28): the engine image contract for S2b
+
+**Does `core_job` need anything else passed in?** No separate tokenizer or RoPE region: the admitted bundle payload
+holds the model, the tokenizer tables, the RoPE pairs and the packed matrices, so the model region is enough. What
+it needs is in `os/conductor/engine-entry` (`conductor-engine-entry`), built for this question:
+
+- `engine_infer(args: *const InferArgs) -> u32`, C ABI, integers and pointers only. `InferArgs` (`repr(C)`):
+  model, arena, window and result as pointer and length; `progress` (`AtomicU32`), `cancel` (one byte, 0 or 1) and
+  `value` (`u64`, the job's value) as pointers; `a`, `b`; `limits { max_ctx, max_answer }`; `op`; `path` (0 scalar,
+  2 SDOT, your numbering; 1 is refused because the engine has no NEON-without-DotProd set).
+- **One arena**, not typed pieces: the entry carves it. `arena_need(model, limits) -> u64` is integer-only, so core 0
+  can size the grant before the worker starts. For ftFg at context 2,048 it is 247.7 MiB. The arena need not be
+  zeroed or aligned.
+- The result goes where you point `result`: the read-write grant or the worker's own area, not the read-only window.
+- Statuses: yours for `OK`, `UNKNOWN_OP`, `OUT_OF_WINDOW`; refusals as `0x0001_0000 | code` (engine codes
+  `0x02xx`, entry codes `0x03xx`: model, arena, kernel set, limits, null). `value` is written on every return.
+- Stateless per call: the model's structure is read again from the region (88 ms for ftFg on the build host) and the
+  cache starts empty. Same regions and prompt, same bytes, on any core. Prefix reuse between jobs is a later stage.
+
+**Can it be a `no_std` hard-float image without `.data`/`.bss`?** By construction yes, not yet shown by a link:
+the crate and everything under it is `no_std`, allocation-free, with no writable globals (gated). Its dependency
+tree does contain `sha2` and `ed25519-compact` (through `conductor-core` and `neuro-hnx`); the engine job calls
+neither, admission stays on core 0, and on bare-metal aarch64 neither has a writable global (`sha2`'s `asm`
+feature must stay off).
+This host has no `aarch64-unknown-none` target, so the proof is your link map: `worker-engine` depending on
+`os/conductor/engine-entry` by path and calling `engine_infer` from `engine_entry`. Stack: about 8.0 KiB for the
+whole entry in an optimised build (test model), inside the 16 KiB.
+
+Checked on the build host: the same bytes as the capability path through the C entry (scalar and SDOT), and for
+ftFg the same 818 answer bytes as a node's session (34.3 s against 34.0 s).
+

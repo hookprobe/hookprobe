@@ -78,8 +78,12 @@ fn gguf_tokens() -> Vec<Vec<u8>> {
     t
 }
 
-/// Build, sign, load in place and admit the tiny model as a bundle: the node's start-up.
 fn admitted(seed: Option<u64>) -> Admitted<'static> {
+    admitted_bundle(bundle_bytes(seed))
+}
+
+/// The tiny model as a bundle payload: model file, tokenizer tables, RoPE pairs, no packed section.
+fn bundle_bytes(seed: Option<u64>) -> &'static [u8] {
     let toks = tokens();
     let file = match seed {
         None => tok_build::tiny_qwen3_gguf(&gguf_tokens(), CTX as u32),
@@ -87,7 +91,11 @@ fn admitted(seed: Option<u64>) -> Admitted<'static> {
     };
     let tok = tok_build::blob(&tok_build::Source { tokens: toks, merges: vec![], added: vec![256] }, &tok_build::unicode_ranges(), &tok_build::nfc_tables()).unwrap();
     let rope: Vec<u8> = (0..CTX * 16).flat_map(|i| if i % 3 == 0 { [0i32.to_le_bytes(), (1i32 << 30).to_le_bytes()].concat() } else { [(1i32 << 30).to_le_bytes(), 0i32.to_le_bytes()].concat() }).collect();
-    let bundle: &'static [u8] = tok_build::bundle([&file, &tok, &rope, &[]]).unwrap().leak();
+    tok_build::bundle([&file, &tok, &rope, &[]]).unwrap().leak()
+}
+
+/// Build, sign, load in place and admit the tiny model as a bundle: the node's start-up.
+fn admitted_bundle(bundle: &'static [u8]) -> Admitted<'static> {
     let mut licence = [0u8; 32];
     licence[..13].copy_from_slice(b"AGPL-3.0-only");
     let mut h = Header {
@@ -461,5 +469,164 @@ fn the_engine_job_fits_a_worker_core_stack() {
     // unoptimised build uses several times more and is not what a device runs.
     if cfg!(all(target_arch = "aarch64", not(debug_assertions))) {
         assert!(used_fast.max(used_scalar) <= ENGINE_STACK_BUDGET, "the engine job used {used_fast}/{used_scalar} bytes of stack; budget {ENGINE_STACK_BUDGET} of {WORKER_STACK}");
+    }
+}
+
+// ---------------------------------------------------------------- the entry over raw regions (ADR 0060 S2b)
+
+mod entry {
+    use super::*;
+    use conductor_engine_entry::{self as ee, arena_need, engine_infer, InferArgs, Limits};
+    use conductor_p0::core_job::{op, refused_with, status, Link, CANCELLED, HEADER};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+    const LIMITS: Limits = Limits { max_ctx: CTX as u32, max_answer: MAX_ANSWER as u32 };
+
+    fn prompt() -> Vec<u8> {
+        format!("{}F1 H1->R1:443 n=3 bytes=1200\nF2 H2->R1:22 n=1 bytes=90{}Assess this window.", neuro_contract::USER_HEAD, neuro_contract::USER_MID).into_bytes()
+    }
+
+    /// The answer the capability path gives for the same model and prompt.
+    fn reference() -> Vec<u8> {
+        let mut node = executor_on(MODEL, Simd::SCALAR, Some(7));
+        let mut out = vec![0u8; 8192];
+        let run = node.run(conductor_core::cap::op::INFER, &MODEL, &prompt(), &mut out).unwrap();
+        out[..run.len].to_vec()
+    }
+
+    struct Call<'a> {
+        model: &'a [u8],
+        arena: &'a mut [u8],
+        window: &'a [u8],
+        result: &'a mut [u8],
+        cancel: bool,
+        limits: Limits,
+        op: u32,
+        path: u32,
+    }
+
+    /// Through the C entry, as an engine image's stub would call it. Returns status, value, progress word.
+    fn call(c: Call) -> (u32, u64, u32) {
+        let (progress, cancel) = (AtomicU32::new(9), AtomicBool::new(c.cancel));
+        let mut value = u64::MAX;
+        let args = InferArgs {
+            model: c.model.as_ptr(),
+            model_len: c.model.len() as u64,
+            arena: c.arena.as_mut_ptr(),
+            arena_len: c.arena.len() as u64,
+            window: c.window.as_ptr(),
+            window_len: c.window.len() as u64,
+            result: c.result.as_mut_ptr(),
+            result_len: c.result.len() as u64,
+            progress: &progress,
+            cancel: &cancel,
+            value: &mut value,
+            a: 0,
+            b: c.window.len() as u64,
+            limits: c.limits,
+            op: c.op,
+            path: c.path,
+        };
+        // SAFETY: the regions are live, distinct slices of the stated lengths; the words are live; SDOT is
+        // passed only when the host has it (`sdot()`).
+        let st = unsafe { engine_infer(&args) };
+        (st, value, progress.load(Ordering::Acquire))
+    }
+
+    fn sdot() -> bool {
+        fastest().is_neon()
+    }
+
+    #[test]
+    fn raw_regions_in_the_same_bytes_out() {
+        let model = bundle_bytes(Some(7));
+        let need = arena_need(model, LIMITS).unwrap() as usize;
+        let want = reference();
+        let window = prompt();
+        // What is in the arena before a call does not matter, and neither does where it starts.
+        let mut arena = vec![0xEEu8; need + 1];
+        let mut result = vec![0u8; 8192];
+        let mut paths = vec![ee::path::SCALAR];
+        if sdot() {
+            paths.push(ee::path::SDOT);
+        }
+        for path in paths {
+            for skew in [0usize, 1] {
+                result.fill(0);
+                let (st, value, progress) = call(Call { model, arena: &mut arena[skew..], window: &window, result: &mut result, cancel: false, limits: LIMITS, op: op::ENGINE_INFER, path });
+                assert_eq!(st, status::OK, "path {path} skew {skew}");
+                assert_eq!(&result[HEADER..HEADER + value as usize], &want[..], "path {path} skew {skew}: the capability path's bytes");
+                let word = |i: usize| u32::from_le_bytes(result[i * 4..i * 4 + 4].try_into().unwrap());
+                assert_eq!(progress, word(0), "core 0 saw the last pass");
+                assert_eq!(word(3), 0, "a call starts from an empty cache");
+            }
+        }
+        // The safe form, on the same arena as the calls above left it.
+        let (progress, cancel) = (AtomicU32::new(0), AtomicBool::new(false));
+        result.fill(0);
+        let (st, value) = ee::run(ee::Job { model, arena: &mut arena, limits: LIMITS, simd: fastest(), op: op::ENGINE_INFER, a: 0, b: window.len() as u64, link: Link { window: &window, progress: &progress, cancel: &cancel }, result: &mut result });
+        assert_eq!((st, &result[HEADER..HEADER + value as usize]), (status::OK, &want[..]));
+    }
+
+    #[test]
+    fn what_the_entry_refuses() {
+        let model = bundle_bytes(Some(7));
+        let need = arena_need(model, LIMITS).unwrap() as usize;
+        let window = prompt();
+        let mut arena = vec![0u8; need];
+        let mut result = vec![0u8; 8192];
+        macro_rules! refuse {
+            ($what:literal, $code:expr, $($field:ident: $v:expr),*) => {{
+                result.fill(0);
+                let (st, value, _) = call(Call { $($field: $v,)* ..Call { model, arena: &mut arena, window: &window, result: &mut result, cancel: false, limits: LIMITS, op: op::ENGINE_INFER, path: ee::path::SCALAR } });
+                assert!(refused_with(st, $code), "{}: {st:#x}", $what);
+                assert_eq!(value, 0, "{}", $what);
+            }};
+        }
+        let mut small = vec![0u8; need / 2];
+        refuse!("an arena that is too small", ee::code::ARENA, arena: &mut small);
+        refuse!("no arena", ee::code::ARENA, arena: &mut []);
+        refuse!("a cut model region", ee::code::MODEL, model: &model[..model.len() - 1]);
+        let mut bent = model.to_vec();
+        bent[..8].fill(0xFF);
+        refuse!("a region that is not a bundle", ee::code::MODEL, model: &bent);
+        refuse!("another context than the tables were made for", ee::code::MODEL, limits: Limits { max_ctx: CTX as u32 * 2, ..LIMITS });
+        refuse!("an answer bound out of range", ee::code::LIMITS, limits: Limits { max_answer: ee::MAX_ANSWER_LIMIT + 1, ..LIMITS });
+        refuse!("a kernel set this build does not have", ee::code::KERNELS, path: 1);
+        refuse!("bytes that are not a prompt", conductor_p0::code::PROMPT, window: &[0xA5; 64]);
+        assert!(result[HEADER..].iter().all(|b| *b == 0), "a refusal writes no answer");
+
+        let (st, value, _) = call(Call { model, arena: &mut arena, window: &window, result: &mut result, cancel: false, limits: LIMITS, op: 0x7777, path: ee::path::SCALAR });
+        assert_eq!((st, value), (status::UNKNOWN_OP, 0));
+        let (st, value, _) = call(Call { model, arena: &mut arena, window: &window, result: &mut result, cancel: true, limits: LIMITS, op: op::ENGINE_INFER, path: ee::path::SCALAR });
+        assert_eq!((st, value), (CANCELLED, 0), "core 0 had already stopped it");
+        // SAFETY: a null argument block is refused before anything is read.
+        assert!(refused_with(unsafe { engine_infer(std::ptr::null()) }, ee::code::NULL));
+        assert!(refused_with(arena_need(&bent, LIMITS).unwrap_err(), ee::code::MODEL));
+    }
+
+    #[test]
+    fn the_whole_entry_fits_a_worker_core_stack() {
+        // Unlike `the_engine_job_fits_a_worker_core_stack`, this includes opening the model and the session.
+        let model = bundle_bytes(Some(7));
+        let need = arena_need(model, LIMITS).unwrap() as usize;
+        let handed = Handed((vec![0u8; need], vec![0u8; 8192], prompt(), fastest()));
+        let (st, used) = std::thread::Builder::new()
+            .stack_size(1 << 20)
+            .spawn(move || {
+                let (mut arena, mut result, window, simd) = handed.take();
+                let (progress, cancel) = (AtomicU32::new(0), AtomicBool::new(false));
+                let job = ee::Job { model, arena: &mut arena, limits: LIMITS, simd, op: op::ENGINE_INFER, a: 0, b: window.len() as u64, link: Link { window: &window, progress: &progress, cancel: &cancel }, result: &mut result };
+                let ((st, _), used) = stack_used(256 * 1024, || ee::run(job));
+                (st, used)
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(st, status::OK);
+        println!("engine entry stack: {used} bytes; arena {need} bytes for the test model; worker stack {WORKER_STACK}");
+        if cfg!(all(target_arch = "aarch64", not(debug_assertions))) {
+            assert!(used <= ENGINE_STACK_BUDGET, "the entry used {used} bytes of stack; budget {ENGINE_STACK_BUDGET} of {WORKER_STACK}");
+        }
     }
 }

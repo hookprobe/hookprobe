@@ -23,6 +23,7 @@ neuro-hnx = { path = "../neuro-hnx" }
 conductor-core = { path = "../conductor-core" }
 conductor-worker = { path = "../conductor-worker" }
 conductor-p0 = { path = "../conductor-p0" }
+conductor-engine-entry = { path = "../engine-entry" }
 conductor-mock = { path = "../conductor-mock" }
 ed25519-compact = "=2.3.1"
 serde_json = "1"

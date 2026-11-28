@@ -43,7 +43,7 @@ fn only_rust_sources() {
 #[test]
 fn device_crates_are_freestanding() {
     let banned = ["f32", "f64", "std::", "extern crate std", "extern crate alloc", "alloc::", "libc", "pthread", "mmap", "/proc", "/dev/", "python", "torch"];
-    for (krate, entry) in [("conductor-core", "src/lib.rs"), ("runtime-proof", "src/lib.rs"), ("el0-harness", "src/main.rs"), ("neuro-engine", "src/lib.rs"), ("el0-engine", "src/main.rs"), ("neuro-kernels", "src/lib.rs"), ("neon-proof", "src/main.rs"), ("neuro-hnx", "src/lib.rs"), ("neuro-lm", "src/lib.rs"), ("neuro-gguf", "src/lib.rs"), ("neuro-contract", "src/lib.rs"), ("conductor-p0", "src/lib.rs")] {
+    for (krate, entry) in [("conductor-core", "src/lib.rs"), ("runtime-proof", "src/lib.rs"), ("el0-harness", "src/main.rs"), ("neuro-engine", "src/lib.rs"), ("el0-engine", "src/main.rs"), ("neuro-kernels", "src/lib.rs"), ("neon-proof", "src/main.rs"), ("neuro-hnx", "src/lib.rs"), ("neuro-lm", "src/lib.rs"), ("neuro-gguf", "src/lib.rs"), ("neuro-contract", "src/lib.rs"), ("conductor-p0", "src/lib.rs"), ("engine-entry", "src/lib.rs")] {
         let dir = root().join(krate);
         let head = std::fs::read_to_string(dir.join(entry)).unwrap();
         assert!(head.contains("#![no_std]"), "{krate} must be no_std");
@@ -70,7 +70,7 @@ fn device_binary_depends_only_on_conductor_core() {
 
 /// Crates whose code runs on a compute-role worker core (ADR 0060 S2). Since S1b a worker core has the kernel's
 /// `.data` and `.bss` unmapped, so a writable global in any of them is an MMU fault that parks the core.
-const WORKER_CORE_CRATES: [&str; 9] = ["neuro-kernels", "neuro-lm", "neuro-contract", "neuro-gguf", "neuro-engine", "neuro-hnx", "conductor-p0", "conductor-core", "conductor-worker"];
+const WORKER_CORE_CRATES: [&str; 10] = ["neuro-kernels", "neuro-lm", "neuro-contract", "neuro-gguf", "neuro-engine", "neuro-hnx", "conductor-p0", "engine-entry", "conductor-core", "conductor-worker"];
 
 /// Is this line (comments removed) a writable global? Returns what was found.
 fn writable_global(code: &str) -> Option<&'static str> {

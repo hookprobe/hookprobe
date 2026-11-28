@@ -14,6 +14,7 @@ conductor-worker = { path = "../conductor-worker" }
 
 [dev-dependencies]
 conductor-p0 = { path = "../conductor-p0" }
+conductor-engine-entry = { path = "../engine-entry" }
 neuro-gguf = { path = "../neuro-gguf" }
 neuro-hnx = { path = "../neuro-hnx" }
 neuro-lm = { path = "../neuro-lm" }

@@ -101,10 +101,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "conductor-engine-entry"
+version = "0.0.26"
+dependencies = [
+ "conductor-p0",
+ "neuro-gguf",
+ "neuro-kernels",
+ "neuro-lm",
+]
+
+[[package]]
 name = "conductor-mock"
 version = "0.0.26"
 dependencies = [
  "conductor-core",
+ "conductor-engine-entry",
  "conductor-p0",
  "conductor-worker",
  "neuro-contract",
@@ -827,6 +838,7 @@ name = "tok-build"
 version = "0.0.26"
 dependencies = [
  "conductor-core",
+ "conductor-engine-entry",
  "conductor-mock",
  "conductor-p0",
  "conductor-worker",
