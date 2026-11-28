@@ -246,6 +246,24 @@ impl<'a> Session<'a> {
         }
     }
 
+    /// Take up the cache an earlier session left behind in the same `Mem::kv_vals`, `Mem::kv_shifts` and
+    /// `Mem::prev`: `kept` is what that session's [`Session::suspend`] returned. Only before the first job of
+    /// this session; later it does nothing. The caller vouches that the three slices are the same memory,
+    /// untouched since, and that the model is the same: with anything else in them the next answer is wrong
+    /// (never unsafe: they are integers).
+    pub fn resume(&mut self, kept: usize) {
+        if !self.ids_live && self.n_prompt == 0 {
+            self.prev_len = kept.min(self.prev.len()).min(self.ids.len());
+        }
+    }
+
+    /// Before the session is dropped: write the tokens behind the KV cache to `Mem::prev` and return how many
+    /// there are, for [`Session::resume`] on a later session over the same memory.
+    pub fn suspend(&mut self) -> usize {
+        self.keep_prefix();
+        self.prev_len
+    }
+
     /// Prompt tokens of the current job that were not fed again, because the KV cache already held them from
     /// an earlier job with the same leading tokens (the system prompt, for instance). Exact: the answer is the
     /// one a fresh session gives.

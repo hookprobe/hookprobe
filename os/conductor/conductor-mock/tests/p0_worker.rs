@@ -507,6 +507,11 @@ mod entry {
 
     /// Through the C entry, as an engine image's stub would call it. Returns status, value, progress word.
     fn call(c: Call) -> (u32, u64, u32) {
+        call_on(c, None)
+    }
+
+    /// The same, through the entry that keeps the cache when `kept` is given.
+    fn call_on(c: Call, kept: Option<&mut ee::Kept>) -> (u32, u64, u32) {
         let (progress, cancel) = (AtomicU32::new(9), AtomicBool::new(c.cancel));
         let mut value = u64::MAX;
         let args = InferArgs {
@@ -529,8 +534,102 @@ mod entry {
         };
         // SAFETY: the regions are live, distinct slices of the stated lengths; the words are live; SDOT is
         // passed only when the host has it (`sdot()`).
-        let st = unsafe { engine_infer(&args) };
+        let st = match kept {
+            None => unsafe { engine_infer(&args) },
+            // SAFETY: as above; the block is live, and the tests keep the promise about the arena except where
+            // they say they break it.
+            Some(k) => unsafe { ee::engine_infer_kept(&args, k) },
+        };
         (st, value, progress.load(Ordering::Acquire))
+    }
+
+    /// Windows of one device: the same framing, another context each.
+    fn windows() -> Vec<Vec<u8>> {
+        ["F1 H1->R1:443 n=3 bytes=1200\nF2 H2->R1:22 n=1 bytes=90", "F1 H3->R2:53 n=40 bytes=3100", "F1 H1->R1:443 n=3 bytes=1200\nF2 H4->R3:8443 n=2 bytes=640\nF3 H2->R1:22 n=1 bytes=90"]
+            .iter()
+            .map(|ctx| format!("{}{ctx}{}Assess this window.", neuro_contract::USER_HEAD, neuro_contract::USER_MID).into_bytes())
+            .collect()
+    }
+
+    #[test]
+    fn the_cache_is_kept_between_calls() {
+        let model = bundle_bytes(Some(7));
+        let need = arena_need(model, LIMITS).unwrap() as usize;
+        let windows = windows();
+        let mut result = vec![0u8; 8192];
+        // What each window's answer is from an empty cache.
+        let mut scratch = vec![0u8; need];
+        let want: Vec<Vec<u8>> = windows
+            .iter()
+            .map(|w| {
+                let (st, value, _) = call(Call { model, arena: &mut scratch, window: w, result: &mut result, cancel: false, limits: LIMITS, op: op::ENGINE_INFER, path: ee::path::SCALAR });
+                assert_eq!(st, status::OK);
+                result[HEADER..HEADER + value as usize].to_vec()
+            })
+            .collect();
+        assert!(want[0] != want[1] && want[1] != want[2], "the windows have different answers");
+
+        let mut arena = vec![0xEEu8; need + 1];
+        let mut kept = ee::Kept::EMPTY;
+        let mut other = vec![0u8; 8192];
+        let paths = if sdot() { [ee::path::SCALAR, ee::path::SDOT] } else { [ee::path::SCALAR; 2] };
+        // One job: status, the answer, prompt tokens not fed again.
+        let mut job = |arena: &mut [u8], kept: &mut ee::Kept, i: usize, path: u32, cancel: bool| {
+            result.fill(0);
+            let (st, value, _) = call_on(Call { model, arena, window: &windows[i], result: &mut result, cancel, limits: LIMITS, op: op::ENGINE_INFER, path }, Some(kept));
+            let reused = u32::from_le_bytes(result[12..16].try_into().unwrap());
+            (st, result[HEADER..HEADER + value as usize].to_vec(), reused)
+        };
+
+        let (st, got, reused) = job(&mut arena[..need], &mut kept, 0, paths[0], false);
+        assert_eq!((st, &got, reused), (status::OK, &want[0], 0), "nothing kept before the first job");
+        let after_first = kept.tokens();
+        assert!(after_first > 0);
+        // The next jobs find the shared start in the cache, whichever kernels wrote it, and answer the same bytes.
+        let mut shared = 0;
+        for (n, i) in [1usize, 2, 0, 2].into_iter().enumerate() {
+            let (st, got, reused) = job(&mut arena[..need], &mut kept, i, paths[(n + 1) % 2], false);
+            assert_eq!((st, &got), (status::OK, &want[i]), "job {n} on window {i}");
+            assert!(reused > 20, "job {n} fed its whole prompt again (reused {reused})");
+            shared = reused;
+        }
+
+        // A job core 0 stops and a job that is refused leave a cache the next job can use.
+        let (st, got, _) = job(&mut arena[..need], &mut kept, 1, paths[0], true);
+        assert_eq!((st, got.len()), (CANCELLED, 0));
+        let (st, got, reused) = job(&mut arena[..need], &mut kept, 0, paths[0], false);
+        assert_eq!((st, &got), (status::OK, &want[0]), "after a cancelled job");
+        assert!(reused > 20, "after a cancelled job: reused {reused}");
+        let (st, _, _) = call_on(Call { model, arena: &mut arena[..need], window: &[0xA5; 64], result: &mut other, cancel: false, limits: LIMITS, op: op::ENGINE_INFER, path: paths[0] }, Some(&mut kept));
+        assert!(refused_with(st, conductor_p0::code::PROMPT));
+        let (st, got, reused) = job(&mut arena[..need], &mut kept, 2, paths[0], false);
+        assert_eq!((st, &got), (status::OK, &want[2]), "after a refused job");
+        assert!(reused > 20, "after a refused job: reused {reused}");
+
+        // The stateless entry does not look at what is there, and what it leaves is not taken for a kept cache
+        // by a caller who clears the block, as the contract says.
+        let (st, value, _) = call(Call { model, arena: &mut arena[..need], window: &windows[1], result: &mut other, cancel: false, limits: LIMITS, op: op::ENGINE_INFER, path: paths[0] });
+        assert_eq!((st, &other[HEADER..HEADER + value as usize]), (status::OK, &want[1][..]));
+        kept = ee::Kept::EMPTY;
+        let (st, got, reused) = job(&mut arena[..need], &mut kept, 0, paths[0], false);
+        assert_eq!((st, &got, reused), (status::OK, &want[0], 0), "a cleared block: an empty cache");
+
+        // A block that does not describe the call is not used: the arena somewhere else, another model length.
+        let (st, got, reused) = job(&mut arena[1..], &mut kept, 1, paths[0], false);
+        assert_eq!((st, &got, reused), (status::OK, &want[1], 0), "the arena moved");
+        let (st, got, reused) = job(&mut arena[1..], &mut kept, 2, paths[0], false);
+        assert_eq!((st, &got), (status::OK, &want[2]));
+        assert!(reused > 20 && shared > 20, "kept again at the new place: {reused}");
+
+        // A caller that breaks the promise (the arena overwritten, the block left) gets an answer or a refusal
+        // that may be wrong, and no fault: every kept byte is an integer.
+        arena.fill(0x5A);
+        let (st, _, _) = job(&mut arena[1..], &mut kept, 0, paths[0], false);
+        assert!(st == status::OK || st & status::REFUSED != 0, "{st:#x}");
+        // And the block is a required region of this entry.
+        let args = std::mem::MaybeUninit::<InferArgs>::zeroed();
+        // SAFETY: a null block is refused before the arguments are read.
+        assert!(refused_with(unsafe { ee::engine_infer_kept(args.as_ptr(), std::ptr::null_mut()) }, ee::code::NULL));
     }
 
     fn sdot() -> bool {
@@ -617,7 +716,9 @@ mod entry {
                 let (mut arena, mut result, window, simd) = handed.take();
                 let (progress, cancel) = (AtomicU32::new(0), AtomicBool::new(false));
                 let job = ee::Job { model, arena: &mut arena, limits: LIMITS, simd, op: op::ENGINE_INFER, a: 0, b: window.len() as u64, link: Link { window: &window, progress: &progress, cancel: &cancel }, result: &mut result };
-                let ((st, _), used) = stack_used(256 * 1024, || ee::run(job));
+                // The entry that keeps the cache: it does all the stateless one does, and the block besides.
+                let mut kept = ee::Kept::EMPTY;
+                let ((st, _), used) = stack_used(256 * 1024, || ee::run_kept(job, &mut kept));
                 (st, used)
             })
             .unwrap()

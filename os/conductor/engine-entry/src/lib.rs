@@ -16,9 +16,14 @@
 //! pointers only, for the image's entry stub. The only `unsafe` in the Conductor's engine path is here: turning
 //! the caller's pointers into slices, and giving the arena's bytes their types.
 //!
-//! Each call opens the model again from the regions and starts from an empty cache, so a call depends on
-//! nothing but its arguments: the same regions and prompt give the same bytes on any core. Keeping the cache
-//! between jobs (prefix reuse) needs state that outlives the call and is not in this stage.
+//! Each call opens the model again from the regions. With [`run`] and [`engine_infer`] it also starts from an
+//! empty cache, so a call depends on nothing but its arguments: the same regions and prompt give the same bytes
+//! on any core.
+//!
+//! [`run_kept`] and [`engine_infer_kept`] give the same bytes and feed less: the cache one job leaves in the
+//! arena serves the next job as far as the two prompts start with the same tokens (the system prompt and the
+//! framing, for the explainer). The state that outlives the call is the arena itself and one 32-byte block the
+//! caller owns, [`Kept`]. The engine image still has no writable data.
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::indexing_slicing, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -152,6 +157,58 @@ impl<'a> Carver<'a> {
     }
 }
 
+/// What one job left in the arena for the next: 32 bytes the caller owns, next to the arena it describes.
+///
+/// All zero is "nothing kept", and that is what the caller writes whenever it loads a model, grants or moves
+/// the arena, or lets anything else write to it. The engine reads the block at the start of a job, clears it
+/// while the job runs (a core that faults in a job leaves nothing kept) and writes it again at the end.
+///
+/// The engine compares the block with the call (context, arena address, model length) and starts from an
+/// empty cache when they differ. It cannot see that the arena's bytes or the model's are the ones it left:
+/// that is the caller's promise. A block that claims a cache the arena does not hold gives a wrong answer,
+/// not a fault.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct Kept {
+    tag: u32,
+    /// Leading tokens whose positions the cache holds.
+    tokens: u32,
+    max_ctx: u32,
+    zero: u32,
+    arena: u64,
+    model_len: u64,
+}
+
+impl Kept {
+    /// Nothing kept: the next job feeds its whole prompt.
+    pub const EMPTY: Kept = Kept { tag: 0, tokens: 0, max_ctx: 0, zero: 0, arena: 0, model_len: 0 };
+    /// Marks a block this build wrote. It changes with the arena's layout ([`BATCH`] is part of it).
+    const TAG: u32 = 0x314B_5148;
+
+    /// Tokens the next job may find already in the cache.
+    pub fn tokens(&self) -> u32 {
+        if self.tag == Self::TAG {
+            self.tokens
+        } else {
+            0
+        }
+    }
+
+    fn of(tokens: usize, max_ctx: u32, arena: u64, model_len: u64) -> Kept {
+        Kept { tag: Self::TAG, tokens: u32::try_from(tokens).unwrap_or(0), max_ctx, zero: 0, arena, model_len }
+    }
+
+    /// The tokens to take up, if this block describes this call.
+    fn matching(&self, max_ctx: u32, arena: u64, model_len: u64) -> usize {
+        let same = self.tag == Self::TAG && self.zero == 0 && self.max_ctx == max_ctx && self.arena == arena && self.model_len == model_len;
+        if same {
+            usize::try_from(self.tokens).unwrap_or(0)
+        } else {
+            0
+        }
+    }
+}
+
 /// One engine job, over slices.
 pub struct Job<'a, 'l> {
     /// The admitted bundle's payload.
@@ -171,6 +228,17 @@ pub struct Job<'a, 'l> {
 /// Run one job. Returns `(status, value)` for the executive's `Done`: on `OK`, `value` is the answer's length
 /// after the 16-byte header in `result`.
 pub fn run(job: Job<'_, '_>) -> (u32, u64) {
+    run_on(job, None)
+}
+
+/// [`run`], taking up the cache the last job left in `job.arena` and leaving this job's for the next. The
+/// answer is the one [`run`] gives; the fourth counter of the result header says how many prompt tokens were
+/// not fed again. See [`Kept`] for what the caller promises.
+pub fn run_kept(job: Job<'_, '_>, kept: &mut Kept) -> (u32, u64) {
+    run_on(job, Some(kept))
+}
+
+fn run_on(job: Job<'_, '_>, kept: Option<&mut Kept>) -> (u32, u64) {
     let Job { model, arena, limits, simd, op: job_op, a, b, link, result } = job;
     if job_op != op::ENGINE_INFER {
         return (status::UNKNOWN_OP, 0);
@@ -182,6 +250,8 @@ pub fn run(job: Job<'_, '_>) -> (u32, u64) {
         return (refused(code::MODEL), 0);
     };
     let z = p0::sizes(&ad.hparams, BATCH);
+    // What a kept cache is tied to. The address counts: the pieces are aligned from where the arena starts.
+    let key = (limits.max_ctx, arena.as_ptr() as usize as u64, model.len() as u64);
     let mut c = Carver { rest: arena };
     let mut carve = || {
         Some((
@@ -211,7 +281,15 @@ pub fn run(job: Job<'_, '_>) -> (u32, u64) {
     };
     // No clock on a compute core: the times in a result are core 0's to measure.
     let mut engine = P0Executor::new(session, [0; 32], cps, buf, || 0).with_max_answer(answer);
-    core_job::run(&mut engine, job_op, a, b, link, result)
+    let Some(kept) = kept else {
+        return core_job::run(&mut engine, job_op, a, b, link, result);
+    };
+    engine.resume(kept.matching(key.0, key.1, key.2));
+    // Nothing is kept while the job writes the cache.
+    *kept = Kept::EMPTY;
+    let done = core_job::run(&mut engine, job_op, a, b, link, result);
+    *kept = Kept::of(engine.suspend(), key.0, key.1, key.2);
+    done
 }
 
 /// The arguments of [`engine_infer`]: regions as pointer and length, the job, and where the value goes.
@@ -259,15 +337,38 @@ pub unsafe extern "C" fn engine_infer(args: *const InferArgs) -> u32 {
         return refused(code::NULL);
     }
     // SAFETY: the caller's promises, passed on.
-    let (st, value) = unsafe { over_pointers(&g) };
+    let (st, value) = unsafe { over_pointers(&g, None) };
     // SAFETY: `value` points to a live word. It is written on every path, so the caller never reads a stale one.
+    unsafe { g.value.write(value) };
+    st
+}
+
+/// [`run_kept`] for an engine image's entry stub: [`engine_infer`] with the cache kept between calls.
+///
+/// # Safety
+/// As [`engine_infer`], and:
+/// - `kept` points to a live, writable [`Kept`] that nothing else reads or writes during the call;
+/// - the block is all zero, or it is as the last call with this `arena` left it, and since that call nothing
+///   has written to `arena`, and `model` holds the same bytes.
+pub unsafe extern "C" fn engine_infer_kept(args: *const InferArgs, kept: *mut Kept) -> u32 {
+    if args.is_null() || kept.is_null() {
+        return refused(code::NULL);
+    }
+    // SAFETY: the caller's first promise.
+    let g = unsafe { *args };
+    if g.model.is_null() || g.arena.is_null() || g.window.is_null() || g.result.is_null() || g.progress.is_null() || g.cancel.is_null() || g.value.is_null() {
+        return refused(code::NULL);
+    }
+    // SAFETY: the caller's promises, passed on; `kept` is live and exclusively ours for the call.
+    let (st, value) = unsafe { over_pointers(&g, Some(&mut *kept)) };
+    // SAFETY: as in `engine_infer`.
     unsafe { g.value.write(value) };
     st
 }
 
 /// # Safety
 /// As [`engine_infer`], with no null pointer in `g`.
-unsafe fn over_pointers(g: &InferArgs) -> (u32, u64) {
+unsafe fn over_pointers(g: &InferArgs, kept: Option<&mut Kept>) -> (u32, u64) {
     let len = |n: u64| usize::try_from(n).ok();
     let (Some(model_len), Some(arena_len), Some(window_len), Some(result_len)) = (len(g.model_len), len(g.arena_len), len(g.window_len), len(g.result_len)) else {
         return (refused(code::LIMITS), 0);
@@ -281,7 +382,8 @@ unsafe fn over_pointers(g: &InferArgs) -> (u32, u64) {
     };
     // SAFETY: the caller's promises about the regions and the words.
     unsafe {
-        run(Job {
+        run_on(
+            Job {
             model: core::slice::from_raw_parts(g.model, model_len),
             arena: core::slice::from_raw_parts_mut(g.arena, arena_len),
             limits: g.limits,
@@ -291,6 +393,8 @@ unsafe fn over_pointers(g: &InferArgs) -> (u32, u64) {
             b: g.b,
             link: Link { window: core::slice::from_raw_parts(g.window, window_len), progress: &*g.progress, cancel: &*g.cancel },
             result: core::slice::from_raw_parts_mut(g.result, result_len),
-        })
+            },
+            kept,
+        )
     }
 }

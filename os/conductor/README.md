@@ -355,8 +355,8 @@ entry stub:
 | progress, cancel, value | words | answer tokens so far; stop request; the job's value |
 | limits, op, path | integers | admitted context, answer bound, the job op, the kernel set (0 scalar, 2 SDOT, as `heqk_worker::job::path`) |
 
-Each call reads the model's structure again from the region and starts from an empty cache, so it depends on
-nothing but its arguments. The only `unsafe` on the Conductor's engine path is in this crate: pointers to slices,
+Each call reads the model's structure again from the region. `engine_infer` also starts from an empty cache, so
+it depends on nothing but its arguments. The only `unsafe` on the Conductor's engine path is in this crate: pointers to slices,
 and the arena's bytes to their types.
 
 | Gate | Result |
@@ -372,8 +372,33 @@ window): model region 1,947 MB read-only; arena 247.7 MiB; reading the model's s
 job 34.3 s against 34.0 s on a node's open session; **the same 818 bytes from both**. Host numbers, not device
 numbers.
 
-Not in this stage: keeping the cache between jobs (prefix reuse saved 293 to 453 prompt tokens per job on a node),
-which needs state that outlives the call. Not done on this host: the bare-metal build (no `aarch64-unknown-none`
+**Keeping the cache between jobs (`run_kept`, `engine_infer_kept`).** A second entry beside the first, same
+arguments plus one 32-byte block the caller owns (`Kept`). The cache a job leaves in the arena serves the next
+job as far as the two prompts start with the same tokens: the system prompt and the framing, for the explainer.
+The state that outlives the call is the arena and that block; the engine image still has no writable data. The
+stateless entry is unchanged, so a caller moves over when it wants to.
+
+What the caller promises: the block is all zero whenever it loads a model, grants or moves the arena, or lets
+anything else write to it. The engine clears the block while a job runs (a core that faults mid-job leaves
+nothing kept) and writes it at the end. It checks the block against the call (context, arena address, model
+length) and starts from an empty cache when they differ. It cannot check the arena's bytes: a block that claims a
+cache the arena does not hold gives a wrong answer, not a fault.
+
+| Gate (`the_cache_is_kept_between_calls`) | Result |
+|---|---|
+| Five jobs over three windows through the C entry, kernel sets alternating: every answer byte for byte the stateless entry's; every job after the first skips the shared start | pass |
+| After a job core 0 cancelled, and after a refused prompt: the next answer is right and still reuses | pass |
+| A cleared block, the arena at another address: empty cache, right answer | pass |
+| The arena overwritten under a block left in place (promise broken): returns, no fault | pass |
+| A null block | refused (`NULL`) |
+| Stack of this entry, optimised aarch64 build: about 8.8 KiB of 16 KiB, budget 12 KiB | pass |
+
+ftFg on the build host (`hnx-lm entry` with three windows, the full prompt the device sends, 2026-11-28): the
+same bytes from both entries on all three windows. The second and third jobs skip 306 and 293 prompt tokens and
+take 83.5 s and 59.8 s against 92.6 s and 68.8 s from an empty cache: about 9 s less per job. The first job gains
+nothing. Host numbers, not device numbers; on a slower core the same tokens are a larger number of seconds.
+
+Not done on this host: the bare-metal build (no `aarch64-unknown-none`
 target installed here); the crate is `no_std` with no allocation and no globals, and S2a's link map is the check
 that counts.
 
