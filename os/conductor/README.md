@@ -166,8 +166,8 @@ weight byte: segment 429 refused and the region wiped. A changed header byte or 
 **The bundle (payload kind `LM_BUNDLE`, `neuro_gguf::bundle`): nothing derived on the device.** A GGUF file is
 not enough on a device with no float and no build tools: the tokenizer needs its Unicode and merge tables and
 the decoder needs the RoPE table, which takes trigonometry. The bundle carries both beside the model under the
-same signature: three sections in a fixed order (model, tokenizer tables, RoPE pairs), each starting on a
-64-byte boundary. Admission checks that the tables fit the model (RoPE rows for the context and head
+same signature: four sections in a fixed order (model file, tokenizer tables, RoPE pairs, packed matrices; the
+last may be empty), each starting on a 64-byte boundary. Admission checks that the tables fit the model (RoPE rows for the context and head
 size; tokenizer tables that parse and have the model's vocabulary). The tokenizer is read where it lies; the
 RoPE table is copied into the arena admission already counts. `hnx-lm pack` builds a bundle by default.
 
