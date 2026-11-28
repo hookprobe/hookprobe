@@ -2,6 +2,7 @@
 
 > Superseded for software gaps by `heqk-parity-gaps.md` (legacy parity inventory + fix loop) and for
 > board work by `heqk-metal-test-plan.md`. This table keeps the original security/architecture items.
+> **Status: see `heqk-gate-status.md`** (single source of truth since 2026-11-21). The tables below are history.
 
 Legend — **Board**: needs the CM5 (flash / power-cycle / bench). **Decision**: needs the operator.
 Status `built` = committed + QEMU/host-proven, not yet on silicon.
@@ -64,3 +65,12 @@ The tables above are kept as written (history). Rows that changed since, with la
 | 15 | partial: EAPOL-Key + RSNE walk (5a) metal-proven; station-frame work (5b) QEMU only; WPA3-SAE frame walk (5c, PR #1005) QEMU only, metal pending; the authenticator state machine still moves with the driver: not built (release gate SEC-01 blocked) | `docs/design/metal-evidence/20261111-batch59-63.md`; ADR 0050 D4 |
 | 17 | the ~10 h WPA3 firmware trap was root-caused (REL-08b, CYW43455 PMKID-cache use-after-free) and is corrected in chip RAM (on by default with `wpa3`): 72 h soak + regression matrix metal pending; shipping blocked (written legal clearance, release gate CMP-02). The older TX-stall (release gate REL-08a): still mitigated (kick), root cause open | `docs/design/rel08-cyw43455-pmkid-trap.md` |
 
+## Status reconciled 2026-11-28 (source: `heqk-gate-status.md`)
+
+The tables above stay as written. Rows that changed since 2026-11-12:
+
+| # | Status 2026-11-28 | Evidence |
+|---|---|---|
+| 7 | open: the browser flasher (ADR 0037) is gap-fix plan H2 | `heqk-gate-status.md` GF-H2 |
+| 15 | done + metal: the authenticator moved out of the kernel with ADR 0065. el0-wpa holds the 4-way, SAE, PMKSA and the keys; the in-kernel fallback is gone. The release gate SEC-01 text is stale (operator-owned, C1) | #1235; ADR 0065 D4.3 / D6; `metal-evidence/20261111-batch59-63.md`, `20261114-evening.md` |
+| 17 | REL-08b: Infineon test firmware 7.45.314 removes the trap in our setup (test firmware, not shippable); production firmware still blocked. REL-08a mitigated (heal ladder 51/51 on metal), root cause open | `metal-evidence/20261114-mb25-mb27.md`, `20261113-mb15-selfheal.md` |

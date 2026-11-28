@@ -144,8 +144,8 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 
 - **C1 SEC-01:** `items.txt` still says "blocked: authenticator moves with the driver (not built)". ADR 0065 D4.3/D6 are realized on metal (el0-wpa holds the 4-way, SAE, PMKSA and keys; the in-kernel fallback is gone, #1235). The gate text needs re-scoping (operator-owned file).
 - **C2 ADR 0065 status table** still marks D4.4 bring-up / firmware download / reload as "[vision], still EL1"; 4e-1..4e-4 are merged with metal evidence.
-- **C3** the gap-fix plan and `heqk-remaining-gaps.md` still list merged work (R1–R10, E1, H1–H7, the authenticator) as to-do. Status is here now.
+- Resolved 2026-11-28: **C3** the gap-fix plan and `heqk-remaining-gaps.md` listed merged work (R1–R10, E1, H1–H7, the authenticator) as to-do. Both now carry status lines that point here; their tables stay as history.
 - **C4 REL-08b:** the gate text predates MB25–MB27 (Infineon test firmware 7.45.314 removes the trap in our setup, with a new rare type-0x7 trap; test firmware, not shippable).
-- **C5 parity doc:** G24b open (done + one step closed by decision), G28 / G31 "metal next" (PASS in 20261110-batch34-35.md), G43 "no Wi-Fi upload metal record" (live Wi-Fi apply 14/14 in 20261113-mb17.md; whether that covers the ADR 0058 `wifi` upload path still needs one check).
+- Resolved 2026-11-28: **C5 parity doc:** G24b was open (done + one step closed by decision), G28 / G31 "metal next" (PASS in 20261110-batch34-35.md), G43 "no Wi-Fi upload metal record" (live Wi-Fi apply 14/14 in 20261113-mb17.md). The rows now match this table, and so do G19 and G48. The G43 check is done: 20261113-mb17.md drives the HQCFG1 bundle `wifi` section; the standalone ADR 0058 `wifi` upload type (staged, next boot) still has no metal record, and the row says so.
 - **C6 sign-offs:** `docs/release/signoffs/README.md` lists a "certification" sign-off and omits `g46-security-review`, which `items.txt` requires.
-- **C7 pi4-assessment.md** still calls A-01 open; the audit 4.2 row still lists DNS-01 open. Both are fixed.
+- Resolved 2026-11-28: **C7** `pi4-assessment.md` called A-01 open; the audit 4.2 row listed DNS-01 open. Both now say fixed (A-01: d372ba10e, ad7d53d68, 20261114-late.md; DNS-01: #1187).
