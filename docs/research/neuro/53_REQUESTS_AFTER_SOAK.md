@@ -109,7 +109,11 @@ card kinds the fixture vectors do not cover (DNS, behaviour records, verbatim de
     worker.
 - **What it costs (Conductor):**
   - two model bundles, about 1.9 GB each, with one arena serving both, one at a time;
-  - a full prompt pass on the first ftT turn, because switching adapters drops the cache.
+  - a full prompt pass on the first ftT turn, because switching adapters drops the cache;
+  - **memory** (from #1675's `reserve`, context 2,048): one model needs 2,104.6 MiB, and two sharing an arena need
+    3,961.4 MiB. Both loaded therefore means the 8 GiB class with RAM above 4 GiB mapped (ADR 0061 M1). On 4 GiB
+    only one fits; swapping bundles from storage per turn adds a 1.9 GB read and verify (about 3.5 s on the build
+    host). Details: [`NEURO_ALIGNMENT.md`](../../../os/conductor/NEURO_ALIGNMENT.md).
 - **Still untested:** an investigation where one tool clears and another supports. As written, it stops. The
   Conductor will count such cases as telemetry if R13 goes ahead.
 - **Needed:** only if the operator adopts doc 56's design. The decision is HomePods' (the tool result format) and the
