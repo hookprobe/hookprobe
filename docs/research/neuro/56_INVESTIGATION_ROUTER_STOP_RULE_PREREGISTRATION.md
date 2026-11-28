@@ -110,3 +110,15 @@ that exists.
   checked unchanged by script). After adjudication: 44/44. The annotator marked 17 of the 44 as genuinely ambiguous.
 - **Typed outcomes** (isolated labeller, 77 RESULT lines in 65 cases, each seen alone): supports 33, clears 30,
   none 14. How they fall by kind is reported only by the gate.
+
+## 7. Result (2026-11-28, one look)
+
+**VERDICT: PASS** on all five conditions.
+- multi 0.457 vs ftM's 0.114; next+multi 0.637 vs 0.487, McNemar p = 0.0018 (13 vs 1).
+- clears 0.967 vs ftM's 0.833. The stop rule fired on 29 of the 30 clears cases and on no multi case.
+- The system equals its route on every case; grounding is clean.
+- It is an upper bound until tools type their own results (§5).
+
+Router plus stop rule is proposed to the Conductor (harness) and to HomePods and the operator. That makes R13
+concrete: each read-only tool returns `supports`, `clears` or `none` beside its sentence. Full tables and the chain
+note: [`data/mixV-results.md`](data/mixV-results.md).
