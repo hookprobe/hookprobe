@@ -7562,7 +7562,11 @@ pub extern "C" fn kmain() -> ! {
     kprint!(" [P1b] PASS mmu+frames (with free list)\n");
 
     // --- ADR 0061 M2/M8: discover RAM and cores ONCE from the firmware's device tree (QEMU path) ---
-    p_mem_discover();
+    let mem_inv = p_mem_discover();
+    // --- ADR 0061 M1: a model region in RAM above the kernel's map, for worker cores (QEMU path) ---
+    #[cfg(feature = "smpboot")]
+    p_mem_model(mem_inv.as_ref());
+    let _ = mem_inv;
 
     // --- ADR 0060 amendment S0a: secondary cores as parked worker cores (QEMU -smp) ---
     // Runs here, on the kernel's own translation table and before any EL0 task swaps TTBR0.
@@ -17824,6 +17828,19 @@ fn p_smp_engine(a: &mut arch_aarch64::smp::Port, b: &mut arch_aarch64::smp::Port
     let load_off = WINDOW_WORDS * 8 - 512;
     let (_, isar0) = a.cpacr_isar0();
     let dotprod = (isar0 >> 44) & 0xF >= 1;
+    // ADR 0061 M1: worker a loads the model from the region above 4 GiB when [P-mem-model] registered one;
+    // worker b keeps loading the copy embedded in the kernel image. Both must answer like the build host.
+    let high = arch_aarch64::smp::model_region().map(|_| {
+        let v = |i: usize| HIGH_MODEL[i].load(core::sync::atomic::Ordering::Relaxed);
+        (v(0), v(1), v(2), v(3))
+    });
+    let mk_from = |pk: &[u8; 32], simd: u32, from_high: bool| {
+        let (pp, pl, bp, bl) = match (from_high, high) {
+            (true, Some(h)) => h,
+            _ => (engine_gate::PREFIX.as_ptr() as u64, engine_gate::PREFIX.len() as u64, engine_gate::BUNDLE.as_ptr() as u64, engine_gate::BUNDLE.len() as u64),
+        };
+        job::EngineLoad { prefix: pp, prefix_len: pl, bundle: bp, bundle_len: bl, pk: *pk, model: [0x4D; 32], simd, max_answer: 1600 }
+    };
     let mk = |pk: &[u8; 32], simd: u32| job::EngineLoad {
         prefix: engine_gate::PREFIX.as_ptr() as u64,
         prefix_len: engine_gate::PREFIX.len() as u64,
@@ -17866,8 +17883,8 @@ fn p_smp_engine(a: &mut arch_aarch64::smp::Port, b: &mut arch_aarch64::smp::Port
     // 2) Load the signed model on both workers: a with the fastest kernels this CPU has, b with scalar kernels.
     let simd_a = if dotprod { 1 } else { 0 };
     let mut need = 0u64;
-    for (p, simd, id) in [(&mut *a, simd_a, 3u32), (&mut *b, 0, 4)] {
-        unsafe { core::ptr::write_volatile((base + load_off) as *mut job::EngineLoad, mk(engine_gate::PK, simd)) };
+    for (p, simd, id, from_high) in [(&mut *a, simd_a, 3u32, true), (&mut *b, 0, 4, false)] {
+        unsafe { core::ptr::write_volatile((base + load_off) as *mut job::EngineLoad, mk_from(engine_gate::PK, simd, from_high)) };
         let (d, _, _) = call(p, id, job::op::ENGINE_LOAD, (base + load_off) as u64, 0, freq);
         need = d.value;
         if d.status != job::status::OK {
@@ -17958,8 +17975,8 @@ fn p_smp_engine(a: &mut arch_aarch64::smp::Port, b: &mut arch_aarch64::smp::Port
         fail("the job after a cancel was not the same answer");
     }
     kprint!(
-        " [P-smp-engine] PASS the Conductor's engine through its own C entry (conductor_engine_entry::engine_infer, unchanged) on worker cores: signed HNX model verified + admitted in each worker's private arena, arena_need {} B (wrong key refused); {}-byte answers ({} and {} tokens) on core {} ({} kernels) and core {} (scalar) BYTE-IDENTICAL to the build host's x86 answer; progress followed; cancel ({} at token {}) returned no answer and the next job was identical again; {} ms and {} ms per answer (TCG, not a metal figure)\n",
-        need, golden.len(), toks[0], toks[1], a.idx, if dotprod { "NEON+DotProd" } else { "scalar" }, b.idx, mode, at_cancel, ms[0], ms[1]
+        " [P-smp-engine] PASS the Conductor's engine through its own C entry (conductor_engine_entry::engine_infer, unchanged) on worker cores: signed HNX model (core 2 from {}, core 3 from the kernel image) verified + admitted in each worker's private arena, arena_need {} B (wrong key refused); {}-byte answers ({} and {} tokens) on core {} ({} kernels) and core {} (scalar) BYTE-IDENTICAL to the build host's x86 answer; progress followed; cancel ({} at token {}) returned no answer and the next job was identical again; {} ms and {} ms per answer (TCG, not a metal figure)\n",
+        if high.is_some() { "the region above 4 GiB" } else { "the kernel image" }, need, golden.len(), toks[0], toks[1], a.idx, if dotprod { "NEON+DotProd" } else { "scalar" }, b.idx, mode, at_cancel, ms[0], ms[1]
     );
 }
 
@@ -17970,7 +17987,7 @@ fn p_smp_engine(a: &mut arch_aarch64::smp::Port, b: &mut arch_aarch64::smp::Port
 /// the image; there is at least one `/memory` range and it contains the kernel image; the total is whole MiB; there
 /// is at least one CPU and PSCI is described. On CM5 the DTB comes from HBoot's BootInfo (metal step).
 #[cfg(not(feature = "cm5"))]
-fn p_mem_discover() {
+fn p_mem_discover() -> Option<boot_abi::fdt::Inventory> {
     use boot_abi::fdt;
     const DTB: usize = 0x4000_0000;
     const DTB_MAX: usize = 0x8_0000; // the image starts at RAM base + 0x80000
@@ -17981,7 +17998,7 @@ fn p_mem_discover() {
         // No firmware tree handed over (QEMU's `virt` does not give a bare ELF one; validate.sh loads it as the
         // firmware would): the hardware facts stay NOT MEASURED and /api/capabilities omits them. Not a failure.
         kprint!(" [P-mem-discover] SKIP no device tree at RAM base: RAM and cores not measured, not published\n");
-        return;
+        return None;
     }
     if !(40..=DTB_MAX).contains(&total) {
         kprint!(" [P-mem-discover] FAIL a device tree header at RAM base with an impossible size {}\n", total);
@@ -18015,7 +18032,63 @@ fn p_mem_discover() {
         if inv.psci.present { "described" } else { "absent" }, inv.nresv,
         if inv.truncated { " (TRUNCATED: lower bound)" } else { "" }
     );
+    Some(inv)
 }
 
 #[cfg(feature = "cm5")]
-fn p_mem_discover() {}
+fn p_mem_discover() -> Option<boot_abi::fdt::Inventory> {
+    None
+}
+
+/// The model region's container, as `[P-mem-model]` found it: (prefix pa, prefix len, bundle pa, bundle len).
+#[cfg(feature = "smpboot")]
+static HIGH_MODEL: [core::sync::atomic::AtomicU64; 4] = [const { core::sync::atomic::AtomicU64::new(0) }; 4];
+
+/// ADR 0061 M1 gate `[P-mem-model]`: a model region in RAM ABOVE 4 GiB, outside everything the kernel maps or
+/// allocates. A loader (QEMU's generic loader in validate.sh, standing in for HBoot/storage) places one signed-model
+/// container at 4 GiB. Core 0 touches that RAM only after discovery proved it exists, reads the container's header
+/// through a one-page window of its own tables (VA 0x6_0000_0000; QEMU's L1 slot 2 is the EL0 window, so no identity
+/// map up there), checks it, and registers the region: every worker then maps it READ-ONLY with 2 MiB blocks, and
+/// `[P-smp-engine]` loads one worker's model from it. Verification of the model itself stays where it is (HNX
+/// signature, on the worker, key from core 0).
+#[cfg(feature = "smpboot")]
+fn p_mem_model(inv: Option<&boot_abi::fdt::Inventory>) {
+    use core::sync::atomic::Ordering;
+    use hal::Mmu as _;
+    const MODEL_PA: u64 = 0x1_0000_0000;
+    const WINDOW_VA: usize = 0x6_0000_0000;
+    let Some(inv) = inv else {
+        kprint!(" [P-mem-model] SKIP RAM not measured (no device tree)\n");
+        return;
+    };
+    let Some(r) = inv.mem[..inv.nmem].iter().find(|r| r.base <= MODEL_PA && MODEL_PA + 4096 <= r.base.saturating_add(r.size)) else {
+        kprint!(" [P-mem-model] SKIP no RAM at 4 GiB ({} MiB discovered): run with -m >= 5G\n", inv.mem_total() >> 20);
+        return;
+    };
+    let ram_end = r.base + r.size;
+    let mmu = arch_aarch64::Mmu;
+    if !mmu.map_page(WINDOW_VA, MODEL_PA as usize, false) {
+        kprint!(" [P-mem-model] FAIL could not map the header window\n");
+        arch_aarch64::semihosting::exit(1);
+    }
+    let h = unsafe { core::slice::from_raw_parts(WINDOW_VA as *const u8, 64) };
+    if &h[..8] != b"HQMODEL1" {
+        kprint!(" [P-mem-model] SKIP no model container at 4 GiB (RAM above 4 GiB exists: {} MiB)\n", (ram_end - MODEL_PA) >> 20);
+        return;
+    }
+    let word = |i: usize| u64::from_le_bytes([h[8 + i * 8], h[9 + i * 8], h[10 + i * 8], h[11 + i * 8], h[12 + i * 8], h[13 + i * 8], h[14 + i * 8], h[15 + i * 8]]);
+    let (p_off, p_len, b_off, b_len, total) = (word(0), word(1), word(2), word(3), word(4));
+    let inside = |o: u64, l: u64| o.checked_add(l).is_some_and(|e| e <= total);
+    let ok = p_off >= 64 && inside(p_off, p_len) && inside(b_off, b_len) && p_len > 0 && b_len > 0 && MODEL_PA.checked_add(total).is_some_and(|e| e <= ram_end);
+    if !ok || !arch_aarch64::smp::set_model_region(MODEL_PA, total) {
+        kprint!(" [P-mem-model] FAIL a malformed container header (prefix {}+{}, bundle {}+{}, total {})\n", p_off, p_len, b_off, b_len, total);
+        arch_aarch64::semihosting::exit(1);
+    }
+    for (slot, v) in HIGH_MODEL.iter().zip([MODEL_PA + p_off, p_len, MODEL_PA + b_off, b_len]) {
+        slot.store(v, Ordering::Relaxed);
+    }
+    kprint!(
+        " [P-mem-model] PASS model container at {:#x} (above 4 GiB, outside the kernel's map and frame pool): header read through a core-0 window at {:#x}, prefix {} B + bundle {} B, {} B registered as the read-only worker model region (2 MiB blocks); {} MiB of RAM above 4 GiB discovered\n",
+        MODEL_PA, WINDOW_VA, p_len, b_len, total, (ram_end - MODEL_PA) >> 20
+    );
+}

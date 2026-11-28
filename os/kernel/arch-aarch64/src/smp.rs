@@ -488,6 +488,46 @@ pub unsafe fn engine_load(segs: &[EngineSeg<'_>], entry: usize) -> Result<usize,
     Ok(total)
 }
 
+/// Block descriptor attributes for the read-only model region (L2 blocks: bits[1:0] = 0b01).
+const RODATA_BLOCK: u64 = ATTR_NORMAL | SH_IS | AF | AP_RO | PXN | UXN;
+const BLOCK_2M: usize = 2 * 1024 * 1024;
+
+/// Map `[pa, pa+len)` identity with 2 MiB L2 block descriptors (`pa` 2 MiB-aligned).
+unsafe fn map_blocks(l1: *mut u64, pa: usize, len: usize, attrs: u64) -> bool {
+    if pa % BLOCK_2M != 0 {
+        return false;
+    }
+    let mut off = 0;
+    while off < len {
+        let v = pa + off;
+        let Some(l2) = (unsafe { next_level(l1, (v >> 30) & 511) }) else { return false };
+        unsafe { core::ptr::write_volatile(l2.add((v >> 21) & 511), (v as u64 & ADDR) | attrs | 0b01) };
+        off += BLOCK_2M;
+    }
+    true
+}
+
+static MODEL_PA: AtomicU64 = AtomicU64::new(0);
+static MODEL_LEN: AtomicU64 = AtomicU64::new(0);
+
+/// ADR 0061 M1: register the model region (physical, 2 MiB-aligned) that worker cores map read-only. Core 0, before
+/// any worker starts (tables are built at start). The length is rounded up to whole 2 MiB blocks.
+pub fn set_model_region(pa: u64, len: u64) -> bool {
+    if pa == 0 || len == 0 || pa % BLOCK_2M as u64 != 0 {
+        return false;
+    }
+    let len = (len + BLOCK_2M as u64 - 1) & !(BLOCK_2M as u64 - 1);
+    MODEL_PA.store(pa, Ordering::Relaxed);
+    MODEL_LEN.store(len, Ordering::Release);
+    true
+}
+
+/// The registered model region (pa, len), if any.
+pub fn model_region() -> Option<(u64, u64)> {
+    let len = MODEL_LEN.load(Ordering::Acquire);
+    (len != 0).then(|| (MODEL_PA.load(Ordering::Relaxed), len))
+}
+
 /// Build worker `idx`'s private tables; returns its TTBR0 value (ASID 0).
 fn build_worker_tables(idx: usize) -> Option<u64> {
     let l1 = alloc_table()?;
@@ -503,6 +543,12 @@ fn build_worker_tables(idx: usize) -> Option<u64> {
             if !map_to(l1, va, pa, len, if exec { TEXT } else { RODATA }) {
                 return None;
             }
+        }
+        // ADR 0061 M1: the model region in RAM above the kernel's map, read-only, 2 MiB blocks (a 1.8 GB model in
+        // 4 KiB pages would need ~900 L3 tables), identity like the rest of a worker's map.
+        let (mpa, mlen) = (MODEL_PA.load(Ordering::Acquire) as usize, MODEL_LEN.load(Ordering::Acquire) as usize);
+        if mlen != 0 && !map_blocks(l1, mpa, mlen, RODATA_BLOCK) {
+            return None;
         }
         // S2b: this worker's own arena + result region, read-write, mapped for no other core's tables.
         if idx < ARENA_CORES {

@@ -84,6 +84,11 @@ allocation.
   measured. Gate `[P-mem-discover]` (`validate.sh` loads QEMU's own tree at RAM base as firmware would). At `-m 6G` it
   discovers one range of 6144 MiB, i.e. RAM above 4 GiB. **Not yet:** mapping that RAM (M1), CM5 (the tree from
   HBoot's BootInfo), budgets and admission (D2–D6).
+- **M1 slice, QEMU (built):** a worker model region in RAM above 4 GiB. A loader places a signed-model container
+  at 4 GiB; core 0 reads its header through a one-page window of its own tables (VA 0x6_0000_0000) only after
+  discovery proved the RAM, and registers it; every worker maps it read-only with 2 MiB blocks; the engine loads
+  from it (`[P-mem-model]`, `[P-smp-engine]`). The kernel's own map and frame pool still cover the first GiB only.
+  **Not yet:** filling the region from storage, the CM5 map above 4 GiB, budgets.
 
 ## Consequences
 

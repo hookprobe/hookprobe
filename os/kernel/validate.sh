@@ -50,11 +50,13 @@ VDTB_DIR=$(mktemp -d)
 VDTB="$VDTB_DIR/virt.dtb"
 VDTB_ARG=""
 if command -v dtc >/dev/null 2>&1 \
-   && qemu-system-aarch64 -M virt,dumpdtb="$VDTB_DIR/raw.dtb" -cpu cortex-a72 -smp 4 -m 512M -nographic >/dev/null 2>&1 \
+   && qemu-system-aarch64 -M virt,dumpdtb="$VDTB_DIR/raw.dtb" -cpu cortex-a72 -smp 4 -m 6G -nographic >/dev/null 2>&1 \
    && dtc -q -I dtb -O dtb -o "$VDTB" "$VDTB_DIR/raw.dtb"; then
   VDTB_ARG="-device loader,file=$VDTB,addr=0x40000000,force-raw=on"
 fi
-QEMU="qemu-system-aarch64 -M virt -cpu cortex-a72 -smp 4 -m 512M -nographic -serial mon:stdio -semihosting \
+# -m 6G (ADR 0061 M1): RAM above 4 GiB exists, so [P-mem-model] can place the worker model region there. The kernel's
+# own map and frame pool stay in the first GiB; the disk-backed runs below keep -m 512M.
+QEMU="qemu-system-aarch64 -M virt -cpu cortex-a72 -smp 4 -m 6G -nographic -serial mon:stdio -semihosting \
   -global virtio-mmio.force-legacy=false -netdev user,id=n0 -device virtio-net-device,netdev=n0 $VDTB_ARG -kernel"
 
 # phase|marker (fixed string)|status(impl|plan)|lifecycle stage|what it proves
@@ -63,6 +65,7 @@ PHASES=(
   "P1|[P1] PASS|impl|Implementation+Verification|preemptive scheduler + context switch"
   "P1b|[P1b] PASS|impl|Implementation+Verification|MMU stage-1 + physical frame allocator"
   "Pmemdiscover|[P-mem-discover] PASS|impl|Implementation+Verification|ADR 0061 M2+M8 (discover once): the kernel reads the firmware device tree (on QEMU loaded at RAM base by this script as the firmware would: QEMU's own tree for -m 512M -smp 4, dumped and re-encoded with dtc) with boot-abi::fdt (the bounded, fail-closed parser HBoot's T0 inventory uses) and checks: a well-formed FDT below the image, >= 1 /memory range that CONTAINS the kernel image, a whole-MiB total, >= 1 CPU, PSCI described; then publishes RAM bytes, cores discovered and cores running in /api/capabilities as measured hardware facts (omitted when not measured: no tree = SKIP, never a guess). Also checked by hand at -m 6G: one range 0x40000000+0x180000000 = 6144 MiB (RAM above 4 GiB discovered)"
+  "Pmemmodel|[P-mem-model] PASS|impl|Implementation+Verification|ADR 0061 M1 (RAM above 4 GiB for the model): the main run has -m 6G; a loader places the build host's signed-model container at 4 GiB (outside the kernel's map and frame pool, which stay in the first GiB). Core 0 touches that RAM only after [P-mem-discover] proved it exists, reads the container header through a one-page window of its own tables at VA 0x6_0000_0000 (QEMU's L1 slot 2 is the EL0 window, so no identity map there), checks offsets and lengths against the container and the discovered RAM, and registers the region; every worker then maps it READ-ONLY with 2 MiB block descriptors. [P-smp-engine] loads core 2's model from that region (core 3's from the kernel image): both answers equal the build host's. At -m 512M it is a clean SKIP. Streaming the container from storage is the next step"
   "Psmpboot|[P-smp-boot] PASS|impl|Implementation+Verification|ADR 0060 amendment S0a (worker cores first): core 0 starts cores 1..3 over PSCI CPU_ON (HVC) as WORKER cores that never run kernel code — each enters at EL1 with MMU off, takes core 0's stage-1 regime (MAIR/TCR/TTBR0/SCTLR copied at start time, block cleaned to PoC), installs its own fault vectors, answers a per-core challenge from Rust and parks in wfe; core 1 then executes brk #0x5a and the WORKER vectors contain it (status FAULT, ESR EC 0x3c recorded, core parked) while core 0 carries on; a single-core boot FAILS the gate (needs -smp >= 3). The kernel still runs only on core 0, so the ARCHITECTURE.md single-core contract holds. QEMU only (no EL2, so no stage-2): the CM5 path is HBoot + stage-2 per core (S0b, [P-smp-stage2], metal); TCG does not model A76 weak ordering, so memory-ordering proof is metal-only (S1)"
   "Psmpsimd|[P-smp-simd] PASS|impl|Implementation+Verification|ADR 0060 S2a (compute on a worker core): a HARD-FLOAT engine image (os/kernel/worker-engine, target aarch64-unknown-none, NEON; nested build, no .data/.bss by link assert) is parsed by the kernel's own elf::parse, copied once (writable segments refused, I-cache maintained) and mapped executable ONLY in worker cores' private tables at 0xB000_0000 (core 0 never maps it); each worker sets CPACR_EL1.FPEN=0b11 for ITSELF while core 0's CPACR_EL1 is unchanged (the kernel stays softfloat; the call passes integers and pointers only, so the float ABIs never meet). int8 GEMV over 4 shapes on 2 workers via the worker's scalar path and the engine's NEON SMULL/SADALP path (and SDOT where ID_AA64ISAR0.DP>=1; refused otherwise, as on the a72 gate CPU) returns output hashes BIT-IDENTICAL to core 0's scalar reference (the determinism the Conductor quorum relies on). Emulated MAC/s printed, not a metal figure. Checked also on -cpu cortex-a76 (SDOT path)"
   "Psmptimer|[P-smp-timer] PASS|impl|Implementation+Verification|ADR 0060 S1c (per-core timer): every worker arms its OWN EL1 physical timer (banked PPI 30, CNTP) as a 1 kHz heartbeat, taken like the doorbell with IRQs MASKED (wfi wakes on the pending timer, IAR polled, re-armed BEFORE EOI because the timer is level-sensitive) - workers still have no IRQ path. Proven: both workers tick at their own rate; a SPIN job with a 20 ms budget stops with DEADLINE on its budget while the other worker keeps ticking; the busy worker publishes busy_since (a long job is not a dead core) and returns to idle ticking; core 0's own CNTP/CNTV registers (its scheduler tick and EL0 watchdog) are unchanged. In [P-smp-worker], after a worker faults, its heartbeat is frozen while the live worker keeps ticking (watchdog signal). Rates are emulated (TCG)"
@@ -347,7 +350,12 @@ fi
 # (build-heqk.yml `timeout-minutes`).
 QEMU_TIMEOUT="${HEQK_QEMU_TIMEOUT:-600}"
 echo -n "[boot]  qemu virt ... "
-timeout "$QEMU_TIMEOUT" $QEMU "$KERNEL" >"$LOG" 2>&1
+# ADR 0061 M1: the signed-model container the build host wrote (kernel build.rs, smpboot) is placed at 4 GiB by
+# QEMU's loader, standing in for HBoot/storage. Without it [P-mem-model] says SKIP and its row FAILS.
+MODEL_C=$(ls -t "$CARGO_TARGET_DIR"/aarch64-unknown-none-softfloat/debug/build/kernel-*/out/model.container 2>/dev/null | head -1)
+QEMU_MAIN="$QEMU"
+[ -n "$MODEL_C" ] && QEMU_MAIN="${QEMU% -kernel} -device loader,file=$MODEL_C,addr=0x100000000,force-raw=on -kernel"
+timeout "$QEMU_TIMEOUT" $QEMU_MAIN "$KERNEL" >"$LOG" 2>&1
 RC=$?
 if grep -q "\[ALL\]" "$LOG"; then echo "clean exit"
 elif [ "$RC" = 124 ]; then echo "TIMEOUT after ${QEMU_TIMEOUT}s (load: $(cut -d' ' -f1 /proc/loadavg 2>/dev/null)) — missing markers below may be phantom; rerun on an idle host or raise HEQK_QEMU_TIMEOUT"
