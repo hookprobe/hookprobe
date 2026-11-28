@@ -142,11 +142,7 @@ fn raw_and_secret_never_leave() {
             remote_enabled: true,
             tiers: 0xff,
             fingerprints_p1: true,
-            fingerprints_p4: true,
             addresses_p1: true,
-            addresses_p4: true,
-            aggregate_p5: true,
-            p4_chain_proven: true,
         };
         let mut k = Kernel::new(all, Tier::P1);
         let mut w = MockWorker::new(Tier::P1, vec![ANSWER_DESC.into()]);
@@ -167,13 +163,31 @@ fn optional_card_withheld_from_tier_that_may_not_see_it() {
 }
 
 #[test]
-fn p3_gets_public_only_and_p4_waits_for_proven_chain() {
-    let p = OwnerPolicy { remote_enabled: true, tiers: Tier::P3.bit() | Tier::P4.bit(), fingerprints_p4: true, ..Default::default() };
+fn p3_gets_public_only_and_only_heqk_tiers_exist() {
+    let p = OwnerPolicy { remote_enabled: true, tiers: 0xff, fingerprints_p1: true, addresses_p1: true };
+    assert!(conductor_core::class::allowed(DataClass::Public, Tier::P3, &p));
     assert!(!conductor_core::class::allowed(DataClass::Aggregate, Tier::P3, &p));
-    assert!(!conductor_core::class::allowed(DataClass::Fingerprint, Tier::P4, &p), "P4 is public-only until C3b proves the chain");
-    let proven = OwnerPolicy { p4_chain_proven: true, ..p };
-    assert!(conductor_core::class::allowed(DataClass::Fingerprint, Tier::P4, &proven));
-    assert!(!conductor_core::class::allowed(DataClass::Fingerprint, Tier::P2, &proven), "fleet_mesh not built");
+    assert!(!conductor_core::class::allowed(DataClass::Fingerprint, Tier::P3, &p));
+    assert!(!conductor_core::class::allowed(DataClass::Fingerprint, Tier::P2, &p), "fleet_mesh not built");
+    // ADR 0071 amendment A1: the GPU confidential VM (4) and the external API (5) are not providers.
+    for gone in [0u8, 4, 5, 6, 255] {
+        assert_eq!(Tier::from_u8(gone), None, "tier {gone}");
+    }
+    assert_eq!(Tier::PREFERENCE, [Tier::P1, Tier::P3]);
+    // A capability for a removed tier is not signed, and an environment that enables one does not decode.
+    for gone in [4u8, 5] {
+        let mut k = Kernel::new(policy_p1(), Tier::P1);
+        let mut ent = |b: &mut [u8]| b.fill(9);
+        assert_eq!(k.signer.sign(&SignRequest { tier: gone, ..sign_req() }, 0, &mut ent).unwrap_err(), SignRefusal::Invalid(cap::CapError::Tier), "tier {gone}");
+        let mut e = vec![0u8; conductor_core::abi::ENV_LEN];
+        e[32] = 1;
+        e[33] = Tier::P1.bit() | (1 << gone);
+        assert!(conductor_core::abi::decode_env(&e).is_none(), "tier bit {gone}");
+    }
+    let mut e = vec![0u8; conductor_core::abi::ENV_LEN];
+    e[32] = 1;
+    e[33] = Tier::ALL_BITS;
+    assert!(conductor_core::abi::decode_env(&e).is_some());
 }
 
 fn sign_req() -> SignRequest {

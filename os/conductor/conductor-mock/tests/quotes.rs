@@ -14,12 +14,12 @@ use conductor_mock::*;
 const ANSWER: &str = r#"{"verdict":"insufficient_evidence","severity":"medium","summary":"ok","evidence":["F1"],"entities":[],"next_step":"investigate","confidence":50}"#;
 
 fn two_tiers() -> (Kernel, conductor_core::place::Env, OwnerPolicy) {
-    let p = OwnerPolicy { remote_enabled: true, tiers: Tier::P1.bit() | Tier::P5.bit(), ..Default::default() };
+    let p = OwnerPolicy { remote_enabled: true, tiers: Tier::P1.bit() | Tier::P3.bit(), ..Default::default() };
     let mut k = Kernel::new(p, Tier::P1);
-    let (r, s) = owner_pairing(Tier::P5, public_key(&OTHER_SEED), u64::MAX, 1);
+    let (r, s) = owner_pairing(Tier::P3, public_key(&OTHER_SEED), u64::MAX, 1);
     k.signer.install_pairing(&r, &s).unwrap();
     let mut env = env_with(p, public_key(&WORKER_SEED), Tier::P1);
-    env.workers[Tier::P5 as usize] = WorkerInfo { present: true, public_key: public_key(&OTHER_SEED), egress_policy_id: EGRESS, available: true, idle: true };
+    env.workers[Tier::P3 as usize] = WorkerInfo { present: true, public_key: public_key(&OTHER_SEED), egress_policy_id: EGRESS, available: true, idle: true };
     (k, env, p)
 }
 
@@ -30,7 +30,7 @@ fn slo_job() -> JobBuilder {
 #[test]
 fn quote_accepted_then_job_runs() {
     let (mut k, env, _) = two_tiers();
-    let mut ws = vec![MockWorker::new(Tier::P1, vec![ANSWER.into()]), MockWorker::new(Tier::P5, vec![ANSWER.into()]).with_seed(OTHER_SEED)];
+    let mut ws = vec![MockWorker::new(Tier::P1, vec![ANSWER.into()]), MockWorker::new(Tier::P3, vec![ANSWER.into()]).with_seed(OTHER_SEED)];
     let mut h = Box::new(Harness::new());
     let r = k.run_multi(&mut h, &slo_job().encode(), env, &mut ws);
     assert!(matches!(r.outcome, Some(Outcome::Verified(v)) if v.status == Status::Valid), "{:?}", r.outcome);
@@ -42,7 +42,7 @@ fn quote_accepted_then_job_runs() {
 #[test]
 fn quote_requests_carry_no_content() {
     let (mut k, env, _) = two_tiers();
-    let mut ws = vec![MockWorker::new(Tier::P1, vec![ANSWER.into()]), MockWorker::new(Tier::P5, vec![ANSWER.into()]).with_seed(OTHER_SEED)];
+    let mut ws = vec![MockWorker::new(Tier::P1, vec![ANSWER.into()]), MockWorker::new(Tier::P3, vec![ANSWER.into()]).with_seed(OTHER_SEED)];
     let mut h = Box::new(Harness::new());
     let job = slo_job();
     k.run_multi(&mut h, &job.encode(), env, &mut ws);
@@ -59,12 +59,12 @@ fn slow_worker_is_skipped_for_the_next_tier_without_receiving_data() {
     let (mut k, env, _) = two_tiers();
     let mut slow = MockWorker::new(Tier::P1, vec![ANSWER.into()]);
     slow.quote = (true, 9_000, 400, profile::NVME_STREAM); // e.g. a big MoE streaming experts from NVMe
-    let fast = MockWorker::new(Tier::P5, vec![ANSWER.into()]).with_seed(OTHER_SEED);
+    let fast = MockWorker::new(Tier::P3, vec![ANSWER.into()]).with_seed(OTHER_SEED);
     let mut ws = vec![slow, fast];
     let mut h = Box::new(Harness::new());
     let r = k.run_multi(&mut h, &slo_job().encode(), env, &mut ws);
     assert!(matches!(r.outcome, Some(Outcome::Verified(_))), "{:?}", r.outcome);
-    assert_eq!(r.sessions_opened, vec![Tier::P1, Tier::P5]);
+    assert_eq!(r.sessions_opened, vec![Tier::P1, Tier::P3]);
     assert_eq!(r.sessions_closed, vec![Tier::P1]);
     assert_eq!(ws[0].calls, 0, "the declining worker never received a capability or a prompt");
     assert!(ws[0].prompts.is_empty());
@@ -78,7 +78,7 @@ fn nobody_meets_the_slo() {
     let (mut k, env, _) = two_tiers();
     let mut a = MockWorker::new(Tier::P1, vec![ANSWER.into()]);
     a.quote = (false, 0, 0, profile::CPU_ONLY);
-    let mut b = MockWorker::new(Tier::P5, vec![ANSWER.into()]).with_seed(OTHER_SEED);
+    let mut b = MockWorker::new(Tier::P3, vec![ANSWER.into()]).with_seed(OTHER_SEED);
     b.quote_tamper = 3; // silent: times out
     let mut ws = vec![a, b];
     let mut h = Box::new(Harness::new());
@@ -94,7 +94,7 @@ fn forged_or_replayed_quotes_are_rejected() {
         let (mut k, env, _) = two_tiers();
         let mut a = MockWorker::new(Tier::P1, vec![ANSWER.into()]);
         a.quote_tamper = t;
-        let mut ws = vec![a, MockWorker::new(Tier::P5, vec![ANSWER.into()]).with_seed(OTHER_SEED)];
+        let mut ws = vec![a, MockWorker::new(Tier::P3, vec![ANSWER.into()]).with_seed(OTHER_SEED)];
         let mut h = Box::new(Harness::new());
         let r = k.run_multi(&mut h, &slo_job().encode(), env, &mut ws);
         assert_eq!(r.outcome, Some(Outcome::Rejected(Violation::Malformed)), "tamper {t}");
