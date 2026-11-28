@@ -53,6 +53,8 @@ pub struct BootBlock {
     pub response: AtomicU64, // 80
     pub esr: AtomicU64,      // 88
     pub el: AtomicU64,       // 96
+    /// Core 0 -> worker: `*mut heqk_worker::exec::Ctx`, or 0 to park after start (S0a only).
+    pub worker: u64, // 104
 }
 
 const ZERO_BLOCK: BootBlock = BootBlock {
@@ -69,6 +71,7 @@ const ZERO_BLOCK: BootBlock = BootBlock {
     response: AtomicU64::new(0),
     esr: AtomicU64::new(0),
     el: AtomicU64::new(0),
+    worker: 0,
 };
 
 #[repr(C, align(16))]
@@ -164,6 +167,12 @@ extern "C" fn __smp_secondary_rust(block: *mut BootBlock) -> ! {
         // Deliberate fault: the worker vectors must contain it (status -> FAULT, ESR EC 0x3c).
         unsafe { core::arch::asm!("brk #0x5a", options(nomem, nostack)) };
     }
+    if b.worker != 0 {
+        // S1: hand the core to the worker executive (heqk-worker, no kernel code reachable).
+        // SAFETY: core 0 built this context for this core only and never touches it again except
+        // through its atomics.
+        unsafe { heqk_worker::exec::run(&mut *(b.worker as usize as *mut heqk_worker::exec::Ctx)) }
+    }
     loop {
         unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
     }
@@ -216,7 +225,7 @@ pub enum StartResult {
 ///
 /// # Safety
 /// Core 0 only; `idx` must not be started twice.
-pub unsafe fn start_core(idx: usize, mpidr: u64, challenge: u64, fault_test: bool) -> StartResult {
+pub unsafe fn start_core(idx: usize, mpidr: u64, challenge: u64, fault_test: bool, worker: Option<Port>) -> (StartResult, Option<Port>) {
     assert!(idx > 0 && idx < MAX_CORES);
     let b = &mut *core::ptr::addr_of_mut!(BLOCKS[idx]);
     let stack = core::ptr::addr_of_mut!(STACKS[idx]) as usize;
@@ -233,6 +242,7 @@ pub unsafe fn start_core(idx: usize, mpidr: u64, challenge: u64, fault_test: boo
     b.vbar = core::ptr::addr_of!(__smp_worker_vectors) as u64;
     b.challenge = challenge;
     b.fault_test = fault_test as u64;
+    b.worker = worker.as_ref().map_or(0, |p| p.ctx as u64);
     b.status.store(ST_STARTED, Ordering::Relaxed);
     b.mpidr.store(0, Ordering::Relaxed);
     b.response.store(0, Ordering::Relaxed);
@@ -242,7 +252,7 @@ pub unsafe fn start_core(idx: usize, mpidr: u64, challenge: u64, fault_test: boo
     let rc = psci_cpu_on(mpidr, __smp_secondary_entry as *const () as usize as u64, b as *const BootBlock as u64);
     if rc != 0 {
         b.status.store(ST_OFF, Ordering::Relaxed);
-        return StartResult::Refused(rc);
+        return (StartResult::Refused(rc), None);
     }
     // Bounded wait: 2 s of the generic counter (TCG can be slow to schedule a new vCPU).
     let (freq, t0): (u64, u64);
@@ -254,13 +264,13 @@ pub unsafe fn start_core(idx: usize, mpidr: u64, challenge: u64, fault_test: boo
             if fault_test && s == ST_ALIVE {
                 // The fault comes right after ALIVE; keep waiting for it.
             } else {
-                return StartResult::Up;
+                return (StartResult::Up, worker);
             }
         }
         let now: u64;
         core::arch::asm!("mrs {}, cntpct_el0", out(reg) now, options(nomem, nostack));
         if now.wrapping_sub(t0) > freq.saturating_mul(2) {
-            return StartResult::Timeout;
+            return (StartResult::Timeout, None);
         }
         core::hint::spin_loop();
     }
@@ -269,4 +279,98 @@ pub unsafe fn start_core(idx: usize, mpidr: u64, challenge: u64, fault_test: boo
 /// Read-only view of worker `idx`'s block (core 0 side).
 pub fn block(idx: usize) -> &'static BootBlock {
     unsafe { &*core::ptr::addr_of!(BLOCKS[idx]) }
+}
+
+// ------------------------------------------------------------------------------------------------
+// S1: core 0's side of the worker executive.
+
+/// The worker crate, for core 0's checks (job vocabulary, reference functions).
+pub use heqk_worker as worker;
+use heqk_worker::exec::Ctx;
+use heqk_worker::job::{Done, Job};
+use heqk_worker::ring::{Consumer, Producer, Ring};
+
+/// The SGI used as the worker doorbell.
+pub const SGI_DOORBELL: u32 = 1;
+/// QEMU `virt` GICv2 bases (`smpboot` is refused with `cm5`; CM5 gets its own in S0b/S1 metal).
+const GICD: usize = 0x0800_0000;
+const GICC: usize = 0x0801_0000;
+/// Words in the shared read-only data window.
+pub const WINDOW_WORDS: usize = 8192;
+
+static JOBS: [Ring<Job>; MAX_CORES] = [const { Ring::new() }; MAX_CORES];
+static DONE: [Ring<Done>; MAX_CORES] = [const { Ring::new() }; MAX_CORES];
+static mut CTXS: [core::mem::MaybeUninit<Ctx>; MAX_CORES] = [const { core::mem::MaybeUninit::uninit() }; MAX_CORES];
+
+/// Data core 0 shares with every worker, read-only for them (S1b maps it read-only in their private
+/// tables). Core 0 writes it before submitting the jobs that reference it; the ring's release store
+/// publishes those writes.
+#[repr(C, align(4096))]
+pub struct Window(pub [u64; WINDOW_WORDS]);
+pub static mut WINDOW: Window = Window([0; WINDOW_WORDS]);
+
+/// Core 0's handle on one worker: the producer end of its job ring, the consumer end of its result
+/// ring, and read access to the worker's published atomics.
+pub struct Port {
+    pub idx: usize,
+    jobs: Producer<Job>,
+    done: Consumer<Done>,
+    ctx: *mut Ctx,
+}
+
+impl Port {
+    /// Build worker `idx`'s context and core 0's port. Once per index (the ring split refuses a second).
+    pub fn prepare(idx: usize) -> Option<Port> {
+        if idx == 0 || idx >= MAX_CORES {
+            return None;
+        }
+        let (jp, jc) = JOBS[idx].split()?;
+        let (dp, dc) = DONE[idx].split()?;
+        let base = core::ptr::addr_of!(WINDOW) as u64;
+        // SAFETY: CTXS[idx] is written once here (the ring split above cannot succeed twice).
+        let ctx = unsafe {
+            let slot = &mut *core::ptr::addr_of_mut!(CTXS[idx]);
+            slot.write(Ctx {
+                jobs: jc,
+                done: dp,
+                window_base: base,
+                window_len: (WINDOW_WORDS * 8) as u64,
+                gicd: GICD,
+                gicc: GICC,
+                sgi: SGI_DOORBELL,
+                cpu_mask: core::sync::atomic::AtomicU8::new(0),
+                served: AtomicU64::new(0),
+            }) as *mut Ctx
+        };
+        Some(Port { idx, jobs: jp, done: dc, ctx })
+    }
+
+    pub fn submit(&mut self, j: Job) -> bool {
+        self.jobs.push(j)
+    }
+
+    /// Ring the worker's doorbell (after submitting). False until the worker published its mask.
+    pub fn doorbell(&self) -> bool {
+        let m = self.cpu_mask();
+        if m == 0 {
+            return false;
+        }
+        // SAFETY: QEMU virt GICD, device-mapped by core 0's tables.
+        unsafe { heqk_worker::gic::send_sgi(GICD, m, SGI_DOORBELL) };
+        true
+    }
+
+    pub fn poll(&mut self) -> Option<Done> {
+        self.done.pop()
+    }
+
+    pub fn cpu_mask(&self) -> u8 {
+        // SAFETY: only the atomic field is read; the worker owns the rest of the context.
+        unsafe { (*core::ptr::addr_of!((*self.ctx).cpu_mask)).load(Ordering::Acquire) }
+    }
+
+    pub fn served(&self) -> u64 {
+        // SAFETY: as above.
+        unsafe { (*core::ptr::addr_of!((*self.ctx).served)).load(Ordering::Relaxed) }
+    }
 }

@@ -394,3 +394,35 @@ The item left open above is built on the host side (`conductor-core`, tested aga
 4. **The bare-metal build** of `el0-harness` with this change was not run on this host (no
    `aarch64-unknown-none-softfloat` toolchain here), so its size table in `README.md` is unchanged and unchecked.
 
+
+## Update: heqk-native only, fleet aggregation, SMP worker cores (2026-11-28, from the feasibility session)
+
+Written for the Neuro / Conductor hosts on the other machine; this file is the hand-off. Nothing here changes
+Neuro's decisions. Read with #1628, #1631 and the S1 PR, and with Neuro doc 53 (#1637, which this does not touch).
+
+**Operator decisions (2026-11-26, ADR 0071 amendment):**
+- **heqk-native only.** Tier P5 (external API: Anthropic or OpenAI-compatible) and P4 (GPU confidential VM) are removed.
+  Claude Code or OpenCode driving heqk over MCP from another host is rejected. On the device, the native engine (P0) is
+  the only engine. Neuro's research hosts (Mac, GPUs) are untouched: this is about what runs on or for the device.
+- **Scale-out is across heqk nodes**: P1 (paired LAN heqk nodes), P2 (`fleet_mesh` peers), P3 (heqk cloud node).
+  Pattern: move requests, not tensors (`docs/research/heqk-fleet-compute-aggregation-2026-11-26.md`, validated in §8).
+
+**What this asks of Neuro:**
+1. **Determinism is now load-bearing.** `conductor_core::quorum` (#1631) checks fleet results by exact equality of
+   signed output hashes. That works only if the engine, the card builder and the decoder stay bit-exact across core
+   counts, batching and timing: no float, no nondeterministic reductions, greedy or seeded-integer sampling. Please
+   treat any change that breaks bit-exactness as a contract change. The proposed gate is `[P-fleet-exact]`.
+2. **Training (ADR 0071 amendment A5, open question for Neuro).** With no GPU or Linux workers in the product, the
+   proposal is: large-model fine-tunes stay on Neuro's hosts and ship as signed HNX; small specialists (S1-sized)
+   may later train federated across devices (robust aggregation, secure aggregation, TRNG-seeded DP: the lessons of V1's
+   `nexus/lib/federated`). Is that split acceptable, and which specialists fit pattern B (route each request to one
+   node's specialist)?
+3. **Where the engine runs.** The first CM5 tok/s (ADR 0060 S2) will run the engine on a compute-role **worker core**
+   with FP/SIMD enabled on that core only (ADR 0060 amendment W4; ADR 0072 stays the route for EL0 servers on core 0).
+   The worker never runs kernel code; the engine becomes a job op in `os/kernel/worker` (crate `heqk-worker`), fed by
+   core 0 over SPSC rings. R12's decision (cards built in the harness) is unaffected: the harness prepares the request,
+   the worker runs the model.
+
+**Built so far (QEMU; metal pending a CM5 slot):** S0a secondary cores (`[P-smp-boot]`), S1a worker executive
+(`[P-smp-worker]`: 2 workers x 20,000 jobs in parallel, results equal to core 0's, out-of-window refused, worker fault
+contained), `conductor_core::quorum`.

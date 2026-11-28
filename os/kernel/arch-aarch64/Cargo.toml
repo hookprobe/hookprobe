@@ -8,6 +8,8 @@ publish = false  # first-party: never published to crates.io (ADR 0063 G4)
 [dependencies]
 hal = { path = "../hal" }
 sae = { path = "../sae", optional = true }
+# ADR 0060 S1: the worker-core executive (no dependencies of its own), only with `smp`.
+heqk-worker = { path = "../worker", optional = true }
 
 [features]
 # QEMU integration-test profile only (kernel feature `qemu-itest`, operator decision 2026-11-22): the virtio-rng
@@ -53,7 +55,7 @@ smccc = []
 # ADR 0060 amendment S0a: start secondary cores over PSCI CPU_ON (HVC) as parked worker cores that never run
 # kernel code. QEMU / OCI A1 only; on CM5 HBoot starts cores (S0b). Deliberately NOT `smccc`: that feature turns
 # the semihosting exit into PSCI reset/off (the cloud tier's behaviour) and would change every QEMU gate's exit code.
-smp = []
+smp = ["dep:heqk-worker"]
 # AP image (audit 2026-11-10): a 512-deep GEM RX ring (Linux macb's default) — 128 descriptors fill in
 # ~1.5 ms of a gigabit burst and 64 % of WAN frames hit res_err on the bench. The EL0 GEM stages (whose
 # scan stubs hardcode 128, syscall.s) never run in the AP image: its loop lives inside cm5_p10_probe.
