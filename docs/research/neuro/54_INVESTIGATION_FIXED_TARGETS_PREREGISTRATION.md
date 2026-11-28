@@ -99,3 +99,15 @@ verdict.
   - After adjudication the agreement is 44/44, and the seal checks pass on the final file (the hash above).
 - ftT finished training before the seal: checkpoint 200 of 292 (valid 0.018; 0.429 at step 1). Adapter
   `2cfa4103…`, GGUF `40fd46d4…`.
+
+## 8. Result (2026-11-28, one look)
+
+**VERDICT: FAIL** (condition 2 only).
+- Passed: multi 0.286 vs ftM's 0.114; next+multi 0.487 vs 0.463, the first candidate above ftM; alert, decoy,
+  invisible and grounding unchanged.
+- Failed: next fell to 0.644, below the floor of 0.683 (ftM's 0.733 − 0.05).
+- Against doc 51, fixing the targets cut the first-check loss from 7 to 4 cases and tripled the multi gain (2 → 6).
+- E2E run 13 chose both expected checks.
+
+ftM stays. Separating the two decisions by construction is the next step: Rule P, or routing by turn (ftM without a
+RESULT line, ftT with one). Full tables: [`data/mixT-results.md`](data/mixT-results.md).
