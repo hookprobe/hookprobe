@@ -274,10 +274,9 @@ pub fn attend(q: &[i64], k: &[i16], ks: &[u8], v: &[i16], vs: &[u8], t: usize, s
     let Some(w) = w.get_mut(..t) else { return false };
     // Scores in Q16: Σ qq·kq · 2^(qs + ks_j) is the dot product in Q32.
     let mut max = i64::MIN;
-    for (j, s) in w.iter_mut().enumerate() {
-        let kj = k.get(j * d..(j + 1) * d).unwrap_or(&[]);
-        let dot: i64 = qq.iter().zip(kj).map(|(&a, &b)| i64::from(a) * i64::from(b)).sum();
-        let sh = i32::from(qs) + i32::from(ks.get(j).copied().unwrap_or(0)) - FRAC as i32;
+    for ((s, kj), &kshift) in w.iter_mut().zip(k.chunks_exact(d)).zip(ks) {
+        let dot: i64 = qq.iter().zip(kj).map(|(&a, &b)| i64::from(a) * i64::from(i32::from(b))).sum();
+        let sh = i32::from(qs) + i32::from(kshift) - FRAC as i32;
         let dq16 = if sh >= 0 { shl_sat(i128::from(dot), sh as u32) } else { rsr(i128::from(dot), (-sh) as u32) };
         *s = mul_parts(sat(dq16), sc);
         max = max.max(*s);
@@ -292,11 +291,30 @@ pub fn attend(q: &[i64], k: &[i16], ks: &[u8], v: &[i16], vs: &[u8], t: usize, s
         *s = if drop >= 63 { 0 } else { rsr(i128::from(e), drop) as i64 };
     }
     // out_c = Σ_j w_j · vq_jc · 2^vmax / sum      (|w| ≤ 2^30, |vq| < 2^15, t ≤ 2^17: fits i64)
-    for (c, o) in out.iter_mut().enumerate() {
-        let mut acc: i64 = 0;
-        for (j, &wj) in w.iter().enumerate() {
-            acc += wj * i64::from(v.get(j * d + c).copied().unwrap_or(0));
+    // The sums are built in `out`, one cached position after another: each V vector is read once, in the
+    // order it lies in memory, and a position of weight 0 is not read at all. Integer sums do not depend on
+    // the order, so the numbers are those of a column-by-column pass.
+    out.fill(0);
+    for (&wj, vj) in w.iter().zip(v.chunks_exact(d)) {
+        if wj == 0 {
+            continue;
         }
+        // A weight is at most 2^30: as an `i32`, the product is one widening multiply per element.
+        match i32::try_from(wj) {
+            Ok(w32) => {
+                for (o, &x) in out.iter_mut().zip(vj) {
+                    *o += i64::from(w32) * i64::from(x);
+                }
+            }
+            Err(_) => {
+                for (o, &x) in out.iter_mut().zip(vj) {
+                    *o += wj * i64::from(x);
+                }
+            }
+        }
+    }
+    for o in out.iter_mut() {
+        let acc = *o;
         let num = shl_sat(i128::from(acc), u32::from(vmax));
         let den = i128::from(sum.max(1));
         *o = sat(if num >= 0 { (num + den / 2) / den } else { -((-num + den / 2) / den) });

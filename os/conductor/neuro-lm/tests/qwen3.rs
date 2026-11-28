@@ -271,6 +271,88 @@ fn hp_functions_track_f64() {
     println!("attention: worst error {worst_att:.1e} of the largest |V|");
 }
 
+/// `hp::attend` as it was first written: one output column at a time over all positions. The kernel in use
+/// must give these numbers exactly, whatever order it reads the cache in.
+#[allow(clippy::too_many_arguments)]
+fn attend_reference(q: &[i64], k: &[i16], ks: &[u8], v: &[i16], vs: &[u8], t: usize, scale: u32, out: &mut [i64]) {
+    let d = q.len();
+    let sat = |v: i128| v.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+    let amax = q.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0);
+    let qs = (64 - amax.leading_zeros()).saturating_sub(31);
+    let qq: Vec<i32> = q.iter().map(|&v| hp::rsr(i128::from(v), qs).clamp(-(i32::MAX as i128), i32::MAX as i128) as i32).collect();
+    let sc = hp::single_parts(scale);
+    let mut w = vec![0i64; t];
+    let mut max = i64::MIN;
+    for (j, s) in w.iter_mut().enumerate() {
+        let dot: i64 = qq.iter().zip(&k[j * d..(j + 1) * d]).map(|(&a, &b)| i64::from(a) * i64::from(b)).sum();
+        let sh = qs as i32 + i32::from(ks[j]) - 16;
+        let dq16 = if sh >= 0 { hp::shl_sat(i128::from(dot), sh as u32) } else { hp::rsr(i128::from(dot), (-sh) as u32) };
+        *s = hp::mul_parts(sat(dq16), sc);
+        max = max.max(*s);
+    }
+    let vmax = vs[..t].iter().copied().max().unwrap_or(0);
+    let mut sum: i64 = 0;
+    for (j, s) in w.iter_mut().enumerate() {
+        let e = hp::exp_neg(s.saturating_sub(max));
+        sum += e;
+        let drop = u32::from(vmax - vs[j]);
+        *s = if drop >= 63 { 0 } else { hp::rsr(i128::from(e), drop) as i64 };
+    }
+    for (c, o) in out.iter_mut().enumerate() {
+        let acc: i64 = w.iter().enumerate().map(|(j, &wj)| wj * i64::from(v[j * d + c])).sum();
+        let num = hp::shl_sat(i128::from(acc), u32::from(vmax));
+        let den = i128::from(sum.max(1));
+        *o = sat(if num >= 0 { (num + den / 2) / den } else { -((-num + den / 2) / den) });
+    }
+}
+
+#[test]
+fn attention_gives_the_reference_numbers_exactly() {
+    let mut r = Rng(0xA77E);
+    let scale = (1.0f32 / 128f32.sqrt()).to_bits();
+    let mut case = |d: usize, t: usize, mag: f64, spread: f64| {
+        let q: Vec<i64> = (0..d).map(|_| q16(r.normal() * mag)).collect();
+        let (mut k, mut v, mut ks, mut vs) = (vec![0i16; t * d], vec![0i16; t * d], vec![0u8; t], vec![0u8; t]);
+        for j in 0..t {
+            let kv: Vec<i64> = (0..d).map(|_| q16(r.normal() * mag)).collect();
+            // V of very different sizes from one position to the next: the shifts differ, some weights drop to 0.
+            let vv: Vec<i64> = (0..d).map(|_| q16(r.normal() * mag * (1.0 + (j % 7) as f64 * spread))).collect();
+            ks[j] = hp::kv_quant(&kv, &mut k[j * d..(j + 1) * d]).unwrap();
+            vs[j] = hp::kv_quant(&vv, &mut v[j * d..(j + 1) * d]).unwrap();
+        }
+        (q, k, ks, v, vs)
+    };
+    let mut n = 0;
+    for (d, t, mag, spread) in [(128, 1, 4.0, 0.0), (128, 2, 0.5, 1.0), (128, 37, 20.0, 50.0), (128, 700, 4.0, 3.0), (128, 2048, 8.0, 0.2), (64, 300, 300.0, 1000.0), (2, 9, 1.0, 1.0), (130, 65, 0.01, 9.0)] {
+        for _ in 0..4 {
+            let (q, k, ks, v, vs) = case(d, t, mag, spread);
+            let (mut qq, mut w, mut out, mut want) = (vec![0i32; d], vec![0i64; t], vec![7i64; d], vec![0i64; d]);
+            assert!(hp::attend(&q, &k, &ks, &v, &vs, t, scale, &mut qq, &mut w, &mut out));
+            attend_reference(&q, &k, &ks, &v, &vs, t, scale, &mut want);
+            assert_eq!(out, want, "d {d} t {t} mag {mag}");
+            n += 1;
+        }
+    }
+    // Largest values everywhere: the sums stay inside i64, as the reference's do.
+    let (d, t) = (128usize, 2048usize);
+    let (q, k, v) = (vec![i64::MAX / 2; d], vec![32767i16; t * d], vec![-32767i16; t * d]);
+    let (ks, vs) = (vec![20u8; t], vec![30u8; t]);
+    let (mut qq, mut w, mut out, mut want) = (vec![0i32; d], vec![0i64; t], vec![0i64; d], vec![0i64; d]);
+    assert!(hp::attend(&q, &k, &ks, &v, &vs, t, scale, &mut qq, &mut w, &mut out));
+    attend_reference(&q, &k, &ks, &v, &vs, t, scale, &mut want);
+    assert_eq!(out, want);
+
+    // Time of one head over a long context, the size the explainer's answers run at.
+    let (q, k, ks, v, vs) = case(128, 1200, 4.0, 0.5);
+    let (mut qq, mut w, mut out) = (vec![0i32; 128], vec![0i64; 1200], vec![0i64; 128]);
+    let t0 = std::time::Instant::now();
+    for _ in 0..200 {
+        assert!(hp::attend(std::hint::black_box(&q), &k, &ks, &v, &vs, 1200, scale, &mut qq, &mut w, &mut out));
+    }
+    let per = t0.elapsed().as_secs_f64() / 200.0;
+    println!("attention: {} cases equal the reference; one head over 1,200 positions {:.1} us", n + 1, per * 1e6);
+}
+
 // ------------------------------------------------------------------ whole model
 
 struct F64Layer {
