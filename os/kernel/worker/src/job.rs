@@ -41,6 +41,13 @@ pub mod op {
     /// S2: y = W·x over int8 (i32 accumulate). `a` = address of a [`GemvParams`](super::GemvParams) block in the
     /// granted window; W and x must lie in the window too. value = [`hash_i32`](super::hash_i32) of y.
     pub const GEMV_I8: u32 = 0x10;
+    /// S2b: answer the prompt at `[a, a + b)` of the window with the loaded model (the Conductor's
+    /// `conductor_p0::core_job` ENGINE_INFER, same number). value = the answer's length; the answer is in the
+    /// worker's result region after a 16-byte header of counters.
+    pub const ENGINE_INFER: u32 = 0x0100;
+    /// S2b: verify, admit and open the model described by the [`EngineLoad`](super::EngineLoad) block at `a`
+    /// (in the window). Kept in the worker's arena for the following ENGINE_INFER jobs.
+    pub const ENGINE_LOAD: u32 = 0x0101;
 }
 
 /// How a GEMV_I8 job is computed. Every path must give byte-identical y (integer arithmetic, wrapping).
@@ -73,9 +80,48 @@ pub struct GemvParams {
     pub _pad: u32,
 }
 
+/// What the worker executive hands the engine image for one job: addresses and lengths only (C layout), all
+/// inside regions core 0 mapped for THIS worker. The engine keeps its state in `arena`; `scratch` is per call.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EngineEnv {
+    /// The read-only window (prompts, parameter blocks).
+    pub window: u64,
+    pub window_len: u64,
+    /// This worker's read-write arena (the engine's model copy, session and state).
+    pub arena: u64,
+    pub arena_len: u64,
+    /// This worker's result region (ENGINE_INFER writes header + answer here).
+    pub result: u64,
+    pub result_len: u64,
+    /// Per-call scratch (GEMV_I8: y, as i32).
+    pub scratch: u64,
+    pub scratch_len: u64,
+    /// `*const AtomicU32`: answer tokens so far, written by the engine after every pass.
+    pub progress: u64,
+    /// `*const AtomicBool`: set by core 0 to stop the job in flight; read after every pass.
+    pub cancel: u64,
+}
+
+/// ENGINE_LOAD parameters (in the window). The model's bytes are in the signed kernel image (read-only for the
+/// worker); the key is the one core 0 trusts for it (the kernel is the trust root).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct EngineLoad {
+    pub prefix: u64,
+    pub prefix_len: u64,
+    pub bundle: u64,
+    pub bundle_len: u64,
+    pub pk: [u8; 32],
+    pub model: [u8; 32],
+    /// 0 = scalar kernels; 1 = NEON + DotProd (refused where ID_AA64ISAR0_EL1.DP is 0).
+    pub simd: u32,
+    pub max_answer: u32,
+}
+
 /// The engine image's entry point (C ABI, integers and pointers only, so a softfloat caller and a hard-float
-/// callee agree): computes `rows` outputs into `out` and returns a [`status`] code.
-pub type EngineEntry = unsafe extern "C" fn(op: u32, params: *const GemvParams, out: *mut i32, out_len: usize) -> u32;
+/// callee agree). Returns a [`status`] code (or the engine's own refusal codes); `*value` gets the job's value.
+pub type EngineEntry = unsafe extern "C" fn(op: u32, a: u64, b: u64, env: *const EngineEnv, value: *mut u64) -> u32;
 
 /// Reference GEMV: y[r] = sum over c of W[r][c] * x[c], wrapping i32.
 pub fn gemv_i8_scalar(w: &[i8], x: &[i8], rows: usize, cols: usize, y: &mut [i32]) -> bool {
