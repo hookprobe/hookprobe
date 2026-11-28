@@ -376,6 +376,106 @@ unsafe fn map_range(l1: *mut u64, start: usize, end: usize, attrs: u64) -> bool 
     true
 }
 
+/// Map `[va, va+len)` to `[pa, ...)` (page-aligned) with `attrs`.
+unsafe fn map_to(l1: *mut u64, va: usize, pa: usize, len: usize, attrs: u64) -> bool {
+    let mut off = 0;
+    while off < len {
+        let v = va + off;
+        let Some(l2) = (unsafe { next_level(l1, (v >> 30) & 511) }) else { return false };
+        let Some(l3) = (unsafe { next_level(l2, (v >> 21) & 511) }) else { return false };
+        unsafe { core::ptr::write_volatile(l3.add((v >> 12) & 511), ((pa + off) as u64 & ADDR) | attrs | DESC) };
+        off += PAGE;
+    }
+    true
+}
+
+// ------------------------------------------------------------------------------------------------
+// S2: the worker engine image. Core 0 copies its read-only segments here once, before any worker starts; each
+// worker maps them at their link VAs (ENGINE_VA..) in its private tables. Core 0's own tables never map that VA,
+// so core 0 cannot execute the engine, and the engine has no writable segment (refused here, and asserted by its
+// link map), so one copy serves every worker.
+
+/// Link VA of the engine image (see `os/kernel/worker-engine/link.ld`).
+pub const ENGINE_VA: usize = 0xB000_0000;
+const ENGINE_MAX: usize = 512 * 1024;
+const ENGINE_MAX_SEGS: usize = 8;
+
+#[repr(C, align(4096))]
+struct EngineImage([u8; ENGINE_MAX]);
+static mut ENGINE_IMG: EngineImage = EngineImage([0; ENGINE_MAX]);
+static mut ENGINE_SEGS: [(usize, usize, bool); ENGINE_MAX_SEGS] = [(0, 0, false); ENGINE_MAX_SEGS];
+static ENGINE_NSEGS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+static ENGINE_ENTRY: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// One loadable segment of the engine image, as core 0's ELF parser validated it.
+pub struct EngineSeg<'a> {
+    pub vaddr: usize,
+    pub bytes: &'a [u8],
+    pub memsz: usize,
+    pub exec: bool,
+    pub write: bool,
+}
+
+/// Load the engine image once (core 0, before starting workers). Refuses a writable segment, a segment outside
+/// `[ENGINE_VA, ENGINE_VA + ENGINE_MAX)`, unaligned VAs, and an entry point outside an executable segment.
+/// Returns the number of bytes loaded.
+///
+/// # Safety
+/// Core 0 only, before any worker is started.
+pub unsafe fn engine_load(segs: &[EngineSeg<'_>], entry: usize) -> Result<usize, &'static str> {
+    if ENGINE_NSEGS.load(Ordering::Acquire) != 0 {
+        return Err("engine already loaded");
+    }
+    if segs.is_empty() || segs.len() > ENGINE_MAX_SEGS {
+        return Err("bad segment count");
+    }
+    let mut entry_ok = false;
+    let mut total = 0;
+    for s in segs {
+        if s.write {
+            return Err("writable segment (the engine must have no mutable state)");
+        }
+        let end = s.vaddr.checked_add(s.memsz).ok_or("segment overflows")?;
+        if s.vaddr % PAGE != 0 || s.vaddr < ENGINE_VA || end > ENGINE_VA + ENGINE_MAX || s.bytes.len() > s.memsz {
+            return Err("segment outside the engine window");
+        }
+        if s.exec && entry >= s.vaddr && entry < end {
+            entry_ok = true;
+        }
+    }
+    if !entry_ok {
+        return Err("entry not in an executable segment");
+    }
+    let img = unsafe { &mut (*core::ptr::addr_of_mut!(ENGINE_IMG)).0 };
+    let table = unsafe { &mut *core::ptr::addr_of_mut!(ENGINE_SEGS) };
+    for (k, s) in segs.iter().enumerate() {
+        let off = s.vaddr - ENGINE_VA;
+        img[off..off + s.bytes.len()].copy_from_slice(s.bytes);
+        img[off + s.bytes.len()..off + s.memsz].fill(0);
+        let len = (s.memsz + PAGE - 1) & !(PAGE - 1);
+        table[k] = (s.vaddr, len, s.exec);
+        total += s.memsz;
+        // Make the copied code visible to other cores' instruction fetch: clean to PoU, invalidate the I-cache
+        // (inner-shareable broadcast), then barriers.
+        let base = img.as_ptr() as usize + off;
+        let mut a = base & !63;
+        while a < base + s.memsz {
+            unsafe { core::arch::asm!("dc cvau, {}", in(reg) a, options(nostack)) };
+            a += 64;
+        }
+        unsafe { core::arch::asm!("dsb ish", options(nostack)) };
+        let mut a = base & !63;
+        while a < base + s.memsz {
+            unsafe { core::arch::asm!("ic ivau, {}", in(reg) a, options(nostack)) };
+            a += 64;
+        }
+        unsafe { core::arch::asm!("dsb ish", "isb", options(nostack)) };
+    }
+    ENGINE_ENTRY.store(entry, Ordering::Relaxed);
+    ENGINE_NSEGS.store(segs.len(), Ordering::Release);
+    Ok(total)
+}
+
 /// Build worker `idx`'s private tables; returns its TTBR0 value (ASID 0).
 fn build_worker_tables(idx: usize) -> Option<u64> {
     let l1 = alloc_table()?;
@@ -384,6 +484,14 @@ fn build_worker_tables(idx: usize) -> Option<u64> {
         let rodata_end = core::ptr::addr_of!(__rodata_end) as usize;
         let area = core::ptr::addr_of!(CORES[idx]) as usize;
         let window = core::ptr::addr_of!(WINDOW) as usize;
+        // S2: the engine image's segments, at their link VAs, only in worker tables.
+        for k in 0..ENGINE_NSEGS.load(Ordering::Acquire) {
+            let (va, len, exec) = (*core::ptr::addr_of!(ENGINE_SEGS))[k];
+            let pa = core::ptr::addr_of!(ENGINE_IMG) as usize + (va - ENGINE_VA);
+            if !map_to(l1, va, pa, len, if exec { TEXT } else { RODATA }) {
+                return None;
+            }
+        }
         let ok = map_range(l1, text.0, text.1, TEXT)
             && map_range(l1, text.1, rodata_end, RODATA)
             && map_range(l1, area, area + core::mem::size_of::<CoreShared>(), RW_DATA)
@@ -461,6 +569,9 @@ impl Port {
                 sgi: SGI_DOORBELL,
                 cpu_mask: core::sync::atomic::AtomicU8::new(0),
                 served: AtomicU64::new(0),
+                engine: ENGINE_ENTRY.load(Ordering::Relaxed),
+                cpacr: AtomicU64::new(0),
+                isar0: AtomicU64::new(0),
             }) as *mut Ctx
         };
         Some(Port { idx, jobs: jp, done: dc, ctx })
@@ -488,6 +599,17 @@ impl Port {
     pub fn cpu_mask(&self) -> u8 {
         // SAFETY: only the atomic field is read; the worker owns the rest of the context.
         unsafe { (*core::ptr::addr_of!((*self.ctx).cpu_mask)).load(Ordering::Acquire) }
+    }
+
+    /// The worker's CPACR_EL1 (after it enabled FP/SIMD for itself) and ID_AA64ISAR0_EL1.
+    pub fn cpacr_isar0(&self) -> (u64, u64) {
+        // SAFETY: only atomic fields are read.
+        unsafe {
+            (
+                (*core::ptr::addr_of!((*self.ctx).cpacr)).load(Ordering::Relaxed),
+                (*core::ptr::addr_of!((*self.ctx).isar0)).load(Ordering::Relaxed),
+            )
+        }
     }
 
     pub fn served(&self) -> u64 {

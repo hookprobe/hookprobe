@@ -485,3 +485,22 @@ core. For the engine on a worker core (ADR 0060 S2) this means:
 - **Weights and arena come from core 0** as regions mapped into that worker only: the model region read-only, the
   KV cache/arena read-write. The engine must not assume any other address is reachable.
 - **Bit-exactness** across workers is still what `quorum` relies on (previous update).
+
+## Update: the engine image contract for S2b (2026-11-28, S2a built)
+
+S2a (QEMU, `[P-smp-simd]`) proves the route the Conductor's `conductor_p0::core_job` (#1646) will take onto a worker
+core. What the engine side must satisfy, as built:
+- **A separate hard-float image.** `os/kernel/worker-engine` is a detached crate built by the kernel's `build.rs`
+  (nested `cargo build`, clean env) for `aarch64-unknown-none`, so NEON intrinsics compile as they do on the build
+  host. The kernel stays softfloat. The worker enables `CPACR_EL1.FPEN` for itself only.
+- **No writable sections.** The link map asserts `.data` and `.bss` are empty; the loader refuses a writable segment.
+  All mutable state (KV cache, arena, progress/cancel words) must come in through the call.
+- **One C-ABI entry, integers and pointers only**, linked at `0xB000_0000` (`ENTRY(engine_entry)`,
+  `.text.engine_entry` first). S2a's signature is `heqk_worker::job::EngineEntry`. For S2b we propose a second op,
+  `ENGINE_INFER`, matching your `core_job`: the worker passes the read window (prompt), the model region (read-only),
+  the result window and the arena (read-write) as `(ptr, len)` pairs, plus the progress and cancel words.
+  **Question:** does `core_job` need anything else passed in (for example a tokenizer table region), and can it be
+  built as a `no_std` hard-float staticlib or bin without `.data`/`.bss`?
+- **Determinism already holds across cores in S2a.** int8 GEMV via scalar, NEON and SDOT (on the A76 model) returns
+  byte-identical output hashes on every core, so the same will be expected of `core_job` (`[P-fleet-exact]`).
+- **Your 120 s compute cap** (`limits::MAX_COMPUTE_MS`) will be set from CM5 metal measurements after S0b.
