@@ -360,7 +360,9 @@ fn cards_match_neuros_sources() {
         "if n >= 20 and nx / n > 0.5:\n            flags.append(\"nxdomain=%d/%d\" % (nx, n))\n            w += 3".into(),
         "if len(names) >= 20 and ent > 3.3:\n            flags.append(\"distinct=%d label_entropy=%.1f\" % (len(names), ent))\n            w += 2".into(),
         "odd = [q for q in names if INSTRUCTION_LIKE.search(q)]".into(),
-        "flags.append(\"qname=%s\" % quote_untrusted(odd[0]))\n            w += 3.0".into(),
+        // Which of several instruction-like names is quoted: Neuro moves from `odd[0]` (a set's first) to `min(odd)`
+        // (hookprobe/hookprobe#1643), which is what this mirror does. The fragment holds for both.
+        "flags.append(\"qname=%s\" % quote_untrusted(".into(),
         "def quote_untrusted(s, cap=64):".into(),
         "s = s[:cap] + (\"~\" if len(s) > cap else \"\")\n    return json.dumps(s) + flag".into(),
         "novel = suf not in baseline[\"suffixes\"]".into(),
