@@ -20,7 +20,7 @@ Classes (the worst class in a file wins: D > C > B > A):
 - **C** — cites GPL-2.0 code only as a behaviour or register-value reference ("as Linux does", "Linux uses X").
 - **D** — says it was transcribed, ported, mirrored or copied from GPL-2.0 code, or quotes its lines.
 
-Scope: every `.rs` file in `os/kernel/arch-aarch64/src` and `os/kernel/hboot/src` (59 files; `fwcfg.rs` and `virtio_rng.rs` added 2026-11-23) and
+Scope: every `.rs` file in `os/kernel/arch-aarch64/src` and `os/kernel/hboot/src` (60 files; `fwcfg.rs` and `virtio_rng.rs` added 2026-11-23, `smp.rs` 2026-11-27) and
 `os/kernel/flashstub/src` (8 files, ADR 0070 flash stub, added 2026-11-24; `tools/ci/provenance_check.py` checks it too), plus the
 files in `hal/src`, `sae/src`, `el0-wifi/src`, `el0-wpa/src` and `kernel/src` that cite an external code
 base (14 files). Paths are relative to `os/kernel`. "Linux" in a comment that means HookProbe's own
@@ -30,11 +30,11 @@ legacy Linux tier (parity notes, rule numbers, `legacy/linux-tier` ports) is not
 
 | Class | arch-aarch64/src | hboot/src | flashstub/src | other dirs | Total |
 |---|---|---|---|---|---|
-| A | 31 | 8 | 8 | 1 | 48 |
+| A | 32 | 8 | 8 | 1 | 49 |
 | B | 1 | 0 | 0 | 7 | 8 |
 | C | 9 | 2 | 0 | 6 | 17 |
 | D | 4 | 2 | 0 | 0 | 6 |
-| Total | 45 | 12 | 8 | 14 | 79 |
+| Total | 46 | 12 | 8 | 14 | 80 |
 
 Class D files: six. They are the six entries of build-plan item L0.2 (`rng200.rs`, `hboot/src/rng.rs`, the
 `gem.rs` RP1 block, the `rtl8111.rs` outbound window and MDIO read, `hboot/src/watchdog.rs`, the SDHCI config
@@ -128,6 +128,7 @@ Citations give our file:line. Quotes are the comment's own words.
 | `arch-aarch64/src/sdhci.rs` | SDHCI v3 helper layer (base-parameterized) | own `cyw43.rs` (:3, :189, :251, :298, :348); Linux `sdhci_set_transfer_mode` (:340) | "a faithful TRANSCRIPTION of the metal-proven SDHCI knowledge in `cyw43.rs`" (:3); "Matches Linux `sdhci_set_transfer_mode`" (:340) | `sdhci.c` GPL-2.0-or-later | C |
 | `arch-aarch64/src/semihosting.rs` | Arm semihosting exit (QEMU) | Arm semihosting; PSCI | specification facts | — | A |
 | `arch-aarch64/src/smccc.rs` | SMCCC over HVC: PSCI, TRNG (cloud tier) | Arm DEN0098 (:2); Linux `smccc_trng` (:3); Linux `psci_init_smccc` (:15) | "(the Linux `psci_init_smccc` procedure)" (:15) | `psci.c` GPL-2.0-only; `smccc.c` GPL-2.0-only | C |
+| `arch-aarch64/src/smp.rs` | Secondary-core start (PSCI `CPU_ON` over HVC) and worker-core private stage-1 tables, GICv2 SGI doorbell glue (ADR 0060 S0a/S1) | Arm PSCI (DEN0022), Arm VMSAv8-64 descriptor formats, Arm GICv2 register layout | specification facts; no external code cited | — | A |
 | `arch-aarch64/src/syscall.rs` | EL0 entry / kernel resume glue | none | no external source cited | — | A |
 | `arch-aarch64/src/thread.rs` | Thread trap-frame context | none | no external source cited | — | A |
 | `arch-aarch64/src/timer.rs` | Arm generic timer | Arm architecture | register facts | — | A |
