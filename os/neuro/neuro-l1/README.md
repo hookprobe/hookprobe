@@ -74,3 +74,21 @@ python3 -I os/neuro/neuro-l1/tests/gen_fixture.py os/neuro/neuro-l1/tests/fixtur
 ```bash
 NEURO_L1_FIXTURE=<gen_fixture.py --all or --stream output> cargo test --release --test parity -- --ignored --nocapture
 ```
+
+## `dev=` token (doc 53 R10; candidate, not deployed)
+
+The S1 alert's three largest feature deviations, e.g. `ssh+4.0,lan_peer+1.3,fail-1.2`. They describe an S1 decision
+and never change one.
+- **Definition:** in integer arithmetic on the u8 features S1 already has. `z_q16 = DEV_A_Q16 + DEV_B_Q16·q` is
+  S1's own standardisation on the dequantised feature. Take the top 3 by |z| (ties go to the lower index), then the
+  magnitude in tenths, rounded half up.
+- **Source:** `tools/neuro-research/dev_token.py` is the reference, and `gen_model.py` writes its tables into
+  `src/s1_model.rs`.
+- **API:** `dev_z_q16`, `deviations` and `write_dev_token` (a 64-byte buffer, no allocation).
+- **Parity:** `tests/dev_parity.rs` matches the reference bit for bit on all 140 fixture windows. On the E2E attack
+  fixture's two alerts it gives `telnet+3.4,mean_dur+1.6,tcp+1.3` (scan) and `ssh+4.0,lan_peer+1.3,fail-1.2`
+  (SSH brute force), the same as doc 48's float probe.
+
+```bash
+python3 -I tools/neuro-research/dev_token.py vectors os/neuro/neuro-l1/tests/fixture.txt os/neuro/neuro-l1/tests/dev_fixture.txt
+```

@@ -485,6 +485,75 @@ pub fn alert(q: &[u8; 28]) -> bool {
     score(q) > s1_model::THR_Q
 }
 
+/// Doc 53 R10 (`dev=`): each feature's S1 standardised value, Q16 (65,536 = 1.0), from the u8 features.
+/// The definition and the tables come from `tools/neuro-research/dev_token.py`; this is its bit-exact twin.
+pub fn dev_z_q16(q: &[u8; 28]) -> [i32; 28] {
+    let mut z = [0i32; 28];
+    for i in 0..28 {
+        z[i] = s1_model::DEV_A_Q16[i] + s1_model::DEV_B_Q16[i] * q[i] as i32;
+    }
+    z
+}
+
+/// The three largest |z| as (feature index, z Q16), largest first; ties go to the lower index.
+/// It DESCRIBES an S1 decision and never changes one.
+pub fn deviations(q: &[u8; 28]) -> [(u8, i32); 3] {
+    let z = dev_z_q16(q);
+    let mut top = [(0u8, 0i32); 3];
+    let mut used = [false; 28];
+    for slot in top.iter_mut() {
+        let mut best: Option<usize> = None;
+        for i in 0..28 {
+            if used[i] {
+                continue;
+            }
+            match best {
+                Some(b) if z[i].unsigned_abs() <= z[b].unsigned_abs() => {}
+                _ => best = Some(i),
+            }
+        }
+        let b = best.unwrap_or(0);
+        used[b] = true;
+        *slot = (b as u8, z[b]);
+    }
+    top
+}
+
+/// Render the token (`ssh+4.0,lan_peer+1.3,fail-1.2`) into `out`; returns the length written (at most 64 bytes
+/// for these names). Magnitude in tenths, rounded half up: `(|z| * 10 + 32768) >> 16`.
+pub fn write_dev_token(q: &[u8; 28], out: &mut [u8; 64]) -> usize {
+    let mut n = 0usize;
+    let mut put = |b: &[u8], n: &mut usize| {
+        out[*n..*n + b.len()].copy_from_slice(b);
+        *n += b.len();
+    };
+    for (k, (i, z)) in deviations(q).iter().enumerate() {
+        if k > 0 {
+            put(b",", &mut n);
+        }
+        put(s1_model::DEV_NAMES[*i as usize].as_bytes(), &mut n);
+        put(if *z >= 0 { b"+" } else { b"-" }, &mut n);
+        let t = ((z.unsigned_abs() as u64 * 10 + 32_768) >> 16) as u32;
+        let (whole, tenth) = (t / 10, t % 10);
+        let mut digits = [0u8; 10];
+        let (mut d, mut w) = (0usize, whole);
+        loop {
+            digits[d] = b'0' + (w % 10) as u8;
+            d += 1;
+            w /= 10;
+            if w == 0 {
+                break;
+            }
+        }
+        while d > 0 {
+            d -= 1;
+            put(&digits[d..d + 1], &mut n);
+        }
+        put(&[b'.', b'0' + tenth as u8], &mut n);
+    }
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

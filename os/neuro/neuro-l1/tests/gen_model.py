@@ -27,6 +27,15 @@ out = ["// SPDX-License-Identifier: AGPL-3.0-only",
        "pub const WQ: [i16; 28] = [%s];" % ", ".join(str(v) for v in I["wq_i16"]),
        "pub const BQ: i32 = %d;" % I["bq_i32"],
        "/// Alert iff accumulator > THR_Q.",
-       "pub const THR_Q: i32 = %d;" % I["thr_q_i32"], ""]
+       "pub const THR_Q: i32 = %d;" % I["thr_q_i32"]]
+# doc 53 R10: the dev= token tables come from tools/neuro-research/dev_token.py (one formula, no copy here)
+import sys
+sys.path.insert(0, os.path.join(HERE, "..", "..", "..", "..", "tools", "neuro-research"))
+import dev_token  # noqa: E402
+out += ["/// dev= token (doc 53 R10): z_q16 = DEV_A_Q16 + DEV_B_Q16 * q, the S1 standardisation on the dequantised feature.",
+        "pub const DEV_A_Q16: [i32; 28] = [%s];" % ", ".join(str(v) for v in dev_token.A_Q16),
+        "pub const DEV_B_Q16: [i32; 28] = [%s];" % ", ".join(str(v) for v in dev_token.B_Q16),
+        "/// Short feature names for the token, in feature order.",
+        "pub const DEV_NAMES: [&str; 28] = [%s];" % ", ".join('"%s"' % n for n in dev_token.NAMES), ""]
 open(os.path.join(HERE, "..", "src", "s1_model.rs"), "w").write("\n".join(out))
 print("ok", hashlib.sha256(raw).hexdigest())
