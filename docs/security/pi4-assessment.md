@@ -56,7 +56,7 @@ exploited (receive-only rule).
 - **H-01:** fixed — PR #1161 + #1168 (Referrer-Policy `same-origin`); HSTS off by design (local CA).
 - **W-02:** code-verified MFPR=1 in WPA3-only; beacon confirmation pending a WPA3-only bench image (ping before switching — affects the soak client).
 - **W-01:** accepted (transition mode is the shipping default); optional UX surfacing of the residual risk.
-- **A-01:** fixed — upstream private networks blocked by default, owner exceptions (d372ba10e, ad7d53d68); policy block proven on metal in `20261114-late.md`.
+- **A-01:** fixed — upstream private networks blocked by default, owner exceptions (d372ba10e, ad7d53d68); policy block proven on metal in `20261114-late.md`; default block (no policy) proven on metal in `metal-evidence/20261128-postsoak-r0-setup-w04-j5.md` §7.
 - **A-02:** by design — radio `ap_isolate` on; heqk relays+inspects client traffic (G10 lateral-movement).
 - **L-01 / L-02:** by design (bench DHCPv6-PD doc prefix) / provisioning (cert SAN).
 

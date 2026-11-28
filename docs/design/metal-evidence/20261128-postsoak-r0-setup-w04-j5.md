@@ -90,6 +90,18 @@ Read from the bench Pi's `wpa_supplicant` (D-Bus `BSS.IEs`, the associated BSS):
 | WPS | **no WPS IE**. The vendor IEs are WMM (`0050f202`) and Broadcom (`00101802`) |
 | Country | `RO`, channels 36–64 and 100–140. W-03 was ruled not-a-defect, and radar detection is now on (§3) |
 
+## 7. A-01: upstream private networks blocked by default (no owner policy involved)
+
+The bench Pi was on the AP at 10.99.0.10. From there it opened TCP connections to fortress's management address through the CM5:
+
+| Target | Result |
+|---|---|
+| `192.168.200.1:22` | refused |
+| `192.168.200.1:443` | refused |
+| `https://example.com` | 200 (internet unaffected) |
+
+`GET /api/lan-access` (owner session) returned `default: block`, `exceptions: []`, `refused: 2`. The block ring attributes both refusals: `device dc:a6:32:a4:b6:88, src 10.99.0.10 → 192.168.200.1 dport 22 / 443, tcp`. The 14,879 `allowed_by_policy` connections are the bench policy's explicit ACL allow for the WAN-side throughput sink (§5). The default block itself, from d372ba10e / ad7d53d68, is proven on metal here.
+
 ## Not done in this batch
 
 - **MT-J6 (IPv6 re-probe):** needs kea stopped on fortress during a boot, which takes sudo on fortress. It waits for
