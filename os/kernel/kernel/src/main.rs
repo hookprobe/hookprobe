@@ -17789,9 +17789,10 @@ mod engine_gate {
     pub static CANCELLED: &[u8; 4] = include_bytes!(concat!(env!("OUT_DIR"), "/status_cancelled.bin"));
 }
 
-/// ADR 0060 S2b gate `[P-smp-engine]`: the Conductor's own engine (`conductor_p0::core_job`, unchanged) runs on a
-/// worker core inside the hard-float engine image. ENGINE_LOAD verifies the signed HNX model against the key core 0
-/// trusts, admits it and opens a session in the worker's private arena; ENGINE_INFER answers the gate's prompt.
+/// ADR 0060 S2b/S2c gate `[P-smp-engine]`: the Conductor's own engine runs on a worker core inside the hard-float
+/// engine image, through its own C entry (`conductor_engine_entry::engine_infer`, #1666, unchanged). ENGINE_LOAD
+/// verifies the signed HNX model against the key core 0 trusts, admits it into the worker's private arena and checks
+/// the Conductor's `arena_need`; ENGINE_INFER answers the gate's prompt, stateless per call.
 /// Both workers' answers must equal, byte for byte, the answer the BUILD HOST computed with scalar kernels on
 /// another CPU architecture (the property `conductor_core::quorum` relies on). Core 0 follows the job through the
 /// progress word and stops one through the cancel word: a cancelled job returns nothing of an answer, and the next
@@ -17859,9 +17860,11 @@ fn p_smp_engine(a: &mut arch_aarch64::smp::Port, b: &mut arch_aarch64::smp::Port
     }
     // 2) Load the signed model on both workers: a with the fastest kernels this CPU has, b with scalar kernels.
     let simd_a = if dotprod { 1 } else { 0 };
+    let mut need = 0u64;
     for (p, simd, id) in [(&mut *a, simd_a, 3u32), (&mut *b, 0, 4)] {
         unsafe { core::ptr::write_volatile((base + load_off) as *mut job::EngineLoad, mk(engine_gate::PK, simd)) };
         let (d, _, _) = call(p, id, job::op::ENGINE_LOAD, (base + load_off) as u64, 0, freq);
+        need = d.value;
         if d.status != job::status::OK {
             kprint!(" smp-engine: ENGINE_LOAD on core {} -> {:#x}\n", p.idx, d.status);
             fail("the signed model was not admitted");
@@ -17932,7 +17935,13 @@ fn p_smp_engine(a: &mut arch_aarch64::smp::Port, b: &mut arch_aarch64::smp::Port
             kprint!(" smp-engine: cancel -> status {:#x} value {} (want {:#x}, 0)\n", d.status, d.value, cancelled);
             fail("a cancelled job returned an answer");
         }
-        mode = if when == 0 { "set before the job" } else { "mid-job" };
+        mode = if when == 0 {
+            "set before the job"
+        } else if at_cancel >= toks[0] {
+            "after the final pass"
+        } else {
+            "mid-job"
+        };
         break;
     }
     if mode.is_empty() {
@@ -17944,7 +17953,7 @@ fn p_smp_engine(a: &mut arch_aarch64::smp::Port, b: &mut arch_aarch64::smp::Port
         fail("the job after a cancel was not the same answer");
     }
     kprint!(
-        " [P-smp-engine] PASS the Conductor's engine (conductor_p0::core_job, unchanged) on worker cores: signed HNX model verified + admitted in each worker's private arena (wrong key refused); {}-byte answers ({} and {} tokens) on core {} ({} kernels) and core {} (scalar) BYTE-IDENTICAL to the build host's x86 answer; progress followed; cancel ({} at token {}) returned no answer and the next job was identical again; {} ms and {} ms per answer (TCG, not a metal figure)\n",
-        golden.len(), toks[0], toks[1], a.idx, if dotprod { "NEON+DotProd" } else { "scalar" }, b.idx, mode, at_cancel, ms[0], ms[1]
+        " [P-smp-engine] PASS the Conductor's engine through its own C entry (conductor_engine_entry::engine_infer, unchanged) on worker cores: signed HNX model verified + admitted in each worker's private arena, arena_need {} B (wrong key refused); {}-byte answers ({} and {} tokens) on core {} ({} kernels) and core {} (scalar) BYTE-IDENTICAL to the build host's x86 answer; progress followed; cancel ({} at token {}) returned no answer and the next job was identical again; {} ms and {} ms per answer (TCG, not a metal figure)\n",
+        need, golden.len(), toks[0], toks[1], a.idx, if dotprod { "NEON+DotProd" } else { "scalar" }, b.idx, mode, at_cancel, ms[0], ms[1]
     );
 }

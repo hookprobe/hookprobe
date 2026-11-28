@@ -312,7 +312,7 @@ fn build_worker_engine_model(kernel_manifest_dir: &str, out_dir: &str) {
     println!("cargo:rerun-if-changed={}", tool.join("src").display());
     println!("cargo:rerun-if-changed={}", tool.join("Cargo.toml").display());
     println!("cargo:rerun-if-changed={}", tool.join("Cargo.lock").display());
-    for c in ["conductor-core", "conductor-p0", "neuro-contract", "neuro-gguf", "neuro-hnx", "neuro-kernels", "neuro-lm", "tok-build"] {
+    for c in ["conductor-core", "conductor-p0", "engine-entry", "neuro-contract", "neuro-gguf", "neuro-hnx", "neuro-kernels", "neuro-lm", "tok-build"] {
         println!("cargo:rerun-if-changed={}", conductor.join(c).join("src").display());
     }
     let target = Path::new(out_dir).join("wem-target");

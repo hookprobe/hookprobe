@@ -27,6 +27,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "conductor-engine-entry"
+version = "0.0.26"
+dependencies = [
+ "conductor-p0",
+ "neuro-gguf",
+ "neuro-kernels",
+ "neuro-lm",
+]
+
+[[package]]
 name = "conductor-p0"
 version = "0.0.26"
 dependencies = [
@@ -169,10 +179,8 @@ name = "worker-engine"
 version = "0.0.26"
 dependencies = [
  "conductor-core",
- "conductor-p0",
+ "conductor-engine-entry",
  "heqk-worker",
  "neuro-gguf",
  "neuro-hnx",
- "neuro-kernels",
- "neuro-lm",
 ]

@@ -2,26 +2,23 @@
 //! ADR 0060 S2b build-host tool: the signed tiny model, the prompt and the host's answer for `[P-smp-engine]`.
 //! Usage: `worker-engine-model <out_dir>`. Writes `model.prefix`, `model.bundle`, `model.pk`, `prompt.bin`,
 //! `golden.bin` and `sizes.txt`. Mirrors `os/conductor/conductor-mock/tests/p0_worker.rs` (`admitted`,
-//! `executor_on`, `the_engine_op_for_a_worker_core`), with a smaller context so the session fits a QEMU worker.
+//! `the_engine_op_for_a_worker_core`), with a smaller context so it fits a QEMU worker; the answer goes through
+//! `conductor_engine_entry::run` (#1666), the safe form of the C entry the worker core calls.
 use conductor_core::crypto::{public_key, sign, verify};
-use conductor_p0::core_job::{self, op, status, Link, HEADER};
-use conductor_p0::P0Executor;
+use conductor_engine_entry::{arena_need, op, run, Job, Limits, CANCELLED, HEADER};
+use conductor_p0::core_job::{status, Link};
 use neuro_gguf::hnx::{admit, manifest_for_bundle};
-use neuro_gguf::p0::{self, Mem, Session};
 use neuro_hnx::{build_prefix, kind, scheme, target, Header, Loader, Platform, HEADER_LEN, LEAF_LEN, MAX_SIG};
 use neuro_kernels::Simd;
-use neuro_lm::qwen3::Layer;
 use std::sync::atomic::{AtomicBool, AtomicU32};
 
 /// Context of the gate's model: prompt (bytes are tokens) plus answer must fit.
 pub const CTX: usize = 2048;
 pub const MAX_ANSWER: usize = 1600;
-pub const BATCH: usize = 16;
 pub const SEED: u64 = 7;
 /// Test signing seed: QEMU gate only, never a release key.
 const SIGN_SEED: [u8; 32] = [0x77; 32];
 pub const TAG: &[u8] = b"test/hnx";
-pub const MODEL: [u8; 32] = [0x4D; 32];
 
 struct Node;
 impl Platform for Node {
@@ -102,55 +99,36 @@ fn main() {
         region[s..e].copy_from_slice(&bundle[s..e]);
         l.accept_in_place(i as u32, &mut region).unwrap();
     }
-    let ad = admit(&l, &region).unwrap();
-    let z = p0::sizes(&ad.hparams, BATCH);
-    let (mut layers, mut rope_m, mut kv_vals, mut kv_shifts) = (vec![Layer::EMPTY; z.layers], vec![(0, 0); z.rope], vec![0; z.kv_vals], vec![0; z.kv_shifts]);
-    let (mut w64, mut w8, mut wp, mut w32) = (vec![0; z.work_i64], vec![0; z.work_i8], vec![(0, 0); z.work_pairs], vec![0; z.work_i32]);
-    let (mut ids, mut prev, mut list, mut outb) = (vec![0; z.ids], vec![0; z.prev], vec![0; 512], vec![0; MAX_ANSWER]);
-    let (mut cps, mut buf) = (vec![0u32; 1 << 15], vec![0u8; 1 << 15]);
-    let mem = Mem {
-        layers: &mut layers,
-        rope: &mut rope_m,
-        kv_vals: &mut kv_vals,
-        kv_shifts: &mut kv_shifts,
-        work_i64: &mut w64,
-        work_i8: &mut w8,
-        work_pairs: &mut wp,
-        work_i32: &mut w32,
-        ids: &mut ids,
-        prev: &mut prev,
-        list: &mut list,
-        out: &mut outb,
-    };
-    let session = Session::open(&ad, Simd::SCALAR, BATCH, mem).unwrap();
-    let mut t = 0u64;
-    let mut core = P0Executor::new(session, MODEL, &mut cps, &mut buf, move || {
-        t += 3;
-        t
-    })
-    .with_max_answer(MAX_ANSWER);
+    admit(&l, &region).unwrap();
 
-    // The prompt of the Conductor's worker-core test, answered on this host.
+    // Answer through the Conductor's own entry (conductor_engine_entry::run, the safe form of the C entry the
+    // worker calls), with scalar kernels on this host: the same code path the worker core runs.
+    let limits = Limits { max_ctx: CTX as u32, max_answer: MAX_ANSWER as u32 };
+    let need = arena_need(&region, limits).unwrap();
+    let mut arena = vec![0u8; need as usize];
     let prompt = format!("{}F1 H1->R1:443 n=3 bytes=1200\nF2 H2->R1:22 n=1 bytes=90{}Assess this window.", neuro_contract::USER_HEAD, neuro_contract::USER_MID);
     let (progress, cancel) = (AtomicU32::new(0), AtomicBool::new(false));
     let mut result = vec![0u8; HEADER + MAX_ANSWER * 4];
-    let link = Link { window: prompt.as_bytes(), progress: &progress, cancel: &cancel };
-    let (st, value) = core_job::run(&mut core, op::ENGINE_INFER, 0, prompt.len() as u64, link, &mut result);
+    let (st, value) = run(Job {
+        model: &region,
+        arena: &mut arena,
+        limits,
+        simd: Simd::SCALAR,
+        op: op::ENGINE_INFER,
+        a: 0,
+        b: prompt.len() as u64,
+        link: Link { window: prompt.as_bytes(), progress: &progress, cancel: &cancel },
+        result: &mut result,
+    });
     assert_eq!(st, status::OK, "the host could not answer: {st:#x}");
     let golden = &result[HEADER..HEADER + value as usize];
+    let tokens = u32::from_le_bytes(result[0..4].try_into().unwrap());
 
     std::fs::write(out.join("model.prefix"), &prefix).unwrap();
     std::fs::write(out.join("model.bundle"), &bundle).unwrap();
     std::fs::write(out.join("model.pk"), public_key(&SIGN_SEED)).unwrap();
     std::fs::write(out.join("prompt.bin"), prompt.as_bytes()).unwrap();
     std::fs::write(out.join("golden.bin"), golden).unwrap();
-    std::fs::write(out.join("status_cancelled.bin"), core_job::CANCELLED.to_le_bytes()).unwrap();
-    std::fs::write(
-        out.join("sizes.txt"),
-        format!(
-            "bundle {} prefix {} layers {} rope {} kv_vals {} kv_shifts {} work_i64 {} work_i8 {} work_pairs {} work_i32 {} ids {} prev {} answer {} tokens {}\n",
-            bundle.len(), prefix.len(), z.layers, z.rope, z.kv_vals, z.kv_shifts, z.work_i64, z.work_i8, z.work_pairs, z.work_i32, z.ids, z.prev, value, core.last_stats().tokens
-        ),
-    )
-    .unwrap();
+    std::fs::write(out.join("status_cancelled.bin"), CANCELLED.to_le_bytes()).unwrap();
+    std::fs::write(out.join("sizes.txt"), format!("bundle {} prefix {} arena_need {} answer {} tokens {}\n", bundle.len(), prefix.len(), need, value, tokens)).unwrap();
 }

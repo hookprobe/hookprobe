@@ -19,11 +19,11 @@ publish = false  # first-party: never published to crates.io (ADR 0063 G4)
 [dependencies]
 conductor-core = { path = "../../../os/conductor/conductor-core", features = ["signer"] }
 conductor-p0 = { path = "../../../os/conductor/conductor-p0" }
+conductor-engine-entry = { path = "../../../os/conductor/engine-entry" }
 neuro-contract = { path = "../../../os/conductor/neuro-contract" }
 neuro-gguf = { path = "../../../os/conductor/neuro-gguf" }
 neuro-hnx = { path = "../../../os/conductor/neuro-hnx" }
 neuro-kernels = { path = "../../../os/conductor/neuro-kernels" }
-neuro-lm = { path = "../../../os/conductor/neuro-lm" }
 tok-build = { path = "../../../os/conductor/tok-build" }
 
 [profile.release]
