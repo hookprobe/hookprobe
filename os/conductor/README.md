@@ -182,6 +182,37 @@ ftFg as a bundle on the build host: the tokenizer tables add 4.07 MB and the RoP
 878 segments; read and verified in place in 3.2 s; the run uses no build-host helper and answers `Paris` at
 0.05 s per token (GGUF layout) and 0.03 s (packed).
 
+**P0 as a session (`neuro_gguf::p0`): one forward pass per call.** ADR 0060's amendment (W3, stage S2) puts
+the engine on a compute-role worker core that never allocates, gets its memory from core 0 before it starts and
+is driven over rings. `p0::sizes` says from the model's hyperparameters exactly what memory a session needs;
+`Session::open` binds an admitted bundle into that memory; `Session::advance` does one pass over the weights
+(a prompt batch fed, or one token generated) and returns, so a job can be paced, preempted or cancelled between
+passes. Greedy decoding; the tokens are those of `Model::generate`.
+
+| Gate | Result |
+|---|---|
+| A session's answer equals whole-answer generation, token for token, at prompt batches 1, 2, 4 and 16; a prompt of n tokens takes ceil(n / batch) passes, then one pass per token | pass |
+| A second job on the same session and memory; a cancelled job stops and keeps what it produced | pass |
+| Any one of the nine memory slices one element short, a batch of 0 or 17, an empty prompt, a prompt that fills the context, a bare GGUF payload (no tables) | refused |
+| The manifest's KV state equals what the session takes; its arena covers the session's scratch and RoPE table | pass |
+
+ftFg as a session on the build host (NEON, batch 16; not a device number): 24 prompt tokens in 2 passes, then
+one pass per token at a median of 66.9 ms, p99 69.1 ms, max 69.8 ms over 47 passes. What the model needs
+besides its 1.83 GB of weights, assigned up front:
+
+| Context | KV state | Scratch and RoPE | 
+|---|---|---|
+| 4,096 | 449.8 MiB | 23.4 MiB |
+| 2,048 | 224.9 MiB | 22.4 MiB |
+| 1,024 | 112.4 MiB | 21.9 MiB |
+
+The context is the lever on memory: Neuro's cards are budgeted at 512 tokens, so a triage job fits a context of
+1,024 with room for the system prompt and the answer only if that prompt is short; the right cap is to be set
+with Neuro, not assumed.
+
+Not in the session yet: decoding under the answer grammar one pass at a time (`neuro_lm::decode` runs a whole
+answer per call), and the packed layout.
+
 Still host-side in this path: the packed layout is produced after load and should be the stored form. The
 signature is Ed25519 with a test key; release signing and the hybrid scheme are the platform's. The tables are
 covered by the signature and are not re-derived: the device cannot compute a cosine.

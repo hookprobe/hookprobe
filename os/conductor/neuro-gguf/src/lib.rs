@@ -15,6 +15,7 @@
 
 pub mod bundle;
 pub mod hnx;
+pub mod p0;
 pub mod qwen3;
 
 pub const MAGIC: [u8; 4] = *b"GGUF";

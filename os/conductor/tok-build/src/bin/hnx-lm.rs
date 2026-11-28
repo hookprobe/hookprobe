@@ -10,7 +10,10 @@
 //!
 //! Usage:
 //!   hnx-lm pack --gguf MODEL.gguf --out MODEL.hnx --key SEED.hex --eval REPORT [--ctx 4096] [--licence Apache-2.0] [--svn 1] [--bare]
-//!   hnx-lm run  --hnx MODEL.hnx --pub PUBKEY.hex --ask "question" [--max-new 64] [--scalar] [--packed]
+//!   hnx-lm run  --hnx MODEL.hnx --pub PUBKEY.hex --ask "question" [--max-new 64] [--scalar] [--packed] [--batch 16]
+//!
+//! A bundle in the GGUF layout runs as a P0 session (`neuro_gguf::p0`): one forward pass per call, in memory
+//! sized by `p0::sizes`, as a worker core would drive it. The time of every pass is reported.
 //!
 //! `SEED.hex` is a 32-byte Ed25519 seed in hex (a build-host test key here; release signing is an operator step).
 //! With a bundle, `run` uses no build-host helper: the tokenizer and the RoPE table come from the verified payload.
@@ -206,6 +209,9 @@ fn run(args: &[String]) {
     // 5: the manifest must be what the file needs; then the engine binds the verified bytes.
     let region: &'static [u8] = region.leak();
     let ad = admit(&loader, region).unwrap_or_else(|e| die(&format!("admission refused: {e:?}")));
+    if ad.bundle.is_some() && !args.iter().any(|a| a == "--packed") {
+        return session(args, &ad, &question, max_new);
+    }
     let (g, hp) = (ad.gguf, ad.hparams);
     let d = hp.dims;
     let layers: &'static [_] = (0..d.n_layers).map(|i| bind::layer(&g, &hp, i).unwrap_or_else(|e| die(&format!("layer {i}: {e:?}")))).collect::<Vec<_>>().leak();
@@ -258,6 +264,58 @@ fn run(args: &[String]) {
     let tn = tok.decode(&answer, &mut text).unwrap_or_else(|_| die("decode"));
     println!("answer: {:?}", String::from_utf8_lossy(&text[..tn]));
     println!("{n} prompt tokens + {k} generated in {secs:.1} s on the build host ({:.2} s per token overall; not a device number)", secs / (n + k) as f64);
+}
+
+/// The device's way: a session advanced one forward pass at a time, in memory assigned up front.
+fn session(args: &[String], ad: &neuro_gguf::hnx::Admitted<'static>, question: &str, max_new: usize) {
+    use neuro_gguf::p0::{self, Mem, Progress, Session};
+    let batch: usize = arg(args, "--batch").map_or(MAX_BATCH, |v| v.parse().unwrap_or_else(|_| die("--batch")));
+    let z = p0::sizes(&ad.hparams, batch);
+    let mem = Mem {
+        layers: vec![Layer::EMPTY; z.layers].leak(),
+        rope: vec![(0, 0); z.rope].leak(),
+        kv_vals: vec![0; z.kv_vals].leak(),
+        kv_shifts: vec![0; z.kv_shifts].leak(),
+        work_i64: vec![0; z.work_i64].leak(),
+        work_i8: vec![0; z.work_i8].leak(),
+        work_pairs: vec![(0, 0); z.work_pairs].leak(),
+        work_i32: vec![0; z.work_i32].leak(),
+        ids: vec![0; z.ids].leak(),
+    };
+    let sd = simd(args.iter().any(|a| a == "--scalar"));
+    let mut s = Session::open(ad, sd, batch, mem).unwrap_or_else(|e| die(&format!("session: {e:?}")));
+    let d = ad.hparams.dims;
+    println!("session: {} layers, vocab {}, context {}, {}; memory assigned up front {:.1} MiB (KV {:.1} MiB), nothing derived, nothing allocated after this", d.n_layers, d.vocab, d.max_ctx, sd.name(), z.bytes() as f64 / 1048576.0, (z.kv_vals * 2 + z.kv_shifts) as f64 / 1048576.0);
+    let prompt = format!("<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n");
+    let (mut cps, mut buf) = (vec![0u32; 1 << 16], vec![0u8; 1 << 16]);
+    let n = s.start(prompt.as_bytes(), &mut cps, &mut buf).unwrap_or_else(|e| die(&format!("prompt: {e:?}")));
+    let (mut prefill, mut steps): (Vec<f64>, Vec<f64>) = (vec![], vec![]);
+    let t_all = Instant::now();
+    loop {
+        let t = Instant::now();
+        let p = s.advance().unwrap_or_else(|e| die(&format!("advance: {e:?}")));
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        match p {
+            Progress::Prefill { .. } => prefill.push(ms),
+            Progress::Token { last, .. } => {
+                steps.push(ms);
+                if last || steps.len() >= max_new {
+                    break;
+                }
+            }
+            Progress::Done => break,
+        }
+    }
+    let secs = t_all.elapsed().as_secs_f64();
+    let mut text = vec![0u8; 1 << 16];
+    let tn = s.answer_text(&mut text).unwrap_or_else(|e| die(&format!("decode: {e:?}")));
+    println!("answer: {:?}", String::from_utf8_lossy(&text[..tn]));
+    // The last token pass only emits (it chose nothing new), so it is left out of the per-pass figures.
+    let mut gen: Vec<f64> = steps.iter().copied().take(steps.len().saturating_sub(1)).collect();
+    gen.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let pct = |v: &[f64], p: usize| v.get((v.len().saturating_sub(1)) * p / 100).copied().unwrap_or(0.0);
+    println!("{n} prompt tokens in {} passes of up to {batch} ({:.0} ms per pass); {} tokens generated", prefill.len(), prefill.iter().sum::<f64>() / prefill.len().max(1) as f64, steps.len());
+    println!("one pass per generated token: median {:.1} ms, p99 {:.1} ms, max {:.1} ms; whole job {secs:.2} s (build host, not a device number)", pct(&gen, 50), pct(&gen, 99), gen.last().copied().unwrap_or(0.0));
 }
 
 fn main() {

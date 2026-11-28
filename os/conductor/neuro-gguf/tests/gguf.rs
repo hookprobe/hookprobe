@@ -608,4 +608,171 @@ mod container {
         let l = load(&as_bundle, &file, &mut region);
         assert_eq!(admit(&l, &region).err(), Some(AdmitError::Bundle(BundleError::Magic)));
     }
+
+    // ---------------------------------------------------------------------------------------- P0: the session
+
+    use neuro_gguf::p0::{self, Mem, P0Error, Progress, Session};
+    use neuro_lm::qwen3::Layer;
+
+    /// Owned memory for one session, sized by `p0::sizes` plus `slack` elements each.
+    struct Owned {
+        layers: Vec<Layer<'static>>,
+        rope: Vec<(i32, i32)>,
+        kv_vals: Vec<i16>,
+        kv_shifts: Vec<u8>,
+        wa: Vec<i64>,
+        wb: Vec<i8>,
+        wc: Vec<(i32, i32)>,
+        we: Vec<i32>,
+        ids: Vec<u32>,
+    }
+
+    fn owned(z: &p0::Sizes) -> Owned {
+        Owned {
+            layers: vec![Layer::EMPTY; z.layers],
+            rope: vec![(0, 0); z.rope],
+            kv_vals: vec![0; z.kv_vals],
+            kv_shifts: vec![0; z.kv_shifts],
+            wa: vec![0; z.work_i64],
+            wb: vec![0; z.work_i8],
+            wc: vec![(0, 0); z.work_pairs],
+            we: vec![0; z.work_i32],
+            ids: vec![0; z.ids],
+        }
+    }
+
+    fn mem<'a>(o: &'a mut Owned) -> Mem<'a> {
+        Mem { layers: layer_table(o.layers.len()), rope: &mut o.rope, kv_vals: &mut o.kv_vals, kv_shifts: &mut o.kv_shifts, work_i64: &mut o.wa, work_i8: &mut o.wb, work_pairs: &mut o.wc, work_i32: &mut o.we, ids: &mut o.ids }
+    }
+
+    /// A layer table of the borrow's lifetime. (A `&mut [Layer<'static>]` cannot be lent as `&mut [Layer<'a>]`:
+    /// a mutable slice is invariant. A test may leak; a device has one table for its lifetime.)
+    fn layer_table<'a>(n: usize) -> &'a mut [Layer<'a>] {
+        Box::leak(vec![Layer::EMPTY; n].into_boxed_slice())
+    }
+
+    #[test]
+    fn a_session_advances_one_pass_at_a_time_and_equals_generate() {
+        let file = qwen3_file_v("qwen3", tt::Q8_0, 64, 256);
+        let rope = turned_rope(CTX * 16);
+        let b = bundle_of(&file, &tok_blob(256), &rope_bytes(&rope));
+        let prefix = pack_as(&b, kind::LM_BUNDLE, manifest_for_bundle(&b, CTX).unwrap(), |_| {});
+        let mut region = vec![];
+        let l = load(&prefix, &b, &mut region);
+        let ad = admit(&l, &region).unwrap();
+        let prompt: [u32; 5] = [72, 101, 108, 108, 111];
+
+        // The reference: the whole answer in one call.
+        let want = {
+            let d = ad.hparams.dims;
+            let layers = vec![layer(&ad.gguf, &ad.hparams, 0).unwrap()];
+            let m = model(&ad.gguf, &ad.hparams, &layers, &rope).unwrap();
+            let (kvn, kvs) = d.kv_len();
+            let (mut vals, mut shifts) = (vec![0i16; kvn], vec![0u8; kvs]);
+            let (a, bb, c, e) = Work::lens(&d, 1);
+            let (mut wa, mut wb, mut wc, mut we) = (vec![0i64; a], vec![0i8; bb], vec![(0, 0); c], vec![0i32; e]);
+            let mut work = Work::new(&d, 1, &mut wa, &mut wb, &mut wc, &mut we).unwrap();
+            let mut out = vec![0u32; CTX - prompt.len()];
+            let n = m.generate(Simd::SCALAR, &prompt, &[], &mut Kv { vals: &mut vals, shifts: &mut shifts }, &mut work, &mut out).unwrap();
+            out.truncate(n);
+            out
+        };
+        assert_eq!(want.len(), CTX - prompt.len());
+
+        for batch in [1usize, 2, 4, 16] {
+            let z = p0::sizes(&ad.hparams, batch);
+            let mut o = owned(&z);
+            let mut s = Session::open(&ad, Simd::SCALAR, batch, mem(&mut o)).unwrap();
+            assert_eq!(s.advance().err(), Some(P0Error::NotStarted));
+            assert_eq!(s.start_ids(&prompt), Ok(5));
+            // The prompt goes in ceil(5 / batch) passes, then one pass per token.
+            let (mut prefills, mut tokens, mut passes) = (0, vec![], 0);
+            loop {
+                passes += 1;
+                match s.advance().unwrap() {
+                    Progress::Prefill { fed, total } => {
+                        prefills += 1;
+                        assert_eq!((total, fed), (5, (prefills * batch).min(5)));
+                        assert!(tokens.is_empty());
+                    }
+                    Progress::Token { id, last } => {
+                        tokens.push(id);
+                        if last {
+                            break;
+                        }
+                    }
+                    Progress::Done => panic!("done before a last token"),
+                }
+            }
+            assert_eq!(prefills, 5usize.div_ceil(batch));
+            assert_eq!(tokens, want, "batch {batch}");
+            assert_eq!(s.answer(), &want[..]);
+            assert_eq!(passes, prefills + want.len());
+            assert_eq!(s.advance(), Ok(Progress::Done));
+            // A second job on the same session and memory gives the same answer; a cancelled one stops.
+            s.start_ids(&prompt).unwrap();
+            for _ in 0..prefills + 1 {
+                s.advance().unwrap();
+            }
+            s.cancel();
+            assert_eq!(s.advance(), Ok(Progress::Done));
+            assert_eq!(s.answer(), &want[..1]);
+            let mut text = [0u8; 64];
+            let n = s.answer_text(&mut text).unwrap();
+            assert_eq!(n, 1);
+        }
+    }
+
+    #[test]
+    fn a_session_takes_exactly_the_memory_it_asks_for() {
+        let file = qwen3_file_v("qwen3", tt::Q8_0, 64, 256);
+        let rope = rope_bytes(&turned_rope(CTX * 16));
+        let b = bundle_of(&file, &tok_blob(256), &rope);
+        let prefix = pack_as(&b, kind::LM_BUNDLE, manifest_for_bundle(&b, CTX).unwrap(), |_| {});
+        let mut region = vec![];
+        let l = load(&prefix, &b, &mut region);
+        let ad = admit(&l, &region).unwrap();
+        let z = p0::sizes(&ad.hparams, 2);
+        // What admission reserved covers what the session takes (the manifest counts the largest batch).
+        let man = l.header().manifest;
+        let state = z.kv_vals * 2 + z.kv_shifts;
+        assert_eq!(state as u32, man.state_bytes_per_session);
+        assert!(z.rope * 8 + z.work_i64 * 8 + z.work_i8 + z.work_pairs * 8 + z.work_i32 * 4 <= man.arena_bytes as usize);
+        assert!(z.bytes() > state);
+        // One element short in any slice: refused, nothing half-bound.
+        let shrink: [fn(&mut Owned); 9] = [
+            |o| o.layers.truncate(o.layers.len() - 1),
+            |o| o.rope.truncate(o.rope.len() - 1),
+            |o| o.kv_vals.truncate(o.kv_vals.len() - 1),
+            |o| o.kv_shifts.truncate(o.kv_shifts.len() - 1),
+            |o| o.wa.truncate(o.wa.len() - 1),
+            |o| o.wb.truncate(o.wb.len() - 1),
+            |o| o.wc.truncate(o.wc.len() - 1),
+            |o| o.we.truncate(o.we.len() - 1),
+            |o| o.ids.truncate(o.ids.len() - 1),
+        ];
+        for f in shrink {
+            let mut o = owned(&z);
+            f(&mut o);
+            assert_eq!(Session::open(&ad, Simd::SCALAR, 2, mem(&mut o)).err(), Some(P0Error::Mem));
+        }
+        for batch in [0usize, 17] {
+            let mut o = owned(&p0::sizes(&ad.hparams, 16));
+            assert_eq!(Session::open(&ad, Simd::SCALAR, batch, mem(&mut o)).err(), Some(P0Error::Mem));
+        }
+        // A prompt that is empty, or leaves no room for an answer.
+        let mut o = owned(&z);
+        let mut s = Session::open(&ad, Simd::SCALAR, 2, mem(&mut o)).unwrap();
+        assert_eq!(s.start_ids(&[]).err(), Some(P0Error::Prompt));
+        assert_eq!(s.start_ids(&[1; CTX]).err(), Some(P0Error::Prompt));
+        assert_eq!(s.start_ids(&[1; CTX - 1]), Ok(CTX - 1));
+
+        // A bare GGUF payload has no tables: the device cannot run it.
+        let bare = pack(&file, |_| {});
+        let mut region2 = vec![];
+        let l2 = load(&bare, &file, &mut region2);
+        let ad2 = admit(&l2, &region2).unwrap();
+        let mut o = owned(&z);
+        assert_eq!(Session::open(&ad2, Simd::SCALAR, 2, mem(&mut o)).err(), Some(P0Error::NoTables));
+    }
 }

@@ -14,6 +14,7 @@ path = "src/lib.rs"
 [dependencies]
 neuro-lm = { path = "../neuro-lm" }
 neuro-hnx = { path = "../neuro-hnx" }
+neuro-kernels = { path = "../neuro-kernels" }
 
 [dev-dependencies]
 tok-build = { path = "../tok-build" }
