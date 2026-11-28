@@ -11,7 +11,11 @@
 //! n × { kind u32 | 0 u32 | offset u64 | len u64 }                24 bytes each
 //! sections, in table order, each starting on a 64-byte boundary; zero padding between; nothing after
 //! ```
-//! Version 1 has exactly three sections, in this order: [`GGUF`], [`TOKENIZER`], [`ROPE`]. Offsets are from the
+//! Version 1 has exactly four sections, in this order: [`GGUF`], [`TOKENIZER`], [`ROPE`], [`PACKED`]. The last
+//! may be empty: then the weights are the GGUF file's own. When it is not, the GGUF section is the model's
+//! metadata and norm vectors only, and the matrices are in the packed section, which is the layout the fast
+//! kernels read (`neuro_kernels::q8`): the device has neither the time nor the memory to pack 1.9 GB at load.
+//! Offsets are from the
 //! start of the bundle. A 64-byte boundary keeps GGUF's own 32-byte tensor alignment and puts every section on
 //! a cache line. Everything is little-endian. Any other shape is refused.
 //!
@@ -25,10 +29,13 @@ pub const GGUF: u32 = 1;
 pub const TOKENIZER: u32 = 2;
 /// RoPE `(cos, sin)` pairs, two `i32` each, `positions × head_dim / 2` of them, position-major.
 pub const ROPE: u32 = 3;
+/// The model's matrices in the packed layout, in the order of `crate::qwen3::packed_shapes`, each starting on
+/// a 64-byte boundary of the section. Empty when the GGUF section carries the matrices.
+pub const PACKED: u32 = 4;
 
 pub const MAGIC: [u8; 4] = *b"HLMB";
 pub const VERSION: u16 = 1;
-pub const SECTIONS: usize = 3;
+pub const SECTIONS: usize = 4;
 pub const ALIGN: usize = 64;
 const HEAD: usize = 16;
 const ENTRY: usize = 24;
@@ -49,6 +56,8 @@ pub struct Bundle<'a> {
     pub gguf: &'a [u8],
     pub tokenizer: &'a [u8],
     rope: &'a [u8],
+    /// The packed matrices, or empty.
+    pub packed: &'a [u8],
 }
 
 fn u64_at(b: &[u8], at: usize) -> Option<u64> {
@@ -81,7 +90,7 @@ pub fn write_preamble(lens: [usize; SECTIONS], out: &mut [u8]) -> Option<()> {
     out.get_mut(..4)?.copy_from_slice(&MAGIC);
     out.get_mut(4..6)?.copy_from_slice(&VERSION.to_le_bytes());
     out.get_mut(6..8)?.copy_from_slice(&u16::try_from(SECTIONS).ok()?.to_le_bytes());
-    for (i, kind) in [GGUF, TOKENIZER, ROPE].into_iter().enumerate() {
+    for (i, kind) in [GGUF, TOKENIZER, ROPE, PACKED].into_iter().enumerate() {
         let at = HEAD.checked_add(i.checked_mul(ENTRY)?)?;
         out.get_mut(at..at.checked_add(4)?)?.copy_from_slice(&kind.to_le_bytes());
         out.get_mut(at.checked_add(8)?..at.checked_add(16)?)?.copy_from_slice(&u64::try_from(*offs.get(i)?).ok()?.to_le_bytes());
@@ -100,11 +109,11 @@ impl<'a> Bundle<'a> {
             return Err(BundleError::Version);
         }
         let l = BundleError::Layout;
-        if head.get(6..8) != Some(&[3, 0][..]) {
+        if head.get(6..8) != Some(&[4, 0][..]) {
             return Err(l);
         }
         let mut lens = [0usize; SECTIONS];
-        for (i, kind) in [GGUF, TOKENIZER, ROPE].into_iter().enumerate() {
+        for (i, kind) in [GGUF, TOKENIZER, ROPE, PACKED].into_iter().enumerate() {
             let at = HEAD.saturating_add(i.saturating_mul(ENTRY));
             if u32_at(head, at) != Some(kind) {
                 return Err(l);
@@ -135,7 +144,7 @@ impl<'a> Bundle<'a> {
         if !rope.len().is_multiple_of(8) {
             return Err(l);
         }
-        Ok(Self { gguf: sec(0)?, tokenizer: sec(1)?, rope })
+        Ok(Self { gguf: sec(0)?, tokenizer: sec(1)?, rope, packed: sec(3)? })
     }
 
     /// `(cos, sin)` pairs in the RoPE table.

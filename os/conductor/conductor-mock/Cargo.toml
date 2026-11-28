@@ -11,3 +11,11 @@ license = "AGPL-3.0-only"
 neuro-contract = { path = "../neuro-contract" }
 conductor-core = { path = "../conductor-core", features = ["signer"] }
 conductor-worker = { path = "../conductor-worker" }
+
+[dev-dependencies]
+conductor-p0 = { path = "../conductor-p0" }
+neuro-gguf = { path = "../neuro-gguf" }
+neuro-hnx = { path = "../neuro-hnx" }
+neuro-lm = { path = "../neuro-lm" }
+neuro-kernels = { path = "../neuro-kernels" }
+tok-build = { path = "../tok-build" }

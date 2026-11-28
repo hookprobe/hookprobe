@@ -15,6 +15,7 @@
 
 pub mod bundle;
 pub mod hnx;
+pub mod p0;
 pub mod qwen3;
 
 pub const MAGIC: [u8; 4] = *b"GGUF";
@@ -414,6 +415,11 @@ impl<'a> Gguf<'a> {
             }
         }
         Ok(g)
+    }
+
+    /// The key-value block as it is in the file (for a build-side rewrite that keeps the metadata).
+    pub fn kv_bytes(&self) -> &'a [u8] {
+        self.bytes.get(self.kv_at..self.ti_at).unwrap_or(&[])
     }
 
     pub fn tensor_count(&self) -> u64 {

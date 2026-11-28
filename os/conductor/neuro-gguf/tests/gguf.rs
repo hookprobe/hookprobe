@@ -508,16 +508,9 @@ mod container {
         t.iter().flat_map(|(c, s)| [c.to_le_bytes(), s.to_le_bytes()].concat()).collect()
     }
 
-    /// The build side of a bundle.
+    /// The build side of a bundle whose model file carries the matrices.
     fn bundle_of(file: &[u8], tok: &[u8], rope: &[u8]) -> Vec<u8> {
-        let lens = [file.len(), tok.len(), rope.len()];
-        let (offs, total) = bundle::layout(lens).unwrap();
-        let mut b = vec![0u8; total];
-        bundle::write_preamble(lens, &mut b).unwrap();
-        for (o, part) in offs.iter().zip([file, tok, rope]) {
-            b[*o..*o + part.len()].copy_from_slice(part);
-        }
-        b
+        tok_build::bundle([file, tok, rope, &[]]).unwrap()
     }
 
     #[test]
@@ -526,7 +519,7 @@ mod container {
         let rope = turned_rope(CTX * 16);
         let b = bundle_of(&file, &tok_blob(256), &rope_bytes(&rope));
         // Every section starts on a cache line, so GGUF's own tensor alignment survives inside the bundle.
-        let (offs, total) = bundle::layout([file.len(), tok_blob(256).len(), rope.len() * 8]).unwrap();
+        let (offs, total) = bundle::layout([file.len(), tok_blob(256).len(), rope.len() * 8, 0]).unwrap();
         assert!(offs.iter().all(|o| o % 64 == 0) && total == b.len());
 
         let prefix = pack_as(&b, kind::LM_BUNDLE, manifest_for_bundle(&b, CTX).unwrap(), |_| {});
@@ -582,7 +575,7 @@ mod container {
         };
         edit(&|c| c[0] = b'G', BundleError::Magic);
         edit(&|c| c[4] = 2, BundleError::Version);
-        edit(&|c| c[6] = 2, BundleError::Layout); // two sections
+        edit(&|c| c[6] = 3, BundleError::Layout); // three sections
         edit(&|c| c[16] = 2, BundleError::Layout); // first section is not the model
         edit(&|c| c[20] = 1, BundleError::Layout); // a reserved field
         edit(&|c| c[24] += 64, BundleError::Layout); // an offset that is not the canonical one
@@ -607,5 +600,380 @@ mod container {
         let as_bundle = pack_as(&file, kind::LM_BUNDLE, manifest_for(&file, CTX).unwrap(), |_| {});
         let l = load(&as_bundle, &file, &mut region);
         assert_eq!(admit(&l, &region).err(), Some(AdmitError::Bundle(BundleError::Magic)));
+    }
+
+    // ---------------------------------------------------------------------------------------- P0: the session
+
+    use neuro_gguf::p0::{self, Mem, P0Error, Progress, Session};
+    use neuro_lm::qwen3::Layer;
+
+    /// Owned memory for one session, sized by `p0::sizes` plus `slack` elements each.
+    struct Owned {
+        layers: Vec<Layer<'static>>,
+        rope: Vec<(i32, i32)>,
+        kv_vals: Vec<i16>,
+        kv_shifts: Vec<u8>,
+        wa: Vec<i64>,
+        wb: Vec<i8>,
+        wc: Vec<(i32, i32)>,
+        we: Vec<i32>,
+        ids: Vec<u32>,
+        prev: Vec<u32>,
+    }
+
+    fn owned(z: &p0::Sizes) -> Owned {
+        Owned {
+            layers: vec![Layer::EMPTY; z.layers],
+            rope: vec![(0, 0); z.rope],
+            kv_vals: vec![0; z.kv_vals],
+            kv_shifts: vec![0; z.kv_shifts],
+            wa: vec![0; z.work_i64],
+            wb: vec![0; z.work_i8],
+            wc: vec![(0, 0); z.work_pairs],
+            we: vec![0; z.work_i32],
+            ids: vec![0; z.ids],
+            prev: vec![0; z.prev],
+        }
+    }
+
+    fn mem<'a>(o: &'a mut Owned) -> Mem<'a> {
+        Mem { layers: layer_table(o.layers.len()), rope: &mut o.rope, kv_vals: &mut o.kv_vals, kv_shifts: &mut o.kv_shifts, work_i64: &mut o.wa, work_i8: &mut o.wb, work_pairs: &mut o.wc, work_i32: &mut o.we, ids: &mut o.ids, prev: &mut o.prev, list: &mut [], out: &mut [] }
+    }
+
+    /// A layer table of the borrow's lifetime. (A `&mut [Layer<'static>]` cannot be lent as `&mut [Layer<'a>]`:
+    /// a mutable slice is invariant. A test may leak; a device has one table for its lifetime.)
+    fn layer_table<'a>(n: usize) -> &'a mut [Layer<'a>] {
+        Box::leak(vec![Layer::EMPTY; n].into_boxed_slice())
+    }
+
+    #[test]
+    fn a_session_advances_one_pass_at_a_time_and_equals_generate() {
+        let file = qwen3_file_v("qwen3", tt::Q8_0, 64, 256);
+        let rope = turned_rope(CTX * 16);
+        let b = bundle_of(&file, &tok_blob(256), &rope_bytes(&rope));
+        let prefix = pack_as(&b, kind::LM_BUNDLE, manifest_for_bundle(&b, CTX).unwrap(), |_| {});
+        let mut region = vec![];
+        let l = load(&prefix, &b, &mut region);
+        let ad = admit(&l, &region).unwrap();
+        let prompt: [u32; 5] = [72, 101, 108, 108, 111];
+
+        // The reference: the whole answer in one call.
+        let want = {
+            let d = ad.hparams.dims;
+            let layers = vec![layer(&ad.gguf, &ad.hparams, 0).unwrap()];
+            let m = model(&ad.gguf, &ad.hparams, &layers, &rope).unwrap();
+            let (kvn, kvs) = d.kv_len();
+            let (mut vals, mut shifts) = (vec![0i16; kvn], vec![0u8; kvs]);
+            let (a, bb, c, e) = Work::lens(&d, 1);
+            let (mut wa, mut wb, mut wc, mut we) = (vec![0i64; a], vec![0i8; bb], vec![(0, 0); c], vec![0i32; e]);
+            let mut work = Work::new(&d, 1, &mut wa, &mut wb, &mut wc, &mut we).unwrap();
+            let mut out = vec![0u32; CTX - prompt.len()];
+            let n = m.generate(Simd::SCALAR, &prompt, &[], &mut Kv { vals: &mut vals, shifts: &mut shifts }, &mut work, &mut out).unwrap();
+            out.truncate(n);
+            out
+        };
+        assert_eq!(want.len(), CTX - prompt.len());
+
+        for batch in [1usize, 2, 4, 16] {
+            let z = p0::sizes(&ad.hparams, batch);
+            let mut o = owned(&z);
+            let mut s = Session::open(&ad, Simd::SCALAR, batch, mem(&mut o)).unwrap();
+            assert_eq!(s.advance().err(), Some(P0Error::NotStarted));
+            assert_eq!(s.start_ids(&prompt), Ok(5));
+            // The prompt goes in ceil(5 / batch) passes, then one pass per token.
+            let (mut prefills, mut tokens, mut passes) = (0, vec![], 0);
+            loop {
+                passes += 1;
+                match s.advance().unwrap() {
+                    Progress::Prefill { fed, total } => {
+                        prefills += 1;
+                        assert_eq!((total, fed), (5, (prefills * batch).min(5)));
+                        assert!(tokens.is_empty());
+                    }
+                    Progress::Token { id, last } => {
+                        tokens.push(id);
+                        if last {
+                            break;
+                        }
+                    }
+                    Progress::Tokens { .. } => panic!("a contract pass in a plain job"),
+                    Progress::Done => panic!("done before a last token"),
+                }
+            }
+            assert_eq!(prefills, 5usize.div_ceil(batch));
+            assert_eq!(tokens, want, "batch {batch}");
+            assert_eq!(s.answer(), &want[..]);
+            assert_eq!(passes, prefills + want.len());
+            assert_eq!(s.advance(), Ok(Progress::Done));
+            // A second job with the same prompt: the KV cache already holds all of it but the last token, which
+            // is fed again for its logits. One prompt pass, and the same answer.
+            assert_eq!(s.reused(), 0, "the first job had nothing to reuse");
+            s.start_ids(&prompt).unwrap();
+            assert_eq!(s.reused(), prompt.len() - 1);
+            assert_eq!(s.advance(), Ok(Progress::Prefill { fed: 5, total: 5 }));
+            let mut again = vec![];
+            while let Progress::Token { id, last } = s.advance().unwrap() {
+                again.push(id);
+                if last {
+                    break;
+                }
+            }
+            assert_eq!(again, want, "batch {batch}");
+            // A cancelled job stops and keeps what it produced.
+            s.start_ids(&prompt).unwrap();
+            s.advance().unwrap();
+            s.advance().unwrap();
+            s.cancel();
+            assert_eq!(s.advance(), Ok(Progress::Done));
+            assert_eq!(s.answer(), &want[..1]);
+            let mut text = [0u8; 64];
+            assert_eq!(s.answer_text(&mut text).unwrap(), 1);
+        }
+    }
+
+    #[test]
+    fn a_shared_prompt_prefix_is_not_fed_twice_and_the_answer_is_the_same() {
+        let file = qwen3_file_v("qwen3", tt::Q8_0, 64, 256);
+        let rope = turned_rope(CTX * 16);
+        let b = bundle_of(&file, &tok_blob(256), &rope_bytes(&rope));
+        let prefix = pack_as(&b, kind::LM_BUNDLE, manifest_for_bundle(&b, CTX).unwrap(), |_| {});
+        let mut region = vec![];
+        let l = load(&prefix, &b, &mut region);
+        let ad = admit(&l, &region).unwrap();
+        let z = p0::sizes(&ad.hparams, 2);
+        let run = |s: &mut Session, prompt: &[u32]| -> (Vec<u32>, usize, usize) {
+            s.start_ids(prompt).unwrap();
+            let (mut passes, mut out) = (0usize, vec![]);
+            loop {
+                match s.advance().unwrap() {
+                    Progress::Prefill { .. } => passes += 1,
+                    Progress::Token { id, last } => {
+                        out.push(id);
+                        if last {
+                            break;
+                        }
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+            (out, passes, s.reused())
+        };
+        // What a fresh session answers to each prompt.
+        let prompts: [&[u32]; 5] = [&[10, 20, 30, 40, 50], &[10, 20, 30, 41, 51, 61], &[10, 20, 30, 41], &[99, 20, 30], &[10, 20, 30, 41, 51, 61]];
+        let fresh: Vec<Vec<u32>> = prompts
+            .iter()
+            .map(|p| {
+                let mut o = owned(&z);
+                let mut s = Session::open(&ad, Simd::SCALAR, 2, mem(&mut o)).unwrap();
+                run(&mut s, p).0
+            })
+            .collect();
+        // One session, the jobs one after another: the same answers, with the shared leading tokens reused.
+        let mut o = owned(&z);
+        let mut s = Session::open(&ad, Simd::SCALAR, 2, mem(&mut o)).unwrap();
+        let want_reused = [0usize, 3, 3, 0, 0];
+        for (k, p) in prompts.iter().enumerate() {
+            let (out, passes, reused) = run(&mut s, p);
+            assert_eq!(out, fresh[k], "job {k}");
+            assert_eq!(reused, want_reused[k], "job {k}");
+            assert_eq!(passes, (p.len() - reused).div_ceil(2), "job {k}: only the tokens that were not reused are fed");
+        }
+        // The answer of a job is in the cache too: a prompt that continues it reuses those positions.
+        let mut longer = prompts[4].to_vec();
+        longer.push(fresh[4][0]);
+        assert_eq!(longer.len(), 7);
+        let (_, _, reused) = run(&mut s, &longer);
+        assert_eq!(reused, 6);
+        // Without the `prev` slice nothing is reused, and the answers are still the same.
+        let mut o = owned(&z);
+        let mut m = mem(&mut o);
+        m.prev = &mut [];
+        let mut s = Session::open(&ad, Simd::SCALAR, 2, m).unwrap();
+        for (k, p) in prompts.iter().enumerate() {
+            let (out, _, reused) = run(&mut s, p);
+            assert_eq!((out, reused), (fresh[k].clone(), 0), "job {k}");
+        }
+    }
+
+    #[test]
+    fn a_session_takes_exactly_the_memory_it_asks_for() {
+        let file = qwen3_file_v("qwen3", tt::Q8_0, 64, 256);
+        let rope = rope_bytes(&turned_rope(CTX * 16));
+        let b = bundle_of(&file, &tok_blob(256), &rope);
+        let prefix = pack_as(&b, kind::LM_BUNDLE, manifest_for_bundle(&b, CTX).unwrap(), |_| {});
+        let mut region = vec![];
+        let l = load(&prefix, &b, &mut region);
+        let ad = admit(&l, &region).unwrap();
+        let z = p0::sizes(&ad.hparams, 2);
+        // What admission reserved covers what the session takes (the manifest counts the largest batch).
+        let man = l.header().manifest;
+        let state = z.kv_vals * 2 + z.kv_shifts;
+        assert_eq!(state as u32, man.state_bytes_per_session);
+        assert!(z.rope * 8 + z.work_i64 * 8 + z.work_i8 + z.work_pairs * 8 + z.work_i32 * 4 <= man.arena_bytes as usize);
+        assert!(z.bytes() > state);
+        // One element short in any slice: refused, nothing half-bound.
+        let shrink: [fn(&mut Owned); 9] = [
+            |o| o.layers.truncate(o.layers.len() - 1),
+            |o| o.rope.truncate(o.rope.len() - 1),
+            |o| o.kv_vals.truncate(o.kv_vals.len() - 1),
+            |o| o.kv_shifts.truncate(o.kv_shifts.len() - 1),
+            |o| o.wa.truncate(o.wa.len() - 1),
+            |o| o.wb.truncate(o.wb.len() - 1),
+            |o| o.wc.truncate(o.wc.len() - 1),
+            |o| o.we.truncate(o.we.len() - 1),
+            |o| o.ids.truncate(o.ids.len() - 1),
+        ];
+        for f in shrink {
+            let mut o = owned(&z);
+            f(&mut o);
+            assert_eq!(Session::open(&ad, Simd::SCALAR, 2, mem(&mut o)).err(), Some(P0Error::Mem));
+        }
+        for batch in [0usize, 17] {
+            let mut o = owned(&p0::sizes(&ad.hparams, 16));
+            assert_eq!(Session::open(&ad, Simd::SCALAR, batch, mem(&mut o)).err(), Some(P0Error::Mem));
+        }
+        // A prompt that is empty, or leaves no room for an answer.
+        let mut o = owned(&z);
+        let mut s = Session::open(&ad, Simd::SCALAR, 2, mem(&mut o)).unwrap();
+        assert_eq!(s.start_ids(&[]).err(), Some(P0Error::Prompt));
+        assert_eq!(s.start_ids(&[1; CTX]).err(), Some(P0Error::Prompt));
+        assert_eq!(s.start_ids(&[1; CTX - 1]), Ok(CTX - 1));
+
+        // A bare GGUF payload has no tables: the device cannot run it.
+        let bare = pack(&file, |_| {});
+        let mut region2 = vec![];
+        let l2 = load(&bare, &file, &mut region2);
+        let ad2 = admit(&l2, &region2).unwrap();
+        let mut o = owned(&z);
+        assert_eq!(Session::open(&ad2, Simd::SCALAR, 2, mem(&mut o)).err(), Some(P0Error::NoTables));
+    }
+
+    #[test]
+    fn a_session_under_the_contract_equals_generate_closed() {
+        use neuro_contract::{context_ids, Allowed, IdList, Machine};
+        use neuro_lm::decode::{generate_closed, Options};
+        let file = qwen3_file_v("qwen3", tt::Q8_0, 64, 256);
+        let rope = turned_rope(CTX * 16);
+        let b = bundle_of(&file, &tok_blob(256), &rope_bytes(&rope));
+        let prefix = pack_as(&b, kind::LM_BUNDLE, manifest_for_bundle(&b, CTX).unwrap(), |_| {});
+        let mut region = vec![];
+        let l = load(&prefix, &b, &mut region);
+        let ad = admit(&l, &region).unwrap();
+        let (facts, ents): (&'static mut IdList, &'static mut IdList) = (Box::leak(Box::new(IdList::new())), Box::leak(Box::new(IdList::new())));
+        context_ids(b"F1 H1->R1:443 n=3", facts, ents).unwrap();
+        let (facts, ents): (&'static IdList, &'static IdList) = (facts, ents);
+        let machine = || Machine::new(Allowed { facts, entities: ents, closed: true });
+        let prompt = b"hi";
+
+        for (opts, batch) in [(Options { prune_max: 0, draft_max: 0, max_new: 6 }, 1usize), (Options { prune_max: 64, draft_max: 0, max_new: 6 }, 2), (Options { prune_max: 64, draft_max: 3, max_new: 5 }, 4)] {
+            // The reference: the whole answer in one call, on the model bound by hand.
+            let d = ad.hparams.dims;
+            let layers = vec![layer(&ad.gguf, &ad.hparams, 0).unwrap()];
+            let m = model(&ad.gguf, &ad.hparams, &layers, &rope).unwrap();
+            let tb = tok_blob(256);
+            let tok = Tokenizer::new(&tb).unwrap();
+            let mut ids = [0u32; 8];
+            let np = tok.encode(prompt, &mut ids).unwrap();
+            let (kvn, kvs) = d.kv_len();
+            let (mut vals, mut shifts) = (vec![0i16; kvn], vec![0u8; kvs]);
+            let (a, bb, c, e) = Work::lens(&d, batch);
+            let (mut wa, mut wb, mut wc, mut we) = (vec![0i64; a], vec![0i8; bb], vec![(0, 0); c], vec![0i32; e]);
+            let mut work = Work::new(&d, batch, &mut wa, &mut wb, &mut wc, &mut we).unwrap();
+            let (mut hist, mut list, mut out) = (vec![0u32; CTX], vec![0u32; 64], vec![0u32; opts.max_new]);
+            let (n, st) = generate_closed(&m, Simd::SCALAR, &tok, &ids[..np], &[], machine(), &mut Kv { vals: &mut vals, shifts: &mut shifts }, &mut work, &mut hist, &mut list, opts, &mut out).unwrap();
+            assert_eq!(n, opts.max_new, "no end token in this vocabulary: the answer runs to its bound");
+
+            let z = p0::sizes(&ad.hparams, batch);
+            let mut o = owned(&z);
+            let (mut slist, mut sout) = (vec![0u32; 64], vec![0u32; opts.max_new]);
+            let mut sm = mem(&mut o);
+            (sm.list, sm.out) = (&mut slist, &mut sout);
+            let mut s = Session::open(&ad, Simd::SCALAR, batch, sm).unwrap();
+            let (mut cps, mut buf) = (vec![0u32; 64], vec![0u8; 64]);
+            assert_eq!(s.start_closed(prompt, &mut cps, &mut buf, machine(), opts), Ok(np));
+            let (mut passes, mut got) = (0u32, 0usize);
+            loop {
+                match s.advance().unwrap() {
+                    Progress::Prefill { .. } => {}
+                    Progress::Tokens { count } => got += count,
+                    Progress::Token { .. } => panic!("a plain token in a job under the contract"),
+                    Progress::Done => break,
+                }
+                passes += 1;
+            }
+            assert_eq!(s.answer(), &out[..n], "{opts:?} batch {batch}");
+            assert_eq!((got, s.closed_stats()), (n, Some(st)));
+            assert!(passes >= st.prefill_passes + st.passes && passes <= st.prefill_passes + st.passes + 1);
+        }
+        // No room for an answer under the contract without the caller's `out`.
+        let z = p0::sizes(&ad.hparams, 1);
+        let mut o = owned(&z);
+        let mut s = Session::open(&ad, Simd::SCALAR, 1, mem(&mut o)).unwrap();
+        let (mut cps, mut buf) = (vec![0u32; 64], vec![0u8; 64]);
+        assert_eq!(s.start_closed(prompt, &mut cps, &mut buf, machine(), Options { prune_max: 0, draft_max: 0, max_new: 4 }).err(), Some(P0Error::Mem));
+    }
+
+    // ---------------------------------------------------------------------------------------- packed weights
+
+    #[test]
+    fn a_packed_bundle_gives_the_same_tokens_and_keeps_no_matrices_in_the_file() {
+        let file = qwen3_file_v("qwen3", tt::Q8_0, 64, 256);
+        let rope = turned_rope(CTX * 16);
+        let g = neuro_gguf::Gguf::open(&file).unwrap();
+        let h = neuro_gguf::qwen3::hparams(&g, CTX).unwrap();
+        let (packed, skeleton) = tok_build::packed_parts(&g, &h).unwrap();
+        assert_eq!(Some(packed.len()), neuro_gguf::qwen3::packed_len(&h));
+        // The file that is left has the metadata and the norm vectors, and none of the eight matrices.
+        let sk = neuro_gguf::Gguf::open(&skeleton).unwrap();
+        assert_eq!(sk.kv_count(), g.kv_count());
+        assert_eq!(sk.tensor_count(), g.tensor_count() - 8);
+        assert!(sk.tensor(b"token_embd.weight").is_none() && sk.tensor(b"blk.0.ffn_down.weight").is_none() && sk.tensor(b"blk.0.attn_norm.weight").is_some());
+        assert!(skeleton.len() < file.len() / 2);
+
+        let prompt: [u32; 5] = [72, 101, 108, 108, 111];
+        let answer = |bytes: &[u8]| -> Vec<u32> {
+            let prefix = pack_as(bytes, kind::LM_BUNDLE, manifest_for_bundle(bytes, CTX).unwrap(), |_| {});
+            let mut region = vec![];
+            let l = load(&prefix, bytes, &mut region);
+            let ad = admit(&l, &region).unwrap();
+            let z = p0::sizes(&ad.hparams, 2);
+            let mut o = owned(&z);
+            let mut s = Session::open(&ad, Simd::SCALAR, 2, mem(&mut o)).unwrap();
+            s.start_ids(&prompt).unwrap();
+            while s.advance().unwrap() != Progress::Done {}
+            s.answer().to_vec()
+        };
+        let tok = tok_blob(256);
+        let unpacked = bundle_of(&file, &tok, &rope_bytes(&rope));
+        let packed_bundle = tok_build::bundle([&skeleton, &tok, &rope_bytes(&rope), &packed]).unwrap();
+        let want = answer(&unpacked);
+        assert_eq!(want.len(), CTX - prompt.len());
+        assert_eq!(answer(&packed_bundle), want, "the packed layout computes the same numbers");
+        // The manifest counts what a token reads: here the packed matrices and the norms left in the file.
+        let (m_un, m_pk) = (manifest_for_bundle(&unpacked, CTX).unwrap(), manifest_for_bundle(&packed_bundle, CTX).unwrap());
+        assert_eq!((m_un.state_bytes_per_session, m_un.arena_bytes), (m_pk.state_bytes_per_session, m_pk.arena_bytes));
+        assert!(m_pk.bytes_per_token >= packed.len() as u64);
+
+        // A packed section that is not exactly this model's matrices is refused at admission, and a file with no
+        // matrices and no packed section cannot be bound.
+        let admit_err = |bytes: &[u8]| {
+            let prefix = pack_as(bytes, kind::LM_BUNDLE, manifest_for_bundle(bytes, CTX).unwrap(), |_| {});
+            let mut region = vec![];
+            let l = load(&prefix, bytes, &mut region);
+            admit(&l, &region).err()
+        };
+        let short = tok_build::bundle([&skeleton, &tok, &rope_bytes(&rope), &packed[..packed.len() - 64]]).unwrap();
+        assert_eq!(admit_err(&short), Some(AdmitError::Tables));
+        let mut longer = packed.clone();
+        longer.extend_from_slice(&[0; 64]);
+        assert_eq!(admit_err(&tok_build::bundle([&skeleton, &tok, &rope_bytes(&rope), &longer]).unwrap()), Some(AdmitError::Tables));
+        let none = tok_build::bundle([&skeleton, &tok, &rope_bytes(&rope), &[]]).unwrap();
+        let prefix = pack_as(&none, kind::LM_BUNDLE, manifest_for_bundle(&none, CTX).unwrap(), |_| {});
+        let mut region = vec![];
+        let l = load(&prefix, &none, &mut region);
+        let ad = admit(&l, &region).unwrap();
+        let z = p0::sizes(&ad.hparams, 2);
+        let mut o = owned(&z);
+        assert!(matches!(Session::open(&ad, Simd::SCALAR, 2, mem(&mut o)).err(), Some(P0Error::Bind(_))));
     }
 }
