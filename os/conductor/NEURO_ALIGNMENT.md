@@ -426,3 +426,17 @@ Neuro's decisions. Read with #1628, #1631 and the S1 PR, and with Neuro doc 53 (
 **Built so far (QEMU; metal pending a CM5 slot):** S0a secondary cores (`[P-smp-boot]`), S1a worker executive
 (`[P-smp-worker]`: 2 workers x 20,000 jobs in parallel, results equal to core 0's, out-of-window refused, worker fault
 contained), `conductor_core::quorum`.
+
+## Update: what the engine will see on a worker core (2026-11-28, S1b)
+
+Since S1b every worker core runs on **private page tables**: kernel `.text` (read-only, executable), `.rodata`
+(read-only), the worker's own page-aligned area (block, rings, context, stack: read-write), the shared data window
+(**read-only**) and two GIC pages. Kernel `.data`/`.bss` is **unmapped**; touching it is an MMU fault that parks the
+core. For the engine on a worker core (ADR 0060 S2) this means:
+- **No mutable statics** in the engine crates (`neuro-*`, `conductor-core` paths the worker calls). A `static mut`,
+  an atomic static, or a `OnceCell`-style global lands in `.data`/`.bss` and will fault. Immutable `static` tables
+  in `.rodata` are fine. Today's crates are `no_std`, allocation-free and pass state by argument, so they fit; please
+  keep it that way (a grep-based test like `no_linux_no_python.rs` could enforce it, if you want one).
+- **Weights and arena come from core 0** as regions mapped into that worker only: the model region read-only, the
+  KV cache/arena read-write. The engine must not assume any other address is reachable.
+- **Bit-exactness** across workers is still what `quorum` relies on (previous update).
