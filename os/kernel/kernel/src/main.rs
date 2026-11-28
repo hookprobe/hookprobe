@@ -7561,6 +7561,9 @@ pub extern "C" fn kmain() -> ! {
     }
     kprint!(" [P1b] PASS mmu+frames (with free list)\n");
 
+    // --- ADR 0061 M2/M8: discover RAM and cores ONCE from the firmware's device tree (QEMU path) ---
+    p_mem_discover();
+
     // --- ADR 0060 amendment S0a: secondary cores as parked worker cores (QEMU -smp) ---
     // Runs here, on the kernel's own translation table and before any EL0 task swaps TTBR0.
     #[cfg(feature = "smpboot")]
@@ -17344,6 +17347,8 @@ fn p_smp_boot() {
         }
     }
     let cores = 1 + alive + contained as u32;
+    // ADR 0061 M8: cores now executing heqk code (core 0 + every started worker, the fault probe included).
+    capabilities::set_cores_running(cores);
     if ok && contained && alive >= 1 {
         kprint!(" [P-smp-boot] PASS cores={} (core 0 kernel + {} workers at EL1 on private stage-1 tables, challenge answered; 1 worker fault contained)\n", cores, alive);
         p_smp_worker(&mut ports, core0_cpacr, engine_bytes);
@@ -17957,3 +17962,60 @@ fn p_smp_engine(a: &mut arch_aarch64::smp::Port, b: &mut arch_aarch64::smp::Port
         need, golden.len(), toks[0], toks[1], a.idx, if dotprod { "NEON+DotProd" } else { "scalar" }, b.idx, mode, at_cancel, ms[0], ms[1]
     );
 }
+
+/// ADR 0061 M2 + M8 gate `[P-mem-discover]` (QEMU `virt` path): discover RAM and cores ONCE from the device tree the
+/// firmware hands over, with boot-abi's bounded, fail-closed parser (the same one HBoot's T0 inventory uses), and
+/// publish them as measured facts in `/api/capabilities` (`hardware`). QEMU places the DTB at the start of RAM for a
+/// bare ELF kernel (below the image at RAM base + 0x80000). The checks: the blob is a well-formed FDT that fits below
+/// the image; there is at least one `/memory` range and it contains the kernel image; the total is whole MiB; there
+/// is at least one CPU and PSCI is described. On CM5 the DTB comes from HBoot's BootInfo (metal step).
+#[cfg(not(feature = "cm5"))]
+fn p_mem_discover() {
+    use boot_abi::fdt;
+    const DTB: usize = 0x4000_0000;
+    const DTB_MAX: usize = 0x8_0000; // the image starts at RAM base + 0x80000
+    let hdr = unsafe { core::slice::from_raw_parts(DTB as *const u8, 8) };
+    let magic = u32::from_be_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]);
+    let total = u32::from_be_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]) as usize;
+    if magic != 0xd00d_feed {
+        // No firmware tree handed over (QEMU's `virt` does not give a bare ELF one; validate.sh loads it as the
+        // firmware would): the hardware facts stay NOT MEASURED and /api/capabilities omits them. Not a failure.
+        kprint!(" [P-mem-discover] SKIP no device tree at RAM base: RAM and cores not measured, not published\n");
+        return;
+    }
+    if !(40..=DTB_MAX).contains(&total) {
+        kprint!(" [P-mem-discover] FAIL a device tree header at RAM base with an impossible size {}\n", total);
+        arch_aarch64::semihosting::exit(1);
+    }
+    let blob = unsafe { core::slice::from_raw_parts(DTB as *const u8, total) };
+    let inv = match fdt::parse(blob) {
+        Ok(i) => i,
+        Err(e) => {
+            kprint!(" [P-mem-discover] FAIL the device tree was refused by boot-abi::fdt ({:?})\n", e);
+            arch_aarch64::semihosting::exit(1);
+        }
+    };
+    extern "C" {
+        static __text_start: u8;
+        static __stack_top: u8;
+    }
+    let (img_lo, img_hi) = (core::ptr::addr_of!(__text_start) as u64, core::ptr::addr_of!(__stack_top) as u64);
+    let holds_image = inv.mem[..inv.nmem].iter().any(|r| r.base <= img_lo && img_hi <= r.base.saturating_add(r.size));
+    let ram = inv.mem_total();
+    let ok = inv.nmem >= 1 && holds_image && ram % (1 << 20) == 0 && inv.ncpus >= 1 && inv.psci.present;
+    capabilities::set_hardware(ram, inv.ncpus as u32, inv.truncated);
+    if !ok {
+        kprint!(" [P-mem-discover] FAIL ranges {} holds_image {} ram {:#x} cpus {} psci {}\n", inv.nmem, holds_image, ram, inv.ncpus, inv.psci.present);
+        arch_aarch64::semihosting::exit(1);
+    }
+    let r0 = inv.mem[0];
+    kprint!(
+        " [P-mem-discover] PASS device tree ({} B at {:#x}) parsed by boot-abi::fdt: {} RAM range(s), first {:#x}+{:#x}, total {} MiB (holds the kernel image {:#x}..{:#x}); {} CPU(s), PSCI {}; {} reserved range(s){}; published in /api/capabilities as measured hardware facts\n",
+        total, DTB, inv.nmem, r0.base, r0.size, ram >> 20, img_lo, img_hi, inv.ncpus,
+        if inv.psci.present { "described" } else { "absent" }, inv.nresv,
+        if inv.truncated { " (TRUNCATED: lower bound)" } else { "" }
+    );
+}
+
+#[cfg(feature = "cm5")]
+fn p_mem_discover() {}

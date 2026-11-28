@@ -76,6 +76,15 @@ allocation.
   64/256, `MAX_THREADS` 36, the 1 MiB heap, the 128 MiB pool, the 4 GiB map, the 16 KiB HQCFG1
   size (handled by policy objects), and the tunnel split limit of 8.
 
+## Progress (2026-11-28)
+
+- **M2 + M8, QEMU (built):** the kernel parses the firmware device tree with `boot_abi::fdt` (the parser HBoot's T0
+  inventory already uses), checks it (image inside a `/memory` range, whole MiB, CPUs, PSCI) and publishes
+  `hardware {source: dtb, ram_bytes, cores_discovered, cores_running}` in `/api/capabilities`, omitted when not
+  measured. Gate `[P-mem-discover]` (`validate.sh` loads QEMU's own tree at RAM base as firmware would). At `-m 6G` it
+  discovers one range of 6144 MiB, i.e. RAM above 4 GiB. **Not yet:** mapping that RAM (M1), CM5 (the tree from
+  HBoot's BootInfo), budgets and admission (D2–D6).
+
 ## Consequences
 
 - A manifest schema change: a hardware section (cores/topology, RAM regions, crypto extensions,

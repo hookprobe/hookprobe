@@ -95,7 +95,7 @@ jobs:
 
       - name: Install qemu-system-aarch64
         run: |
-          tools/ci/apt-install.sh qemu-system-arm mtools dosfstools fdisk   # retried (#1240); mkfs.vfat/mcopy/sfdisk: validate.sh P15 OTA + A/B phases build a real FAT32 image
+          tools/ci/apt-install.sh qemu-system-arm mtools dosfstools fdisk device-tree-compiler   # retried (#1240); mkfs.vfat/mcopy/sfdisk: validate.sh P15 OTA + A/B phases build a real FAT32 image
 
       - name: heqk validate.sh (build + QEMU boot + phase-gate report)
         run: ./validate.sh

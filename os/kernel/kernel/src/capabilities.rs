@@ -6,10 +6,29 @@
 //! WPA3 is configured) are set by the bring-up code; the denials carry the measured reason (metal evidence).
 
 use crate::mcstate::JsonBuf;
-use core::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 
 static WIFI_AP: AtomicBool = AtomicBool::new(false);
 static WPA3: AtomicBool = AtomicBool::new(false);
+/// ADR 0061 M8: hardware facts, MEASURED at boot (never assumed). 0 = not measured: then no `hardware` object.
+static HW_RAM: AtomicU64 = AtomicU64::new(0);
+static HW_CORES_FOUND: AtomicU32 = AtomicU32::new(0);
+static HW_CORES_RUNNING: AtomicU32 = AtomicU32::new(1);
+static HW_TRUNCATED: AtomicBool = AtomicBool::new(false);
+
+/// RAM and cores as discovered from the firmware's device tree (`/memory`, `/cpus`). `truncated`: a table was full,
+/// so the numbers are a lower bound and say so.
+pub fn set_hardware(ram_bytes: u64, cores_found: u32, truncated: bool) {
+    HW_RAM.store(ram_bytes, Relaxed);
+    HW_CORES_FOUND.store(cores_found, Relaxed);
+    HW_TRUNCATED.store(truncated, Relaxed);
+}
+/// Cores actually running heqk code (core 0 plus started worker cores). Only builds that start worker cores call
+/// it (`smpboot` today); every other build runs on core 0 alone, which is the default.
+#[cfg_attr(not(feature = "smpboot"), allow(dead_code))]
+pub fn set_cores_running(n: u32) {
+    HW_CORES_RUNNING.store(n, Relaxed);
+}
 
 /// The Wi-Fi AP is beaconing (set by the AP bring-up).
 pub fn set_wifi_ap(up: bool) {
@@ -84,7 +103,19 @@ pub fn render(w: &mut JsonBuf) {
         }
         w.raw("\"wifi_ap\":\"No Wi-Fi access point on this device or build\"");
     }
-    w.raw("}}");
+    w.raw("}");
+    let ram = HW_RAM.load(Relaxed);
+    if ram != 0 {
+        // ADR 0061 M8: measured facts only; a truncated inventory is marked as a lower bound.
+        w.raw(",\"hardware\":{\"source\":\"dtb\",\"ram_bytes\":");
+        let _ = core::fmt::Write::write_fmt(w, format_args!("{}", ram));
+        w.raw(",\"cores_discovered\":");
+        let _ = core::fmt::Write::write_fmt(w, format_args!("{}", HW_CORES_FOUND.load(Relaxed)));
+        w.raw(",\"cores_running\":");
+        let _ = core::fmt::Write::write_fmt(w, format_args!("{}", HW_CORES_RUNNING.load(Relaxed)));
+        w.raw(if HW_TRUNCATED.load(Relaxed) { ",\"lower_bound\":true}" } else { "}" });
+    }
+    w.raw("}");
 }
 
 /// [P-caps]
