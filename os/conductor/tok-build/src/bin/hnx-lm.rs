@@ -14,6 +14,13 @@
 //!   hnx-lm run  --hnx MODEL.hnx --pub PUBKEY.hex --ask "question" [--max-new 64] [--scalar] [--packed] [--batch 16]
 //!   hnx-lm triage --hnx MODEL.hnx --pub PUBKEY.hex --context WINDOW.txt [--then WINDOW2.txt]... [--max-new 700] [--drafts] [--no-reuse]
 //!
+//!   hnx-lm job --hnx MODEL.hnx --pub PUBKEY.hex [--l0 benign|suspicious|malicious] [--fact "TEXT"]... [--jobs 2]
+//!
+//! `job` is the whole Conductor path around the engine, on this host: the device harness builds the request from
+//! the job's evidence, the (mock) kernel signs a capability, the worker (`conductor-worker`) checks it, makes its
+//! replay mark durable and runs the engine through `conductor-p0`, signs the result, and the device's verifier
+//! judges the answer. The model named by the capability is taken to be the one in the file.
+//!
 //! `triage` is one explainer job as the device runs it: the window's context (as `neuro_contract::cards` writes it),
 //! guard A, Neuro's contract prompt, an answer decoded under the contract one pass at a time, read back and checked.
 //!
@@ -434,12 +441,106 @@ fn triage(args: &[String]) {
     }
 }
 
+/// The Conductor path around the engine: harness, capability, worker, engine, signed result, verifier.
+fn job(args: &[String]) {
+    use conductor_core::class::{DataClass, Tier};
+    use conductor_core::crypto::{public_key, sign};
+    use conductor_core::harness::{Harness, Outcome};
+    use conductor_core::job::Verdict;
+    use conductor_mock::disk::{Disk, Platter};
+    use conductor_mock::{env_with, policy_p1, Ev, JobBuilder, Kernel, Remote, DEVICE_SEED, MODEL, WORKER_SEED};
+    use conductor_p0::P0Executor;
+    use conductor_worker::{Layout, ResultKey, Worker};
+    use neuro_gguf::p0::{self, Mem, Session};
+    struct Key([u8; 32]);
+    impl ResultKey for Key {
+        fn public_key(&self) -> [u8; 32] {
+            public_key(&self.0)
+        }
+        fn sign(&self, tag: &[u8], msg: &[u8]) -> Option<[u8; 64]> {
+            sign(&self.0, tag, msg)
+        }
+    }
+    type Exec = P0Executor<'static, Box<dyn FnMut() -> u64>>;
+    struct Node(Worker<Disk, Key, Exec>);
+    impl Remote for Node {
+        fn tier(&self) -> Tier {
+            Tier::P1
+        }
+        fn receive(&mut self, tx: &[u8], session: &[u8; 32], now_ms: u64) -> Vec<Vec<u8>> {
+            let mut v = vec![];
+            self.0.handle(tx, session, now_ms, &mut |f| v.push(f.to_vec()));
+            v
+        }
+    }
+
+    let l0 = match arg(args, "--l0").as_deref() {
+        None | Some("suspicious") => Verdict::Suspicious,
+        Some("benign") => Verdict::Benign,
+        Some("malicious") => Verdict::Malicious,
+        _ => die("--l0 benign|suspicious|malicious"),
+    };
+    let mut facts: Vec<String> = args.iter().enumerate().filter(|(_, a)| *a == "--fact").filter_map(|(i, _)| args.get(i + 1).cloned()).collect();
+    if facts.is_empty() {
+        facts = vec!["42 connections from one device to 203.0.113.9:443 in 10 min, 5 s apart".into(), "203.0.113.9 has no reverse DNS name and was first seen today".into()];
+    }
+    let n_jobs: u8 = arg(args, "--jobs").map_or(2, |v| v.parse().unwrap_or_else(|_| die("--jobs")));
+
+    // The node: verify, load, admit, open one session, serve one model.
+    let ad: &'static neuro_gguf::hnx::Admitted<'static> = Box::leak(Box::new(admitted(args)));
+    if ad.bundle.is_none() {
+        die("this container is a bare GGUF payload; a node needs the bundle");
+    }
+    let z = p0::sizes(&ad.hparams, MAX_BATCH);
+    let mem = Mem {
+        layers: vec![Layer::EMPTY; z.layers].leak(),
+        rope: vec![(0, 0); z.rope].leak(),
+        kv_vals: vec![0; z.kv_vals].leak(),
+        kv_shifts: vec![0; z.kv_shifts].leak(),
+        work_i64: vec![0; z.work_i64].leak(),
+        work_i8: vec![0; z.work_i8].leak(),
+        work_pairs: vec![(0, 0); z.work_pairs].leak(),
+        work_i32: vec![0; z.work_i32].leak(),
+        ids: vec![0; z.ids].leak(),
+        prev: vec![0; z.prev].leak(),
+        list: vec![0; 8192].leak(),
+        out: vec![0; conductor_p0::MAX_ANSWER_TOKENS].leak(),
+    };
+    let sd = simd(args.iter().any(|a| a == "--scalar"));
+    let session = Session::open(ad, sd, MAX_BATCH, mem).unwrap_or_else(|e| die(&format!("session: {e:?}")));
+    let t0 = Instant::now();
+    let clock: Box<dyn FnMut() -> u64> = Box::new(move || t0.elapsed().as_millis() as u64);
+    let exec = P0Executor::new(session, MODEL, vec![0u32; 1 << 17].leak(), vec![0u8; 1 << 17].leak(), clock);
+    let layout = Layout { high_water_lo: 64, epoch_lo: 66 };
+    let mut node = Node(Worker::boot(Disk::new(&Platter::default()), layout, Key(WORKER_SEED), exec, public_key(&DEVICE_SEED), Tier::P1).unwrap_or_else(|| die("the worker's store is unreadable")));
+    println!("node: one session, {}, serving one model; worker key and store are this host's test doubles", sd.name());
+
+    // The device: one kernel (its capability counter goes on from job to job), one harness per job.
+    let mut k = Kernel::new(policy_p1(), Tier::P1);
+    for j in 0..n_jobs {
+        let evidence: Vec<Ev> = facts.iter().enumerate().map(|(i, t)| Ev { id: i as u16 + 1, class: DataClass::Public, required: i == 0, text: t.clone() }).collect();
+        let b = JobBuilder { job_id: [j + 1; 16], tools: 0, l0: l0 as u8, out_total: 4096, compute_total: 600_000, per_call: 120_000, evidence, ..Default::default() };
+        let mut h = Box::new(Harness::new());
+        let t = Instant::now();
+        let r = k.run(&mut h, &b.encode(), env_with(policy_p1(), public_key(&WORKER_SEED), Tier::P1), &mut node);
+        let st = node.0.executor().last_stats();
+        println!("\njob {}: {:.1} s; prompt {} bytes; {} prompt tokens not fed again; {} prefill passes, {} answer passes, {} answer tokens", j + 1, t.elapsed().as_secs_f64(), h.prompt().len(), node.0.executor().last_reused(), st.prefill_passes, st.passes, st.tokens);
+        match r.outcome {
+            Some(Outcome::Verified(v)) => println!("  verifier: {:?}; model verdict {:?}; decided by L0: {}", v.status, v.model_verdict, v.l0_decided),
+            other => println!("  outcome: {other:?}"),
+        }
+        println!("  summary shown: {}", String::from_utf8_lossy(h.summary()));
+        println!("  ledger records: {}; leases started/ended: {}/{}; worker high-water mark: {}", r.ledger.len(), r.leases_started, r.leases_ended, node.0.high_water());
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("pack") => pack(&args),
         Some("run") => run(&args),
         Some("triage") => triage(&args),
-        _ => die("usage: hnx-lm pack|run|triage …; see the top of hnx-lm.rs"),
+        Some("job") => job(&args),
+        _ => die("usage: hnx-lm pack|run|triage|job …; see the top of hnx-lm.rs"),
     }
 }

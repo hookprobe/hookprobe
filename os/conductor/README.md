@@ -305,7 +305,24 @@ weights gives another answer and is a conflict with re-verifiable evidence that 
 host-side form of the proposed `[P-fleet-exact]` gate; across real core counts it needs the worker cores
 (ADR 0060 S2).
 
-These are host tests. The node's EL0 wiring, block device
+**The real model through the same path** (`hnx-lm job`, build host, test key; 2026-11-28). ftFg from its signed
+packed bundle, two jobs with the same two facts, the device's L0 verdict "suspicious":
+
+| | Job 1 | Job 2 |
+|---|---|---|
+| Whole job | 26.1 s | 11.0 s |
+| Prompt tokens not fed again | 0 | 453 |
+| Prefill passes / answer tokens | 29 / 181 | 1 / 181 |
+| Verifier | Valid, verdict suspicious, decided by L0 | the same; the same answer text |
+| Ledger records; leases started/ended; worker high-water mark | 4; 1/1; 1 | 4; 1/1; 2 |
+
+This is the path, not an evaluation: the request here is the harness's earlier prompt form, not Neuro's cards
+(those arrive with the window job, #1645), so the answer's quality says nothing about ftFg. Host numbers, not
+device numbers. One limit showed up: a capability allows at most 120 s of compute per call
+(`limits::MAX_COMPUTE_MS`). A job fits on this host; on a CM5-class core it will not, so that limit has to be set
+from the first device measurement.
+
+The tests above are host tests. The node's EL0 wiring, block device
 and kernel-held key are still kernel work (below).
 
 ## neuro-lm: the language-model pieces
