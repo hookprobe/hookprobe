@@ -508,16 +508,9 @@ mod container {
         t.iter().flat_map(|(c, s)| [c.to_le_bytes(), s.to_le_bytes()].concat()).collect()
     }
 
-    /// The build side of a bundle.
+    /// The build side of a bundle whose model file carries the matrices.
     fn bundle_of(file: &[u8], tok: &[u8], rope: &[u8]) -> Vec<u8> {
-        let lens = [file.len(), tok.len(), rope.len()];
-        let (offs, total) = bundle::layout(lens).unwrap();
-        let mut b = vec![0u8; total];
-        bundle::write_preamble(lens, &mut b).unwrap();
-        for (o, part) in offs.iter().zip([file, tok, rope]) {
-            b[*o..*o + part.len()].copy_from_slice(part);
-        }
-        b
+        tok_build::bundle([file, tok, rope, &[]]).unwrap()
     }
 
     #[test]
@@ -526,7 +519,7 @@ mod container {
         let rope = turned_rope(CTX * 16);
         let b = bundle_of(&file, &tok_blob(256), &rope_bytes(&rope));
         // Every section starts on a cache line, so GGUF's own tensor alignment survives inside the bundle.
-        let (offs, total) = bundle::layout([file.len(), tok_blob(256).len(), rope.len() * 8]).unwrap();
+        let (offs, total) = bundle::layout([file.len(), tok_blob(256).len(), rope.len() * 8, 0]).unwrap();
         assert!(offs.iter().all(|o| o % 64 == 0) && total == b.len());
 
         let prefix = pack_as(&b, kind::LM_BUNDLE, manifest_for_bundle(&b, CTX).unwrap(), |_| {});
@@ -582,7 +575,7 @@ mod container {
         };
         edit(&|c| c[0] = b'G', BundleError::Magic);
         edit(&|c| c[4] = 2, BundleError::Version);
-        edit(&|c| c[6] = 2, BundleError::Layout); // two sections
+        edit(&|c| c[6] = 3, BundleError::Layout); // three sections
         edit(&|c| c[16] = 2, BundleError::Layout); // first section is not the model
         edit(&|c| c[20] = 1, BundleError::Layout); // a reserved field
         edit(&|c| c[24] += 64, BundleError::Layout); // an offset that is not the canonical one
@@ -918,5 +911,69 @@ mod container {
         let mut s = Session::open(&ad, Simd::SCALAR, 1, mem(&mut o)).unwrap();
         let (mut cps, mut buf) = (vec![0u32; 64], vec![0u8; 64]);
         assert_eq!(s.start_closed(prompt, &mut cps, &mut buf, machine(), Options { prune_max: 0, draft_max: 0, max_new: 4 }).err(), Some(P0Error::Mem));
+    }
+
+    // ---------------------------------------------------------------------------------------- packed weights
+
+    #[test]
+    fn a_packed_bundle_gives_the_same_tokens_and_keeps_no_matrices_in_the_file() {
+        let file = qwen3_file_v("qwen3", tt::Q8_0, 64, 256);
+        let rope = turned_rope(CTX * 16);
+        let g = neuro_gguf::Gguf::open(&file).unwrap();
+        let h = neuro_gguf::qwen3::hparams(&g, CTX).unwrap();
+        let (packed, skeleton) = tok_build::packed_parts(&g, &h).unwrap();
+        assert_eq!(Some(packed.len()), neuro_gguf::qwen3::packed_len(&h));
+        // The file that is left has the metadata and the norm vectors, and none of the eight matrices.
+        let sk = neuro_gguf::Gguf::open(&skeleton).unwrap();
+        assert_eq!(sk.kv_count(), g.kv_count());
+        assert_eq!(sk.tensor_count(), g.tensor_count() - 8);
+        assert!(sk.tensor(b"token_embd.weight").is_none() && sk.tensor(b"blk.0.ffn_down.weight").is_none() && sk.tensor(b"blk.0.attn_norm.weight").is_some());
+        assert!(skeleton.len() < file.len() / 2);
+
+        let prompt: [u32; 5] = [72, 101, 108, 108, 111];
+        let answer = |bytes: &[u8]| -> Vec<u32> {
+            let prefix = pack_as(bytes, kind::LM_BUNDLE, manifest_for_bundle(bytes, CTX).unwrap(), |_| {});
+            let mut region = vec![];
+            let l = load(&prefix, bytes, &mut region);
+            let ad = admit(&l, &region).unwrap();
+            let z = p0::sizes(&ad.hparams, 2);
+            let mut o = owned(&z);
+            let mut s = Session::open(&ad, Simd::SCALAR, 2, mem(&mut o)).unwrap();
+            s.start_ids(&prompt).unwrap();
+            while s.advance().unwrap() != Progress::Done {}
+            s.answer().to_vec()
+        };
+        let tok = tok_blob(256);
+        let unpacked = bundle_of(&file, &tok, &rope_bytes(&rope));
+        let packed_bundle = tok_build::bundle([&skeleton, &tok, &rope_bytes(&rope), &packed]).unwrap();
+        let want = answer(&unpacked);
+        assert_eq!(want.len(), CTX - prompt.len());
+        assert_eq!(answer(&packed_bundle), want, "the packed layout computes the same numbers");
+        // The manifest counts what a token reads: here the packed matrices and the norms left in the file.
+        let (m_un, m_pk) = (manifest_for_bundle(&unpacked, CTX).unwrap(), manifest_for_bundle(&packed_bundle, CTX).unwrap());
+        assert_eq!((m_un.state_bytes_per_session, m_un.arena_bytes), (m_pk.state_bytes_per_session, m_pk.arena_bytes));
+        assert!(m_pk.bytes_per_token >= packed.len() as u64);
+
+        // A packed section that is not exactly this model's matrices is refused at admission, and a file with no
+        // matrices and no packed section cannot be bound.
+        let admit_err = |bytes: &[u8]| {
+            let prefix = pack_as(bytes, kind::LM_BUNDLE, manifest_for_bundle(bytes, CTX).unwrap(), |_| {});
+            let mut region = vec![];
+            let l = load(&prefix, bytes, &mut region);
+            admit(&l, &region).err()
+        };
+        let short = tok_build::bundle([&skeleton, &tok, &rope_bytes(&rope), &packed[..packed.len() - 64]]).unwrap();
+        assert_eq!(admit_err(&short), Some(AdmitError::Tables));
+        let mut longer = packed.clone();
+        longer.extend_from_slice(&[0; 64]);
+        assert_eq!(admit_err(&tok_build::bundle([&skeleton, &tok, &rope_bytes(&rope), &longer]).unwrap()), Some(AdmitError::Tables));
+        let none = tok_build::bundle([&skeleton, &tok, &rope_bytes(&rope), &[]]).unwrap();
+        let prefix = pack_as(&none, kind::LM_BUNDLE, manifest_for_bundle(&none, CTX).unwrap(), |_| {});
+        let mut region = vec![];
+        let l = load(&prefix, &none, &mut region);
+        let ad = admit(&l, &region).unwrap();
+        let z = p0::sizes(&ad.hparams, 2);
+        let mut o = owned(&z);
+        assert!(matches!(Session::open(&ad, Simd::SCALAR, 2, mem(&mut o)).err(), Some(P0Error::Bind(_))));
     }
 }

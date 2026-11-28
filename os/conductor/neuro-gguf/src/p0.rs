@@ -16,7 +16,7 @@
 //! `neuro_lm::decode::generate_closed` gives, with its pruned head and verified drafts).
 
 use crate::hnx::Admitted;
-use crate::qwen3::{layer, model, BindError, Hparams};
+use crate::qwen3::{layer, layer_packed, model, model_packed, BindError, Hparams, Packed};
 use neuro_kernels::{hp, Simd};
 use neuro_contract::Machine;
 use neuro_lm::decode::{ClosedRun, Options, Pass, Stats};
@@ -149,13 +149,30 @@ impl<'a> Session<'a> {
         let need = sizes(h, batch);
         let Mem { layers, rope, kv_vals, kv_shifts, work_i64, work_i8, work_pairs, work_i32, ids, prev, list, out } = mem;
         let layers = layers.get_mut(..need.layers).ok_or(P0Error::Mem)?;
+        // The matrices: the packed section if the bundle has one (the stored form for a device), else the file's.
+        let mut packed = (!tables.packed.is_empty()).then(|| Packed::new(tables.packed));
+        let embed = match packed.as_mut() {
+            Some(p) => Some(p.take(h.dims.vocab, h.dims.d_model).map_err(P0Error::Bind)?),
+            None => None,
+        };
         for (i, slot) in layers.iter_mut().enumerate() {
-            *slot = layer(g, h, i).map_err(P0Error::Bind)?;
+            *slot = match packed.as_mut() {
+                Some(p) => layer_packed(g, h, i, p),
+                None => layer(g, h, i),
+            }
+            .map_err(P0Error::Bind)?;
+        }
+        if packed.as_ref().is_some_and(|p| !p.done()) {
+            return Err(P0Error::Bind(BindError::Tensor));
         }
         let rope = rope.get_mut(..need.rope).ok_or(P0Error::Mem)?;
         tables.rope_into(rope).ok_or(P0Error::Mem)?;
         let (layers, rope): (&'a [Layer<'a>], &'a [(i32, i32)]) = (layers, rope);
-        let model = model(g, h, layers, rope).map_err(P0Error::Bind)?;
+        let model = match embed {
+            Some(e) => model_packed(g, h, e, layers, rope),
+            None => model(g, h, layers, rope),
+        }
+        .map_err(P0Error::Bind)?;
         let kv = Kv { vals: kv_vals.get_mut(..need.kv_vals).ok_or(P0Error::Mem)?, shifts: kv_shifts.get_mut(..need.kv_shifts).ok_or(P0Error::Mem)? };
         let work = Work::new(
             &h.dims,

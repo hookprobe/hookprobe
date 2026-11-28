@@ -253,9 +253,26 @@ valid under the contract, no carried text. The first job feeds 1,115 prompt toke
 293 tokens already in the cache and feed 657 and 892 in 54 s and 80 s. Whole jobs: 120 s, 83 s, 113 s; an answer
 pass stays between 129 and 143 ms at the median and under 160 ms at worst.
 
-Not done: the packed layout in a session.
+**The packed layout is the stored form.** A bundle's fourth section holds the model's matrices in the packed
+layout (`neuro_kernels::q8`), in a fixed order, each on a 64-byte boundary; the GGUF section then keeps only the
+metadata, the tokenizer's source and the norm vectors. The device runs the fast kernels with no packing at load:
+packing 1.9 GB there would need both copies in memory. Admission checks that the section is exactly this
+model's matrices; the engine's own check validates every record when the model is bound.
+`hnx-lm pack --packed` builds it.
 
-Still host-side in this path: the packed layout is produced after load and should be the stored form. The
+| Gate | Result |
+|---|---|
+| A packed bundle of the tiny model gives the tokens of the unpacked one; the file left has the metadata and norms and none of the eight matrices | pass |
+| A packed section 64 bytes short or long; a file with no matrices and no packed section | refused |
+
+ftFg packed (build host, context 2,048): the model file shrinks to 6.4 MB and the packed section is 1.94 GB
+(929 segments, read and verified in place in 3.3 s). One pass per token at short context: 32 ms, against 67 ms
+in the GGUF layout. The three windows above: 85 s, 60 s and 85 s, against 120 s, 83 s and 113 s; an answer
+pass at about 1,200 tokens of context takes 97 to 111 ms at the median (attention over the KV cache is now the
+larger part). The answer to the second window is byte for byte the answer of the unpacked layout in a fresh
+session.
+
+Still open in this path: the
 signature is Ed25519 with a test key; release signing and the hybrid scheme are the platform's. The tables are
 covered by the signature and are not re-derived: the device cannot compute a cosine.
 

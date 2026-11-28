@@ -284,3 +284,86 @@ pub fn from_gguf(g: &neuro_gguf::Gguf) -> Result<Source, String> {
     }
     Ok(Source { tokens, merges: ms, added })
 }
+
+// ------------------------------------------------------------------------------------------- model bundles
+
+/// A GGUF file with the same metadata and only the tensors `keep` accepts, laid out again. Build side.
+pub fn gguf_keeping(g: &neuro_gguf::Gguf, keep: impl Fn(&neuro_gguf::Tensor) -> bool) -> Vec<u8> {
+    let align = g.alignment as usize;
+    let mut kept = vec![];
+    g.for_each_tensor(|t| {
+        if keep(&t) {
+            kept.push(t);
+        }
+    });
+    let mut out = b"GGUF".to_vec();
+    out.extend_from_slice(&3u32.to_le_bytes());
+    out.extend_from_slice(&(kept.len() as u64).to_le_bytes());
+    out.extend_from_slice(&g.kv_count().to_le_bytes());
+    out.extend_from_slice(g.kv_bytes());
+    let mut data: Vec<u8> = vec![];
+    for t in &kept {
+        while !data.len().is_multiple_of(align) {
+            data.push(0);
+        }
+        out.extend_from_slice(&(t.name.len() as u64).to_le_bytes());
+        out.extend_from_slice(t.name);
+        out.extend_from_slice(&(t.n_dims as u32).to_le_bytes());
+        for d in t.dims.iter().take(t.n_dims) {
+            out.extend_from_slice(&d.to_le_bytes());
+        }
+        out.extend_from_slice(&t.ty.to_le_bytes());
+        out.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        data.extend_from_slice(t.data);
+    }
+    while !out.len().is_multiple_of(align) {
+        out.push(0);
+    }
+    out.extend_from_slice(&data);
+    out
+}
+
+/// The model's matrices in the packed layout, in the order and alignment of `neuro_gguf::qwen3::packed_shapes`,
+/// and the GGUF file without them. Refuses a model whose output head is not tied to the embedding.
+pub fn packed_parts(g: &neuro_gguf::Gguf, h: &neuro_gguf::qwen3::Hparams) -> Result<(Vec<u8>, Vec<u8>), String> {
+    use neuro_gguf::qwen3::{layer, PACK_ALIGN};
+    if g.tensor(b"output.weight").is_some() {
+        return Err("the output head is not tied to the embedding; a packed section does not carry one".into());
+    }
+    let d = h.dims;
+    let mut out: Vec<u8> = vec![];
+    let mut put = |m: &neuro_lm::qwen3::Mat| -> Result<(), String> {
+        while !out.len().is_multiple_of(PACK_ALIGN) {
+            out.push(0);
+        }
+        let at = out.len();
+        out.resize(at + neuro_kernels::q8::packed_bytes(m.rows, m.cols), 0);
+        m.pack_into(&mut out[at..]).map(|_| ()).ok_or_else(|| "a matrix does not pack".to_string())
+    };
+    let embed = g.tensor(b"token_embd.weight").ok_or("no embedding")?;
+    put(&neuro_lm::qwen3::Mat::gguf(d.vocab, d.d_model, embed.data))?;
+    for i in 0..d.n_layers {
+        let l = layer(g, h, i).map_err(|e| format!("layer {i}: {e:?}"))?;
+        for m in [&l.wq, &l.wk, &l.wv, &l.wo, &l.w_gate, &l.w_up, &l.w_down] {
+            put(m)?;
+        }
+    }
+    // The file keeps everything that is not one of those matrices: metadata, tokenizer, norm vectors.
+    let is_matrix = |name: &[u8]| name == b"token_embd.weight" || (name.starts_with(b"blk.") && [&b".attn_q.weight"[..], b".attn_k.weight", b".attn_v.weight", b".attn_output.weight", b".ffn_gate.weight", b".ffn_up.weight", b".ffn_down.weight"].iter().any(|s| name.ends_with(s)));
+    Ok((out, gguf_keeping(g, |t| !is_matrix(t.name))))
+}
+
+/// A bundle from its four sections (`neuro_gguf::bundle`): model file, tokenizer tables, RoPE pairs, packed
+/// matrices (empty when the file carries them).
+pub fn bundle(parts: [&[u8]; 4]) -> Option<Vec<u8>> {
+    use neuro_gguf::bundle::{layout, write_preamble};
+    let lens = [parts[0].len(), parts[1].len(), parts[2].len(), parts[3].len()];
+    let (offs, total) = layout(lens)?;
+    let mut b = vec![0u8; total];
+    write_preamble(lens, &mut b)?;
+    for (o, part) in offs.iter().zip(parts) {
+        b.get_mut(*o..*o + part.len())?.copy_from_slice(part);
+    }
+    Some(b)
+}
+

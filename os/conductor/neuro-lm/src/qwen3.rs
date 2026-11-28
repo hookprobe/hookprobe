@@ -40,6 +40,12 @@ impl<'a> Mat<'a> {
         Mat { rows, cols, w, packed: false, wexp: q8::wexp_gguf(w) }
     }
 
+    /// A matrix already in the packed layout (computes `wexp` with one pass over the records). `check()`
+    /// validates the layout.
+    pub fn packed(rows: usize, cols: usize, w: &'a [u8]) -> Self {
+        Mat { rows, cols, w, packed: true, wexp: q8::wexp_packed(w) }
+    }
+
     fn ok(&self, rows: usize, cols: usize) -> bool {
         let shape = self.rows == rows && self.cols == cols && cols % q8::QK == 0 && cols <= q8::MAX_COLS;
         if self.packed {

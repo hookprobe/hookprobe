@@ -49,16 +49,16 @@ pub struct Admitted<'r> {
 
 /// The manifest a GGUF language model needs at context `max_ctx`, as a bare payload of kind `GGUF_LM`.
 pub fn manifest_for(file: &[u8], max_ctx: usize) -> Result<Manifest, AdmitError> {
-    manifest(file, file.len(), max_ctx)
+    manifest(file, 0, file.len(), max_ctx)
 }
 
 /// The manifest of a bundle of kind `LM_BUNDLE`: that of its model, with the bundle's length as the payload.
 pub fn manifest_for_bundle(bundle: &[u8], max_ctx: usize) -> Result<Manifest, AdmitError> {
     let b = Bundle::open(bundle).map_err(AdmitError::Bundle)?;
-    manifest(b.gguf, bundle.len(), max_ctx)
+    manifest(b.gguf, b.packed.len(), bundle.len(), max_ctx)
 }
 
-fn manifest(file: &[u8], payload_len: usize, max_ctx: usize) -> Result<Manifest, AdmitError> {
+fn manifest(file: &[u8], packed_len: usize, payload_len: usize, max_ctx: usize) -> Result<Manifest, AdmitError> {
     let g = Gguf::open(file).map_err(AdmitError::Gguf)?;
     let h = hparams(&g, max_ctx).map_err(AdmitError::Bind)?;
     let d = &h.dims;
@@ -73,7 +73,8 @@ fn manifest(file: &[u8], payload_len: usize, max_ctx: usize) -> Result<Manifest,
         .and_then(|x| x.checked_add(e.checked_mul(4)?))
         .and_then(|x| x.checked_add(rope))
         .ok_or(AdmitError::Size)?;
-    let mut tensor_bytes = 0u64;
+    // What one token reads at most: the tensors in the file, and the packed matrices if they are stored apart.
+    let mut tensor_bytes = u64::try_from(packed_len).map_err(|_| AdmitError::Size)?;
     g.for_each_tensor(|t| tensor_bytes = tensor_bytes.saturating_add(u64::try_from(t.data.len()).unwrap_or(u64::MAX)));
     Ok(Manifest {
         payload_bytes: u64::try_from(payload_len).map_err(|_| AdmitError::Size)?,
@@ -99,7 +100,7 @@ pub fn admit<'r>(loader: &Loader, region: &'r [u8]) -> Result<Admitted<'r>, Admi
         _ => return Err(AdmitError::Container(Refusal::Kind)),
     };
     let file = bundle.map_or(payload, |b| b.gguf);
-    let truth = manifest(file, payload.len(), max_ctx)?;
+    let truth = manifest(file, bundle.map_or(0, |b| b.packed.len()), payload.len(), max_ctx)?;
     // Features are the signer's statement of what the model was evaluated with; everything else is recomputed.
     if (Manifest { required_features: declared.required_features, ..truth }) != declared {
         return Err(AdmitError::ManifestMismatch);
@@ -110,7 +111,9 @@ pub fn admit<'r>(loader: &Loader, region: &'r [u8]) -> Result<Admitted<'r>, Admi
         let d = &hparams.dims;
         let rows = d.max_ctx.checked_mul(d.head_dim / 2).ok_or(AdmitError::Size)?;
         let tok_ok = Tokenizer::new(b.tokenizer).is_ok_and(|t| t.vocab() == d.vocab);
-        if b.rope_pairs() != rows || !tok_ok {
+        // A packed section must be exactly this model's matrices.
+        let packed_ok = b.packed.is_empty() || crate::qwen3::packed_len(&hparams) == Some(b.packed.len());
+        if b.rope_pairs() != rows || !tok_ok || !packed_ok {
             return Err(AdmitError::Tables);
         }
     }

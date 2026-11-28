@@ -9,7 +9,8 @@
 //!         file, bind the integer engine, answer one question. No other runtime is involved.
 //!
 //! Usage:
-//!   hnx-lm pack --gguf MODEL.gguf --out MODEL.hnx --key SEED.hex --eval REPORT [--ctx 4096] [--licence Apache-2.0] [--svn 1] [--bare]
+//!   hnx-lm pack --gguf MODEL.gguf --out MODEL.hnx --key SEED.hex --eval REPORT [--ctx 2048] [--licence Apache-2.0] [--svn 1] [--packed | --bare]
+//!         `--packed` stores the matrices in the packed layout (the form a device runs fastest, with no packing at load).
 //!   hnx-lm run  --hnx MODEL.hnx --pub PUBKEY.hex --ask "question" [--max-new 64] [--scalar] [--packed] [--batch 16]
 //!   hnx-lm triage --hnx MODEL.hnx --pub PUBKEY.hex --context WINDOW.txt [--then WINDOW2.txt]... [--max-new 700] [--drafts] [--no-reuse]
 //!
@@ -22,7 +23,6 @@
 //! `SEED.hex` is a 32-byte Ed25519 seed in hex (a build-host test key here; release signing is an operator step).
 //! With a bundle, `run` uses no build-host helper: the tokenizer and the RoPE table come from the verified payload.
 //! With a bare GGUF payload they are built here from the file, which a device cannot do.
-use neuro_gguf::bundle;
 use neuro_gguf::hnx::{admit, manifest_for, manifest_for_bundle};
 use neuro_gguf::qwen3 as bind;
 use neuro_hnx::{build_prefix, kind, scheme, target, Header, Loader, Platform, HEADER_LEN, LEAF_LEN, MAX_SIG};
@@ -67,7 +67,7 @@ const SEG_LOG2: u8 = 21; // 2 MiB: one AArch64 block mapping per segment
 
 fn pack(args: &[String]) {
     let file = std::fs::read(need(args, "--gguf")).unwrap_or_else(|e| die(&format!("read the model: {e}")));
-    let ctx: usize = arg(args, "--ctx").map_or(4096, |v| v.parse().unwrap_or_else(|_| die("--ctx")));
+    let ctx: usize = arg(args, "--ctx").map_or(2048, |v| v.parse().unwrap_or_else(|_| die("--ctx")));
     let seed = hex32(&need(args, "--key"));
     let eval = std::fs::read(need(args, "--eval")).unwrap_or_else(|e| die(&format!("read the evaluation report: {e}")));
     let spdx = arg(args, "--licence").unwrap_or_else(|| "Apache-2.0".into());
@@ -86,14 +86,10 @@ fn pack(args: &[String]) {
         let hp = bind::hparams(&g, ctx).unwrap_or_else(|e| die(&format!("this file is not a model the engine binds: {e:?}")));
         let tok = tok_build::blob(&tok_build::from_gguf(&g).unwrap_or_else(|e| die(&e)), &tok_build::unicode_ranges(), &tok_build::nfc_tables()).unwrap_or_else(|e| die(&format!("tokenizer: {e:?}")));
         let rope: Vec<u8> = neuro_build::rope_neox_table(ctx, hp.dims.head_dim, f32::from_bits(hp.rope_base) as f64).iter().flat_map(|(c, s)| [c.to_le_bytes(), s.to_le_bytes()].concat()).collect();
-        let lens = [file.len(), tok.len(), rope.len()];
-        let (offs, total) = bundle::layout(lens).unwrap_or_else(|| die("bundle layout"));
-        let mut b = vec![0u8; total];
-        bundle::write_preamble(lens, &mut b).unwrap_or_else(|| die("bundle preamble"));
-        for (o, part) in offs.iter().zip([&file[..], &tok[..], &rope[..]]) {
-            b[*o..*o + part.len()].copy_from_slice(part);
-        }
-        println!("bundle: model {} bytes, tokenizer tables {} bytes, RoPE table {} bytes", file.len(), tok.len(), rope.len());
+        // `--packed`: the matrices are stored in the packed layout and the file keeps only metadata and norms.
+        let (packed, model_file) = if args.iter().any(|a| a == "--packed") { tok_build::packed_parts(&g, &hp).unwrap_or_else(|e| die(&e)) } else { (vec![], file.clone()) };
+        let b = tok_build::bundle([&model_file[..], &tok[..], &rope[..], &packed[..]]).unwrap_or_else(|| die("bundle layout"));
+        println!("bundle: model file {} bytes, tokenizer tables {} bytes, RoPE table {} bytes, packed matrices {} bytes", model_file.len(), tok.len(), rope.len(), packed.len());
         b
     };
     let mut model_id = [0u8; 16];
@@ -220,7 +216,7 @@ fn run(args: &[String]) {
     let question = need(args, "--ask");
     let max_new: usize = arg(args, "--max-new").map_or(64, |v| v.parse().unwrap_or_else(|_| die("--max-new")));
     let ad = admitted(args);
-    if ad.bundle.is_some() && !args.iter().any(|a| a == "--packed") {
+    if ad.bundle.is_some_and(|b| !b.packed.is_empty()) || (ad.bundle.is_some() && !args.iter().any(|a| a == "--packed")) {
         return session(args, &ad, &question, max_new);
     }
     let (g, hp) = (ad.gguf, ad.hparams);
@@ -299,7 +295,7 @@ fn session(args: &[String], ad: &neuro_gguf::hnx::Admitted<'static>, question: &
     let sd = simd(args.iter().any(|a| a == "--scalar"));
     let mut s = Session::open(ad, sd, batch, mem).unwrap_or_else(|e| die(&format!("session: {e:?}")));
     let d = ad.hparams.dims;
-    println!("session: {} layers, vocab {}, context {}, {}; memory assigned up front {:.1} MiB (KV {:.1} MiB), nothing derived, nothing allocated after this", d.n_layers, d.vocab, d.max_ctx, sd.name(), z.bytes() as f64 / 1048576.0, (z.kv_vals * 2 + z.kv_shifts) as f64 / 1048576.0);
+    println!("session: {} layers, vocab {}, context {}, {}, {} layout; memory assigned up front {:.1} MiB (KV {:.1} MiB), nothing derived, nothing allocated after this", d.n_layers, d.vocab, d.max_ctx, sd.name(), if ad.bundle.is_some_and(|b| !b.packed.is_empty()) { "packed" } else { "GGUF" }, z.bytes() as f64 / 1048576.0, (z.kv_vals * 2 + z.kv_shifts) as f64 / 1048576.0);
     let prompt = format!("<|im_start|>user\n{question}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n");
     let (mut cps, mut buf) = (vec![0u32; 1 << 16], vec![0u8; 1 << 16]);
     let n = s.start(prompt.as_bytes(), &mut cps, &mut buf).unwrap_or_else(|e| die(&format!("prompt: {e:?}")));
@@ -367,7 +363,7 @@ fn triage(args: &[String]) {
     };
     let sd = simd(args.iter().any(|a| a == "--scalar"));
     let mut s = Session::open(&ad, sd, batch, mem).unwrap_or_else(|e| die(&format!("session: {e:?}")));
-    println!("session: context {}, {}, memory assigned up front {:.1} MiB", ad.hparams.dims.max_ctx, sd.name(), z.bytes() as f64 / 1048576.0);
+    println!("session: context {}, {}, {} layout, memory assigned up front {:.1} MiB", ad.hparams.dims.max_ctx, sd.name(), if ad.bundle.is_some_and(|b| !b.packed.is_empty()) { "packed" } else { "GGUF" }, z.bytes() as f64 / 1048576.0);
     let (mut cps, mut buf) = (vec![0u32; 1 << 17], vec![0u8; 1 << 17]);
     for path in &paths {
         let context = String::from_utf8(std::fs::read(path).unwrap_or_else(|e| die(&format!("read {path}: {e}")))).unwrap_or_else(|_| die("the context is not UTF-8"));
